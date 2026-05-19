@@ -2,6 +2,7 @@ import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import {
   analyzeChapter,
   buildStoryAnalysis,
@@ -814,9 +815,11 @@ function isRunnableAiJob(job: StoredAiJob) {
   return Number.isFinite(updatedAt) && Date.now() - updatedAt < 10 * 60 * 1000;
 }
 
-async function readStore(): Promise<AppStore> {
+async function readStoreBase(): Promise<AppStore> {
   return loadPersistedStore(storePath, initialStore);
 }
+
+const readStore = cache(readStoreBase);
 
 async function writeStore(store: AppStore) {
   await savePersistedStore(storePath, store);
