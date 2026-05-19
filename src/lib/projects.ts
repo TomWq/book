@@ -1536,7 +1536,7 @@ function estimateAiJobCredits(type: string, payload?: unknown) {
 
   switch (type) {
     case "analyze_chapters":
-      return 300 + Math.max(1, Number(input.chapterCount ?? 1)) * 20;
+      return Math.max(1, Number(input.chapterCount ?? 1)) * 20;
     case "generate_outline":
       return 800;
     case "generate_task_card":
