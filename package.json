@@ -9,8 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "acceptance": "node scripts/acceptance-check.mjs",
     "acceptance:flow": "node scripts/main-flow-check.mjs",
-    "worker": "node scripts/run-worker.mjs",
-    "postinstall": "prisma generate"
+    "worker": "node scripts/run-worker.mjs"
   },
   "dependencies": {
     "@antv/g6": "^5.1.1",
