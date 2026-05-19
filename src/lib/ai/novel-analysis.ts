@@ -1,4 +1,9 @@
-import { attachAiTokenUsage, getAiTokenUsage, requestAiJson } from "@/lib/ai/client";
+import {
+  attachAiTokenUsage,
+  combineAiTokenUsages,
+  getAiTokenUsage,
+  requestAiJson
+} from "@/lib/ai/client";
 import {
   analyzeChapter,
   buildStoryAnalysis,
@@ -20,8 +25,31 @@ export type AnalysisRunResult<T> = {
   error?: string;
 };
 
-function buildChapterMessages(chapter: StoredChapter) {
+function buildChapterMessages(chapter: StoredChapter, options?: { compact?: boolean }) {
   const content = trimChapterContentForAnalysis(chapter.content);
+  const qualityRules = [
+    "summary 必须概括本章完整剧情，不少于 40 个中文字符。",
+    "mainEvent/conflict/pressurePoint/payoff/cliffhanger/readerHook 必须包含具体事件或信息点。",
+    "pleasurePoints 至少 1 条，setup 写爽点前的压制，release 写释放位置和结果，whyItWorks 写为什么读者会爽。",
+    "所有 string 字段必须简洁，单字段不超过 90 个中文字符。",
+    "newInformation/newCharacters/stateChanges 每个数组最多 4 条，每条不超过 40 个中文字符。",
+    "entityRelations 最多 4 条，evidence 不超过 45 个中文字符。",
+    "pleasurePoints 最多 2 条。",
+    "newInformation/newCharacters/stateChanges 不能乱编；原文没有就返回空数组。",
+    "newCharacters 只能输出本章首次出场或第一次进入重要剧情的人物姓名或稳定称呼，例如“王老”“李教官”。禁止输出动作短语、半句话、语气词、主角+动作片段，例如“陈迹并不”“陈迹没有”“陈迹身边”。",
+    "entityRelations 用来给图谱画真实关系线，只输出原文能证明的关系。source/target 必须是人物、地点、势力、线索、事件或物品的短名称；type 写关系类型，例如“敌对”“协助”“收到线索”“发生于”“隶属势力”；evidence 写原文依据的简短说明。没有明确关系就返回空数组。",
+    "不要输出模板句，例如“本章通过冲突后的状态变化给读者继续阅读的理由”。"
+  ];
+
+  if (options?.compact) {
+    qualityRules.push(
+      "这是紧凑重试：必须输出更短 JSON，不能扩写分析文章。",
+      "summary 控制在 50-80 个中文字符，其余 string 字段控制在 40-70 个中文字符。",
+      "newInformation/newCharacters/stateChanges 每个数组最多 3 条。",
+      "entityRelations 最多 3 条。",
+      "pleasurePoints 只输出 1 条，选择本章最强爽点。"
+    );
+  }
 
   return [
     {
@@ -34,15 +62,8 @@ function buildChapterMessages(chapter: StoredChapter) {
       content: JSON.stringify(
         {
           task: "analyze_chapter",
-          qualityRules: [
-            "summary 必须概括本章完整剧情，不少于 40 个中文字符。",
-            "mainEvent/conflict/pressurePoint/payoff/cliffhanger/readerHook 必须包含具体事件或信息点。",
-            "pleasurePoints 至少 1 条，setup 写爽点前的压制，release 写释放位置和结果，whyItWorks 写为什么读者会爽。",
-            "newInformation/newCharacters/stateChanges 不能乱编；原文没有就返回空数组。",
-            "newCharacters 只能输出本章首次出场或第一次进入重要剧情的人物姓名或稳定称呼，例如“王老”“李教官”。禁止输出动作短语、半句话、语气词、主角+动作片段，例如“陈迹并不”“陈迹没有”“陈迹身边”。",
-            "entityRelations 用来给图谱画真实关系线，只输出原文能证明的关系。source/target 必须是人物、地点、势力、线索、事件或物品的短名称；type 写关系类型，例如“敌对”“协助”“收到线索”“发生于”“隶属势力”；evidence 写原文依据的简短说明。没有明确关系就返回空数组。",
-            "不要输出模板句，例如“本章通过冲突后的状态变化给读者继续阅读的理由”。"
-          ],
+          mode: options?.compact ? "compact_retry" : "standard",
+          qualityRules,
           chapter: {
             chapterNumber: chapter.chapterNumber,
             title: chapter.title,
@@ -176,37 +197,49 @@ function sanitizeChapterResult(result: Partial<ChapterAnalysisResult>, chapter: 
     .slice(0, 12);
 
   return {
-    summary: result.summary?.trim() || fallback.summary,
-    mainEvent: result.mainEvent?.trim() || fallback.mainEvent,
-    conflict: result.conflict?.trim() || fallback.conflict,
-    pressurePoint: result.pressurePoint?.trim() || fallback.pressurePoint,
-    payoff: result.payoff?.trim() || fallback.payoff,
-    cliffhanger: result.cliffhanger?.trim() || fallback.cliffhanger,
-    readerHook: result.readerHook?.trim() || fallback.readerHook,
+    summary: compactChapterSignal(result.summary?.trim() || fallback.summary, 140),
+    mainEvent: compactChapterSignal(result.mainEvent?.trim() || fallback.mainEvent),
+    conflict: compactChapterSignal(result.conflict?.trim() || fallback.conflict),
+    pressurePoint: compactChapterSignal(result.pressurePoint?.trim() || fallback.pressurePoint),
+    payoff: compactChapterSignal(result.payoff?.trim() || fallback.payoff),
+    cliffhanger: compactChapterSignal(result.cliffhanger?.trim() || fallback.cliffhanger),
+    readerHook: compactChapterSignal(result.readerHook?.trim() || fallback.readerHook),
     newInformation:
       Array.isArray(result.newInformation) && result.newInformation.length > 0
-        ? result.newInformation.map((item) => String(item)).filter(Boolean)
-        : fallback.newInformation,
+        ? cleanCompactList(result.newInformation, 4)
+        : cleanCompactList(fallback.newInformation, 4),
     newCharacters:
       Array.isArray(result.newCharacters) && result.newCharacters.length > 0
-        ? Array.from(new Set(normalizeCharacterMentions(result.newCharacters.map((item) => String(item)))))
-        : fallback.newCharacters,
+        ? Array.from(new Set(normalizeCharacterMentions(result.newCharacters.map((item) => String(item))))).slice(0, 4)
+        : fallback.newCharacters.slice(0, 4),
     stateChanges:
       Array.isArray(result.stateChanges) && result.stateChanges.length > 0
-        ? result.stateChanges.map((item) => String(item)).filter(Boolean)
-        : fallback.stateChanges,
+        ? cleanCompactList(result.stateChanges, 4)
+        : cleanCompactList(fallback.stateChanges, 4),
     entityRelations,
     pleasurePoints:
       Array.isArray(result.pleasurePoints) && result.pleasurePoints.length > 0
-        ? result.pleasurePoints.map((point) => ({
-            type: String(point.type || fallback.pleasurePoints[0].type),
-            setup: String(point.setup || fallback.pleasurePoints[0].setup),
-            release: String(point.release || fallback.pleasurePoints[0].release),
-            whyItWorks: String(point.whyItWorks || fallback.pleasurePoints[0].whyItWorks),
+        ? result.pleasurePoints.slice(0, 2).map((point) => ({
+            type: compactChapterSignal(String(point.type || fallback.pleasurePoints[0].type), 36),
+            setup: compactChapterSignal(String(point.setup || fallback.pleasurePoints[0].setup)),
+            release: compactChapterSignal(String(point.release || fallback.pleasurePoints[0].release)),
+            whyItWorks: compactChapterSignal(String(point.whyItWorks || fallback.pleasurePoints[0].whyItWorks)),
             drivesMainPlot: Boolean(point.drivesMainPlot)
           }))
-        : fallback.pleasurePoints
+        : fallback.pleasurePoints.slice(0, 2)
   };
+}
+
+function compactChapterSignal(value: string, maxLength = 90) {
+  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function cleanCompactList(value: unknown[], limit: number) {
+  return value
+    .map((item) => compactChapterSignal(String(item), 40))
+    .filter(Boolean)
+    .slice(0, limit);
 }
 
 function normalizeRelationEntity(value: string) {
@@ -271,6 +304,10 @@ function trimChapterContentForAnalysis(content: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "AI 分析失败";
+}
+
+function isAiOutputLengthError(error: unknown) {
+  return error instanceof Error && error.message.includes("长度限制截断");
 }
 
 async function requestAiJsonWithRetry<T>(
@@ -339,17 +376,47 @@ function isWeakStoryResult(result: StoryAnalysisResult, fallback: StoryAnalysisR
   );
 }
 
+async function requestChapterAnalysis(
+  chapter: StoredChapter,
+  options?: { compact?: boolean; maxTokens?: number }
+) {
+  return requestAiJson<Partial<ChapterAnalysisResult>>({
+    messages: buildChapterMessages(chapter, { compact: options?.compact }),
+    temperature: 0.2,
+    maxTokens: options?.maxTokens ?? 3200
+  });
+}
+
 export async function analyzeChapterWithAi(
   chapter: StoredChapter
 ): Promise<AnalysisRunResult<ChapterAnalysisResult>> {
   try {
-    const response = await requestAiJsonWithRetry<Partial<ChapterAnalysisResult>>({
-      messages: buildChapterMessages(chapter),
-      temperature: 0.2,
-      maxTokens: 1800
-    });
-    const analysis = sanitizeChapterResult(response, chapter);
-    const tokenUsage = getAiTokenUsage(response);
+    let response: Partial<ChapterAnalysisResult>;
+    let tokenUsage = undefined;
+
+    try {
+      response = await requestChapterAnalysis(chapter);
+      tokenUsage = getAiTokenUsage(response);
+    } catch (error) {
+      if (!isAiOutputLengthError(error)) {
+        throw error;
+      }
+
+      response = await requestChapterAnalysis(chapter, { compact: true, maxTokens: 4200 });
+      tokenUsage = getAiTokenUsage(response);
+    }
+
+    let analysis = sanitizeChapterResult(response, chapter);
+
+    if (isWeakChapterResult(analysis)) {
+      const retryResponse = await requestChapterAnalysis(chapter, { compact: true, maxTokens: 4200 });
+      const retryAnalysis = sanitizeChapterResult(retryResponse, chapter);
+      tokenUsage = combineAiTokenUsages([tokenUsage, getAiTokenUsage(retryResponse)]);
+
+      if (!isWeakChapterResult(retryAnalysis)) {
+        analysis = retryAnalysis;
+      }
+    }
 
     if (isWeakChapterResult(analysis)) {
       return {
