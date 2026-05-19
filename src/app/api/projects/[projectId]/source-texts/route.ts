@@ -10,15 +10,15 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ projectId: string }> }
 ) {
-  const { projectId } = await context.params;
-  const body = await request.json();
-  const content = String(body.content ?? "").trim();
-
-  if (!content) {
-    return Response.json({ error: "文本不能为空" }, { status: 400 });
-  }
-
   try {
+    const { projectId } = await context.params;
+    const body = await request.json();
+    const content = String(body.content ?? "").trim();
+
+    if (!content) {
+      return Response.json({ error: "文本不能为空" }, { status: 400 });
+    }
+
     const result = await importSourceText({
       projectId,
       title: String(body.title ?? ""),
@@ -26,7 +26,17 @@ export async function POST(
       content
     });
 
-    return Response.json(result, { status: 201 });
+    return Response.json(
+      {
+        sourceText: {
+          id: result.sourceText.id,
+          title: result.sourceText.title,
+          charCount: result.sourceText.charCount
+        },
+        chapterCount: result.chapters.length
+      },
+      { status: 201 }
+    );
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "导入失败" },

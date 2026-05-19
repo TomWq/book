@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+const VERCEL_FUNCTION_PAYLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+
 export function ImportSourceForm({ projectId }: { projectId: string }) {
   const router = useRouter();
   const [error, setError] = useState("");
@@ -27,19 +29,30 @@ export function ImportSourceForm({ projectId }: { projectId: string }) {
       return;
     }
 
+    const payload = {
+      title: String(formData.get("title") ?? ""),
+      sourceType,
+      content
+    };
+    const payloadSize = new Blob([JSON.stringify(payload)]).size;
+
+    if (payloadSize > VERCEL_FUNCTION_PAYLOAD_LIMIT_BYTES) {
+      setError("单次导入文本过大。线上建议先截取前 30 章，或把长篇拆成多个 TXT 分批导入。");
+      return;
+    }
+
     const response = await fetch(`/api/projects/${projectId}/source-texts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: String(formData.get("title") ?? ""),
-        sourceType,
-        content
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
-      const body = await response.json().catch(() => null);
-      setError(body?.error ? String(body.error) : "导入失败");
+      const body = await response.clone().json().catch(async () => {
+        const text = await response.clone().text().catch(() => "");
+        return text ? { error: text } : null;
+      });
+      setError(body?.error ? String(body.error) : "导入失败，请检查文本大小或稍后重试");
       return;
     }
 
