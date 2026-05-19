@@ -35,6 +35,10 @@ const globalForPersistence = globalThis as typeof globalThis & {
   __appStatePostgresLoader?: Promise<PostgresClient>;
 };
 
+function isProductionRuntime() {
+  return process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+}
+
 function hasDatabaseUrl() {
   return Boolean(process.env.DATABASE_URL?.trim());
 }
@@ -1851,6 +1855,10 @@ export async function loadPersistedStore<T>(storePath: string, fallback: T) {
   }
 
   if (!hasDatabaseUrl()) {
+    if (isProductionRuntime()) {
+      throw new Error("生产环境缺少 DATABASE_URL，无法使用本地文件存储。请在 Vercel 环境变量中配置 PostgreSQL 连接串。");
+    }
+
     return readStoreFile(storePath, fallback);
   }
 
@@ -1876,9 +1884,6 @@ export async function savePersistedStore<T>(storePath: string, store: T) {
   const postgresClient = await getPostgresClient();
   const payload = JSON.stringify(store, null, 2);
 
-  await ensureDataDir(storePath);
-  await writeFile(storePath, payload, "utf8");
-
   if (postgresClient) {
     await upsertAppStateInPostgres(postgresClient, payload);
     await syncPostgresStoreRecords(postgresClient, store);
@@ -1886,6 +1891,12 @@ export async function savePersistedStore<T>(storePath: string, store: T) {
   }
 
   if (!hasDatabaseUrl()) {
+    if (isProductionRuntime()) {
+      throw new Error("生产环境缺少 DATABASE_URL，无法保存数据。请在 Vercel 环境变量中配置 PostgreSQL 连接串。");
+    }
+
+    await ensureDataDir(storePath);
+    await writeFile(storePath, payload, "utf8");
     return;
   }
 
