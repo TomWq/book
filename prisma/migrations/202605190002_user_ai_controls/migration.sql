@@ -1,0 +1,2 @@
+ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" DOUBLE PRECISION;
+ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER;

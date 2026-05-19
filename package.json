@@ -1,0 +1,34 @@
+{
+  "name": "ai-novel-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "acceptance": "node scripts/acceptance-check.mjs",
+    "acceptance:flow": "node scripts/main-flow-check.mjs",
+    "worker": "node scripts/run-worker.mjs",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@antv/g6": "^5.1.1",
+    "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@xyflow/react": "^12.10.2",
+    "better-sqlite3": "^12.10.0",
+    "next": "^16.2.6",
+    "postgres": "3.4.7",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "prisma": "^7.8.0",
+    "typescript": "^5.0.0"
+  }
+}

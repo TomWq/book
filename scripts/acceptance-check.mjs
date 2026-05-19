@@ -1,0 +1,102 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function read(relativePath) {
+  return readFileSync(path.join(root, relativePath), "utf8");
+}
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function assertFile(relativePath) {
+  assert(existsSync(path.join(root, relativePath)), `缺少文件：${relativePath}`);
+}
+
+function assertMissing(relativePath) {
+  assert(!existsSync(path.join(root, relativePath)), `不应再保留文件：${relativePath}`);
+}
+
+function assertIncludes(relativePath, snippets) {
+  const content = read(relativePath);
+
+  for (const snippet of snippets) {
+    assert(content.includes(snippet), `${relativePath} 缺少关键内容：${snippet}`);
+  }
+}
+
+const requiredDocs = ["AGENTS.md", "README.md", "PRD.md", "ARCHITECTURE.md", "DESIGN.md"];
+const requiredRoutes = [
+  "src/app/api/auth/register/route.ts",
+  "src/app/api/auth/login/route.ts",
+  "src/app/api/auth/logout/route.ts",
+  "src/app/projects/[projectId]/import/page.tsx",
+  "src/app/projects/[projectId]/chapters/page.tsx",
+  "src/app/projects/[projectId]/analysis/page.tsx",
+  "src/app/templates/[templateId]/generate-outline/page.tsx",
+  "src/app/projects/[projectId]/writing/page.tsx",
+  "src/app/projects/[projectId]/state/page.tsx",
+  "src/app/projects/[projectId]/editor/page.tsx",
+  "src/app/admin/page.tsx",
+  "src/app/api/jobs/worker/route.ts",
+  "scripts/run-worker.mjs",
+  "scripts/main-flow-check.mjs"
+];
+
+for (const file of [...requiredDocs, ...requiredRoutes]) {
+  assertFile(file);
+}
+
+assertMissing("src/lib/mock-data.ts");
+
+assertIncludes("src/lib/chapters.ts", ["Chapter\\s*\\d+", "第[零〇一二三四五六七八九十百千万\\d]+"]);
+assertIncludes("src/lib/ai/novel-analysis.ts", [
+  "pressurePoint",
+  "pleasurePoints",
+  "whyItWorks",
+  "drivesMainPlot",
+  "avoidCopying"
+]);
+assertIncludes("src/lib/ai/outline.ts", [
+  "templateInheritance",
+  "variableMapping",
+  "first10Chapters",
+  "first100Pacing",
+  "pleasureDistribution"
+]);
+assertIncludes("src/lib/ai/writing.ts", [
+  "generateWritingTaskCardWithAi",
+  "generateChapterDraftWithAi",
+  "reviewChapterDraftWithAi",
+  "editDraftTextWithAi",
+  "人物不能知道自己不知道的信息"
+]);
+assertIncludes("src/lib/projects.ts", [
+  "APP_STORE_PATH",
+  "processPendingAiJobsAsWorker",
+  "processAiJobAsOwner",
+  "applyLedgerToWritingState",
+  "AsyncLocalStorage",
+  "createDomainReadRepository",
+  "createDomainWriteRepository",
+  "getDashboardStatsForUser",
+  "getProjectAnalysisForUser",
+  "getProjectWritingStateForUser"
+]);
+assertIncludes("package.json", ["acceptance:flow"]);
+assertIncludes("src/lib/store-persistence.ts", [
+  "StoreRecord",
+  "STORE_RECORD_ENTITY_KEYS",
+  "readStoreRecordsFromPostgres",
+  "STORE_RECORD_READ_MODE",
+  "getPersistenceStatus"
+]);
+assertIncludes("prisma/schema.prisma", ["model StoreRecord", "model AiJob", "model ReviewReport"]);
+assertIncludes("src/proxy.ts", ["/api/jobs/worker"]);
+
+console.log("验收守门检查通过：拆书、模板、大纲、创作、状态、二稿、后台 Worker 和数据库镜像关键契约均存在。");
