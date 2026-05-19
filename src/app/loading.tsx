@@ -1,7 +1,7 @@
 export default function Loading() {
   return (
     <div className="route-loading-stage" aria-live="polite">
-      <div className="route-loading-card">
+      <div className="route-loading-board">
         <div className="route-loading-head">
           <span className="loading-bookmark" aria-hidden="true">书</span>
           <div>
@@ -15,10 +15,27 @@ export default function Loading() {
           </span>
         </div>
 
-        <div className="route-loading-skeleton" aria-hidden="true">
-          <span />
-          <span />
-          <span />
+        <div className="route-loading-grid" aria-hidden="true">
+          <div className="route-loading-panel route-loading-panel-primary">
+            <span className="loading-label">项目</span>
+            <span className="loading-line loading-line-long" />
+            <span className="loading-line loading-line-medium" />
+            <span className="loading-line loading-line-short" />
+          </div>
+
+          <div className="route-loading-panel">
+            <span className="loading-label">模板</span>
+            <span className="loading-line loading-line-long" />
+            <span className="loading-line loading-line-medium" />
+            <span className="loading-line loading-line-short" />
+          </div>
+
+          <div className="route-loading-panel">
+            <span className="loading-label">章节</span>
+            <span className="loading-line loading-line-long" />
+            <span className="loading-line loading-line-medium" />
+            <span className="loading-line loading-line-short" />
+          </div>
         </div>
       </div>
     </div>
