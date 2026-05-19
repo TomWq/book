@@ -44,6 +44,13 @@ import {
   type CharacterStateUpdate,
   type ForeshadowingStateUpdate
 } from "@/lib/ai/writing";
+import {
+  AI_TASK_PRICING_DEFINITIONS,
+  estimateAiTaskCredits,
+  normalizeAiTaskPricingOverrides,
+  resolveAiTaskPricing,
+  type AiTaskPricingOverrides
+} from "@/lib/ai-task-pricing";
 import { splitNovelText } from "@/lib/chapters";
 import { loadPersistedStore, savePersistedStore } from "@/lib/store-persistence";
 
@@ -385,6 +392,7 @@ export type StoredUser = {
   creditsBalance?: number;
   aiBillingMarkup?: number;
   aiBillingMinimum?: number;
+  aiTaskPricingOverrides?: AiTaskPricingOverrides;
   onboardingCompletedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -464,6 +472,15 @@ export type AdminUserSummary = {
   aiModel: string;
   aiBillingMarkup: number;
   aiBillingMinimum: number;
+  aiTaskPricing: Array<{
+    type: string;
+    label: string;
+    unitLabel: string;
+    baseCredits: number;
+    unitCredits: number;
+    multiplier: number;
+    isCustom: boolean;
+  }>;
   projectCount: number;
   aiJobCount: number;
   aiTokenTotal: number;
@@ -1530,32 +1547,8 @@ function addCreditTransaction(
   });
 }
 
-function estimateAiJobCredits(type: string, payload?: unknown) {
-  const input = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const variables = input.variables && typeof input.variables === "object" ? input.variables as Record<string, unknown> : {};
-
-  switch (type) {
-    case "analyze_chapters":
-      return Math.max(1, Number(input.chapterCount ?? 1)) * 20;
-    case "generate_outline":
-      return 800;
-    case "generate_task_card":
-      return 120;
-    case "project_creation_assist":
-      return 60;
-    case "generate_chapter":
-      return 900;
-    case "update_chapter_state":
-      return 160;
-    case "review_chapter":
-      return 240;
-    case "edit_second_draft": {
-      const text = String(input.originalText ?? input.text ?? variables.originalText ?? "");
-      return 180 + Math.ceil(text.length / 1000) * 80;
-    }
-    default:
-      return 100;
-  }
+function estimateAiJobCredits(type: string, payload?: unknown, user?: StoredUser | null) {
+  return estimateAiTaskCredits(type, payload, user?.aiTaskPricingOverrides);
 }
 
 function readPositiveNumber(value: string | undefined, fallback: number) {
@@ -1789,10 +1782,14 @@ function consumeCreditsForAiJob(
   user: StoredUser,
   job: Pick<StoredAiJob, "id" | "type" | "input">
 ) {
-  const cost = estimateAiJobCredits(job.type, job.input);
+  const cost = estimateAiJobCredits(job.type, job.input, user);
 
   if (getUserCreditBalance(user) < cost) {
     throw new Error(`灵石余额不足，本次任务预计消耗 ${cost} 灵石`);
+  }
+
+  if (cost <= 0) {
+    return cost;
   }
 
   addCreditTransaction(store, user, {
@@ -2026,6 +2023,22 @@ function buildAccountOverview(
   };
 }
 
+function buildUserAiTaskPricing(user: StoredUser) {
+  return AI_TASK_PRICING_DEFINITIONS.map((definition) => {
+    const pricing = resolveAiTaskPricing(definition.type, user.aiTaskPricingOverrides);
+
+    return {
+      type: pricing.type,
+      label: pricing.label,
+      unitLabel: pricing.unitLabel,
+      baseCredits: pricing.baseCredits,
+      unitCredits: pricing.unitCredits,
+      multiplier: pricing.multiplier,
+      isCustom: pricing.isCustom
+    };
+  });
+}
+
 function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
   const aiUsage = buildAdminAiUsageSummary(store.aiJobs);
   const users = store.users
@@ -2062,6 +2075,7 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
         aiModel: getUserAiSettings(store, user.id).model || process.env.AI_MODEL || "deepseek-v4-flash",
         aiBillingMarkup: getUserAiBillingMarkup(user),
         aiBillingMinimum: getUserAiBillingMinimum(user),
+        aiTaskPricing: buildUserAiTaskPricing(user),
         projectCount: ownedProjectIds.size,
         aiJobCount: userJobs.length,
         aiTokenTotal: userAiUsage.totalTokens,
@@ -2122,6 +2136,7 @@ export async function updateUserAiControls(input: {
   model: string;
   aiBillingMarkup: number;
   aiBillingMinimum: number;
+  aiTaskPricingOverrides?: unknown;
 }) {
   const store = await readStore();
   await requireAdminUser(store);
@@ -2162,6 +2177,7 @@ export async function updateUserAiControls(input: {
 
   target.aiBillingMarkup = Math.round(markup * 100) / 100;
   target.aiBillingMinimum = minimum;
+  target.aiTaskPricingOverrides = normalizeAiTaskPricingOverrides(input.aiTaskPricingOverrides);
   target.updatedAt = now();
 
   await writeStore(store);

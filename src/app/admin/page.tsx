@@ -63,6 +63,14 @@ function usageByType(
   return dashboard.aiUsage.byType.find((item) => item.type === type);
 }
 
+function previewTaskCredits(item: {
+  baseCredits: number;
+  unitCredits: number;
+  multiplier: number;
+}) {
+  return Math.ceil((item.baseCredits + item.unitCredits) * item.multiplier);
+}
+
 export default async function AdminPage() {
   let dashboard;
   let storage: Awaited<ReturnType<typeof getPersistenceStatus>>;
@@ -291,6 +299,50 @@ export default async function AdminPage() {
                         defaultValue={user.aiBillingMinimum}
                       />
                     </div>
+                  </div>
+                  <div className="usage-table task-pricing-table">
+                    <div className="usage-table-row usage-table-head">
+                      <span>任务</span>
+                      <span>基础价</span>
+                      <span>单位价</span>
+                      <span>倍率</span>
+                      <span>预览</span>
+                    </div>
+                    {user.aiTaskPricing.map((item) => (
+                      <div key={item.type} className="usage-table-row">
+                        <strong>
+                          {item.label}
+                          <span className="muted"> / {item.unitLabel}</span>
+                        </strong>
+                        <input
+                          name={`pricing.${item.type}.baseCredits`}
+                          type="number"
+                          min="0"
+                          step="1"
+                          defaultValue={item.baseCredits}
+                          aria-label={`${item.label}基础价`}
+                        />
+                        <input
+                          name={`pricing.${item.type}.unitCredits`}
+                          type="number"
+                          min="0"
+                          step="1"
+                          defaultValue={item.unitCredits}
+                          aria-label={`${item.label}单位价`}
+                        />
+                        <input
+                          name={`pricing.${item.type}.multiplier`}
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          defaultValue={item.multiplier}
+                          aria-label={`${item.label}倍率`}
+                        />
+                        <span className="chip">
+                          {item.isCustom ? "自定义" : "默认"} {formatNumber(previewTaskCredits(item))} 灵石
+                        </span>
+                      </div>
+                    ))}
                   </div>
                   <button className="button secondary" type="submit">
                     保存 AI 与灵石策略

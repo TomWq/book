@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { estimateAiTaskCredits } from "@/lib/ai-task-pricing";
 
 type AnalysisMode = "first" | "range" | "single" | "all";
 const MAX_ANALYSIS_CHAPTERS = 30;
@@ -52,7 +53,8 @@ export function AnalysisRangeForm({
     const to = Math.max(startChapter, endChapter);
     return Math.min(MAX_ANALYSIS_CHAPTERS, Math.max(0, Math.min(chaptersCount, to) - Math.max(1, from) + 1));
   }, [chaptersCount, endChapter, limit, mode, startChapter]);
-  const estimatedCredits = selectedCount > 0 ? selectedCount * 20 : 0;
+  const estimatedCredits =
+    selectedCount > 0 ? estimateAiTaskCredits("analyze_chapters", { chapterCount: selectedCount }) : 0;
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -390,6 +390,7 @@ model User {
   creditsBalance Int?
   aiBillingMarkup Float?
   aiBillingMinimum Int?
+  aiTaskPricingOverrides Json?
   onboardingCompletedAt DateTime?
   createdAt      DateTime
   updatedAt      DateTime

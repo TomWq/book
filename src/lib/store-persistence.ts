@@ -483,6 +483,7 @@ function ensureSqliteSchema() {
       "creditsBalance" INTEGER,
       "aiBillingMarkup" REAL,
       "aiBillingMinimum" INTEGER,
+      "aiTaskPricingOverrides" JSON,
       "onboardingCompletedAt" DATETIME,
       "createdAt" DATETIME NOT NULL,
       "updatedAt" DATETIME NOT NULL
@@ -516,6 +517,7 @@ function ensureSqliteSchema() {
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" REAL',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER',
+    'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "PlotState" ADD COLUMN "currentMap" TEXT NOT NULL DEFAULT \'\'',
@@ -760,9 +762,9 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
@@ -778,6 +780,8 @@ function syncCoreTables(store: unknown) {
         creditsBalance: integer(user.creditsBalance),
         aiBillingMarkup: user.aiBillingMarkup == null ? null : Number(user.aiBillingMarkup),
         aiBillingMinimum: user.aiBillingMinimum == null ? null : integer(user.aiBillingMinimum),
+        aiTaskPricingOverrides:
+          user.aiTaskPricingOverrides == null ? null : JSON.stringify(user.aiTaskPricingOverrides),
         onboardingCompletedAt: user.onboardingCompletedAt ? dateText(user.onboardingCompletedAt) : null,
         createdAt: dateText(user.createdAt),
         updatedAt: dateText(user.updatedAt)
@@ -1790,6 +1794,10 @@ function readCoreStoreFromDb<T>(fallback: T) {
         creditsBalance: integer(item.creditsBalance),
         aiBillingMarkup: item.aiBillingMarkup == null ? undefined : Number(item.aiBillingMarkup),
         aiBillingMinimum: item.aiBillingMinimum == null ? undefined : integer(item.aiBillingMinimum),
+        aiTaskPricingOverrides:
+          item.aiTaskPricingOverrides == null
+            ? undefined
+            : parseJsonObject(item.aiTaskPricingOverrides),
         onboardingCompletedAt: maybeString(item.onboardingCompletedAt),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)

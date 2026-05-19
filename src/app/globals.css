@@ -1587,6 +1587,16 @@ form[aria-busy="true"] button[type="submit"] {
   font-weight: 700;
 }
 
+.task-pricing-table .usage-table-row {
+  grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(86px, 0.65fr)) minmax(130px, 0.8fr);
+}
+
+.task-pricing-table input {
+  min-width: 0;
+  height: 38px;
+  padding: 8px 10px;
+}
+
 .token-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
