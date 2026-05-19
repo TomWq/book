@@ -1,4 +1,16 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+
+const PUBLIC_PATHS = new Set(["/", "/login", "/register", "/legal"]);
+
 export default function Loading() {
+  const pathname = usePathname();
+
+  if (PUBLIC_PATHS.has(pathname)) {
+    return null;
+  }
+
   return (
     <div className="route-loading-stage" aria-live="polite">
       <div className="route-loading-board">
