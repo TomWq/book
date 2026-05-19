@@ -90,7 +90,8 @@ async function getPostgresClient() {
         const { default: postgresClientFactory } = await import("postgres");
         const client = postgresClientFactory(url, {
           max: Number(process.env.DATABASE_POOL_SIZE ?? 3),
-          idle_timeout: 20
+          idle_timeout: 20,
+          onnotice: () => {}
         });
 
         await ensurePostgresSchema(client);

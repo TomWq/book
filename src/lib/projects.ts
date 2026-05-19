@@ -876,6 +876,12 @@ function claimLegacyWorkspace(store: AppStore, userId: string) {
 }
 
 export async function getCurrentUser() {
+  const token = await getSessionTokenFromCookies();
+
+  if (!token) {
+    return null;
+  }
+
   const store = await readStore();
   const user = await getCurrentUserFromStore(store);
 
@@ -883,6 +889,15 @@ export async function getCurrentUser() {
 }
 
 export async function getCurrentUserAccess() {
+  const token = await getSessionTokenFromCookies();
+
+  if (!token) {
+    return {
+      user: null,
+      isAdmin: false
+    };
+  }
+
   const store = await readStore();
   const user = await getCurrentUserFromStore(store);
 
@@ -893,6 +908,12 @@ export async function getCurrentUserAccess() {
 }
 
 export async function isCurrentUserAdmin() {
+  const token = await getSessionTokenFromCookies();
+
+  if (!token) {
+    return false;
+  }
+
   const store = await readStore();
   const user = await getCurrentUserFromStore(store);
   return Boolean(user && isAdminUser(store, user));
