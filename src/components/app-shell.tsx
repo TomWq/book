@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode } from "@/lib/billing-mode";
 import { getCurrentUserAccess, getCurrentUserAiSetupStatus } from "@/lib/projects";
 import { LogoutButton } from "@/components/logout-button";
@@ -14,6 +15,7 @@ const navItems: SideNavItem[] = [
 export async function AppShell({ children }: { children: ReactNode }) {
   const { user, isAdmin } = await getCurrentUserAccess();
   const billingMode = getBillingMode();
+  const desktopRuntime = isDesktopRuntime();
   const aiSetup = user && !isAdmin && billingMode === "subscription"
     ? await getCurrentUserAiSetupStatus()
     : { configured: true };
@@ -61,7 +63,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
           <div className="topbar-meta">
             <span className="row" style={{ alignItems: "center" }}>
-              {billingMode === "subscription" ? (
+              {desktopRuntime && billingMode === "subscription" ? (
                 <Link href="/activate" className="button primary">
                   输入激活码
                 </Link>
@@ -105,7 +107,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 {/* <Link href="/legal" className="button">
                   合规
                 </Link> */}
-                {billingMode === "credits" ? <LogoutButton redirectTo="/login" /> : null}
+                {desktopRuntime ? null : <LogoutButton redirectTo="/login" />}
               </span>
             </div>
           </header>

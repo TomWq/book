@@ -53,24 +53,32 @@
 4. 空数据启动：不预置样例项目，用户注册后只看到自己创建和导入的数据。
 5. 任务进度：任务队列显示百分比进度与可重试状态。
 6. 流式生成：正文草稿和二稿改写支持实时出字，完成后自动保存到项目。
-7. 积分计费：账号可查看余额、充值包和消费流水，AI 任务按积分扣费，失败会退款。
-8. 管理后台：管理员可查看注册用户、AI 任务和积分运营数据，并手动赠送积分。
+7. 一次性授权：客户端首次启动输入授权码，后续使用用户自己的 AI Key，不走平台积分计费。
+8. 管理后台：管理员可生成授权码、查看客户激活状态、处理换机和禁用授权。
 9. 合规说明：明确隐私、版权边界和结构学习原则。
 
-## 计费模式
+## 运行模式
 
-项目支持两种运行模式，通过环境变量 `APP_BILLING_MODE` 控制：
+项目现在按运行端拆分，通过环境变量 `APP_RUNTIME` 控制：
 
-1. `credits`：默认 SaaS 模式，沿用灵石预扣、实际算力结算、失败返还和管理员调价。
-2. `subscription`：一次性授权/PC 壳模式，不扣灵石，不展示登录注册和充值入口；首次启动先输入激活码，激活码会作为本机客户 ID，之后用户在 AI 设置页填写自己的请求地址、API Key 和模型名。
+1. `desktop`：Electron 客户端。首次启动输入授权码，数据默认保存在本机，用户在 AI 设置页填写自己的请求地址、API Key 和模型名。
+2. `cloud`：云端授权中心和管理员后台。部署到 Vercel/服务器，用来生成授权码、校验客户端激活、管理客户和版本发布。
 
-卖源码给客户自部署时，建议设置：
+桌面客户端建议设置：
 
 ```bash
+APP_RUNTIME="desktop"
 APP_BILLING_MODE="subscription"
-APP_ACTIVATION_CODES="CUSTOMER-2026-DEMO"
-# 可选：用 SHA-256 哈希保存激活码
-APP_ACTIVATION_CODE_HASHES=""
+LICENSE_SERVER_URL="https://你的授权中心域名"
+```
+
+云端授权中心建议设置：
+
+```bash
+APP_RUNTIME="cloud"
+APP_BILLING_MODE="subscription"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST/db?sslmode=require"
+ADMIN_EMAILS="你的管理员邮箱"
 ```
 
 ## 核心流程

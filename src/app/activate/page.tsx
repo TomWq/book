@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LicenseActivationForm } from "@/components/license-activation-form";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode } from "@/lib/billing-mode";
 import { getSubscriptionActivationStatus } from "@/lib/projects";
 
@@ -9,7 +10,7 @@ export default async function ActivatePage({
 }: {
   searchParams: Promise<{ error?: string; next?: string }>;
 }) {
-  if (getBillingMode() !== "subscription") {
+  if (!isDesktopRuntime() || getBillingMode() !== "subscription") {
     redirect("/login");
   }
 

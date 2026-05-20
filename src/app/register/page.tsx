@@ -1,4 +1,5 @@
 import { AuthForm } from "@/components/auth-form";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode } from "@/lib/billing-mode";
 import { getCurrentUser } from "@/lib/projects";
 import Link from "next/link";
@@ -9,7 +10,7 @@ export default async function RegisterPage({
 }: {
   searchParams: Promise<{ error?: string; next?: string }>;
 }) {
-  if (getBillingMode() === "subscription") {
+  if (isDesktopRuntime() && getBillingMode() === "subscription") {
     redirect("/activate");
   }
 

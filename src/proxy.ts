@@ -1,11 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 
 const SESSION_COOKIE = "nw_session";
-
-function isSubscriptionMode() {
-  const mode = String(process.env.APP_BILLING_MODE ?? "credits").trim().toLowerCase();
-  return mode === "subscription" || mode === "self-hosted" || mode === "license";
-}
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -18,7 +14,7 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (isSubscriptionMode()) {
+  if (isDesktopRuntime()) {
     if (hasSession) {
       if (pathname === "/login" || pathname === "/register" || pathname === "/activate") {
         return NextResponse.redirect(new URL("/", request.url));
@@ -55,6 +51,7 @@ export function proxy(request: NextRequest) {
     pathname === "/register" ||
     pathname === "/legal" ||
     pathname.startsWith("/api/auth") ||
+    pathname === "/api/license/activate" ||
     pathname === "/api/health" ||
     pathname === "/api/jobs/worker"
   ) {

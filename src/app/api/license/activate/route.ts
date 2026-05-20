@@ -1,4 +1,5 @@
 import { activateLicenseWithCenter, activateSubscriptionLicense } from "@/lib/projects";
+import { isCloudRuntime } from "@/lib/app-runtime";
 
 export const runtime = "nodejs";
 
@@ -6,7 +7,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
 
   try {
-    if (body.centerOnly) {
+    if (isCloudRuntime() || body.centerOnly) {
       const license = await activateLicenseWithCenter({
         activationCode: String(body.activationCode ?? ""),
         machineHash: String(body.machineHash ?? ""),

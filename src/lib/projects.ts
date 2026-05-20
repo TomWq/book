@@ -52,6 +52,7 @@ import {
   resolveAiTaskPricing,
   type AiTaskPricingOverrides
 } from "@/lib/ai-task-pricing";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode, isCreditsBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
 import { splitNovelText } from "@/lib/chapters";
 import {
@@ -1212,7 +1213,7 @@ export async function getSubscriptionActivationStatus() {
 }
 
 export async function restoreSubscriptionSession() {
-  if (!isSubscriptionBillingMode()) {
+  if (!isDesktopRuntime() || !isSubscriptionBillingMode()) {
     return null;
   }
 
@@ -1535,7 +1536,7 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
 }
 
 export async function registerUser(input: { email: string; password: string; name: string }) {
-  if (isSubscriptionBillingMode()) {
+  if (isDesktopRuntime()) {
     throw new Error("当前为授权模式，请使用激活码进入");
   }
 
@@ -1595,7 +1596,7 @@ export async function registerUser(input: { email: string; password: string; nam
 }
 
 export async function loginUser(input: { email: string; password: string }) {
-  if (isSubscriptionBillingMode()) {
+  if (isDesktopRuntime()) {
     throw new Error("当前为授权模式，请使用激活码进入");
   }
 

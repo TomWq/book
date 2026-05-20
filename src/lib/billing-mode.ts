@@ -1,7 +1,7 @@
 export type BillingMode = "credits" | "subscription";
 
 export function getBillingMode(): BillingMode {
-  const mode = String(process.env.APP_BILLING_MODE ?? "credits").trim().toLowerCase();
+  const mode = String(process.env.APP_BILLING_MODE ?? "subscription").trim().toLowerCase();
 
   return mode === "subscription" || mode === "self-hosted" || mode === "license"
     ? "subscription"
