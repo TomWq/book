@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getBillingMode } from "@/lib/billing-mode";
 import {
   getCurrentUser,
   getDashboardStats,
@@ -15,6 +16,10 @@ export default async function HomePage() {
 
   if (user?.role === "admin") {
     redirect("/admin");
+  }
+
+  if (!user && getBillingMode() === "subscription") {
+    redirect("/activate");
   }
 
   if (!user) {

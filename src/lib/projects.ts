@@ -1,4 +1,4 @@
-import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { cookies } from "next/headers";
@@ -51,7 +51,7 @@ import {
   resolveAiTaskPricing,
   type AiTaskPricingOverrides
 } from "@/lib/ai-task-pricing";
-import { getBillingMode, isCreditsBillingMode } from "@/lib/billing-mode";
+import { getBillingMode, isCreditsBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
 import { splitNovelText } from "@/lib/chapters";
 import { loadPersistedStore, savePersistedStore } from "@/lib/store-persistence";
 
@@ -394,6 +394,9 @@ export type StoredUser = {
   aiBillingMarkup?: number;
   aiBillingMinimum?: number;
   aiTaskPricingOverrides?: AiTaskPricingOverrides;
+  licenseCustomerId?: string;
+  licenseCodeHash?: string;
+  licenseActivatedAt?: string;
   onboardingCompletedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -469,6 +472,8 @@ export type AdminUserSummary = {
   email: string;
   role: "user" | "admin";
   plan: PlanKey;
+  licenseCustomerId?: string;
+  licenseActivatedAt?: string;
   creditsBalance: number;
   aiModel: string;
   aiBillingMarkup: number;
@@ -631,6 +636,46 @@ function verifyPassword(password: string, salt: string, expectedHash: string) {
   }
 
   return timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function normalizeActivationCode(value: string) {
+  return value.trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function hashActivationCode(value: string) {
+  return createHash("sha256").update(normalizeActivationCode(value)).digest("hex");
+}
+
+function getConfiguredActivationCodes() {
+  return String(process.env.APP_ACTIVATION_CODES ?? process.env.APP_ACTIVATION_CODE ?? "")
+    .split(/[\n,，]/)
+    .map(normalizeActivationCode)
+    .filter(Boolean);
+}
+
+function getConfiguredActivationCodeHashes() {
+  return String(process.env.APP_ACTIVATION_CODE_HASHES ?? "")
+    .split(/[\n,，]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isValidActivationCode(code: string) {
+  const normalized = normalizeActivationCode(code);
+  const codeHash = hashActivationCode(normalized);
+  const plainCodes = getConfiguredActivationCodes();
+  const hashedCodes = getConfiguredActivationCodeHashes();
+
+  if (plainCodes.length === 0 && hashedCodes.length === 0) {
+    throw new Error("未配置激活码，请先设置 APP_ACTIVATION_CODES");
+  }
+
+  return plainCodes.includes(normalized) || hashedCodes.includes(codeHash);
+}
+
+function activationEmail(customerId: string) {
+  const safeId = customerId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "customer";
+  return `${safeId}@license.local`;
 }
 
 async function getCookieStore() {
@@ -951,7 +996,91 @@ export async function getCurrentUserOrThrow() {
   return toAuthUser(user);
 }
 
+export async function getSubscriptionActivationStatus() {
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+  const activatedUsers = store.users.filter((user) => Boolean(user.licenseCustomerId || user.licenseCodeHash));
+
+  return {
+    billingMode: getBillingMode(),
+    activated: activatedUsers.length > 0,
+    currentUser: currentUser ? toAuthUser(currentUser) : null,
+    customerId: currentUser?.licenseCustomerId ?? activatedUsers[0]?.licenseCustomerId ?? ""
+  };
+}
+
+export async function activateSubscriptionLicense(input: { activationCode: string }) {
+  if (!isSubscriptionBillingMode()) {
+    throw new Error("当前不是一次性授权模式");
+  }
+
+  const normalizedCode = normalizeActivationCode(input.activationCode);
+
+  if (!normalizedCode) {
+    throw new Error("请填写激活码");
+  }
+
+  if (!isValidActivationCode(normalizedCode)) {
+    throw new Error("激活码无效或已过期，请使用最新激活码");
+  }
+
+  const store = await readStore();
+  const timestamp = now();
+  const codeHash = hashActivationCode(normalizedCode);
+  let user = store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === normalizedCode);
+
+  if (!user) {
+    const { salt, hash } = hashPassword(randomUUID());
+    user = {
+      id: randomUUID(),
+      email: activationEmail(normalizedCode),
+      name: `授权客户 ${normalizedCode.slice(-6)}`,
+      passwordSalt: salt,
+      passwordHash: hash,
+      role: "user",
+      plan: "studio",
+      creditsBalance: 0,
+      licenseCustomerId: normalizedCode,
+      licenseCodeHash: codeHash,
+      licenseActivatedAt: timestamp,
+      onboardingCompletedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.users.push(user);
+  } else {
+    user.licenseCustomerId = user.licenseCustomerId || normalizedCode;
+    user.licenseCodeHash = user.licenseCodeHash || codeHash;
+    user.licenseActivatedAt = user.licenseActivatedAt || timestamp;
+    user.plan = user.plan ?? "studio";
+    user.updatedAt = timestamp;
+  }
+
+  if (store.projects.every((item) => !item.ownerUserId)) {
+    claimLegacyWorkspace(store, user.id);
+  }
+
+  const token = randomUUID();
+  store.sessions = store.sessions.filter((item) => item.userId !== user.id || item.expiresAt > timestamp);
+  store.sessions.push({
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  });
+
+  await writeStore(store);
+  await setSessionCookie(token);
+  return toAuthUser(user);
+}
+
 export async function registerUser(input: { email: string; password: string; name: string }) {
+  if (isSubscriptionBillingMode()) {
+    throw new Error("当前为授权模式，请使用激活码进入");
+  }
+
   const store = await readStore();
   const email = normalizeEmail(input.email);
   const name = input.name.trim();
@@ -1008,6 +1137,10 @@ export async function registerUser(input: { email: string; password: string; nam
 }
 
 export async function loginUser(input: { email: string; password: string }) {
+  if (isSubscriptionBillingMode()) {
+    throw new Error("当前为授权模式，请使用激活码进入");
+  }
+
   const store = await readStore();
   const email = normalizeEmail(input.email);
   const password = input.password.trim();
@@ -2098,6 +2231,8 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
         email: user.email,
         role: isAdminUser(store, user) ? "admin" : user.role,
         plan: getPlanKey(user.plan),
+        licenseCustomerId: user.licenseCustomerId,
+        licenseActivatedAt: user.licenseActivatedAt,
         creditsBalance: getUserCreditBalance(user),
         aiModel: getUserAiSettings(store, user.id).model || process.env.AI_MODEL || "deepseek-v4-flash",
         aiBillingMarkup: getUserAiBillingMarkup(user),

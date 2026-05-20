@@ -1,12 +1,18 @@
 import { AuthForm } from "@/components/auth-form";
+import { getBillingMode } from "@/lib/billing-mode";
 import { getCurrentUser } from "@/lib/projects";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 export default async function LoginPage({
   searchParams
 }: {
   searchParams: Promise<{ error?: string; next?: string }>;
 }) {
+  if (getBillingMode() === "subscription") {
+    redirect("/activate");
+  }
+
   const user = await getCurrentUser();
   const params = await searchParams;
   const nextPath = params.next?.startsWith("/") ? params.next : "/";

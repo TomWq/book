@@ -484,6 +484,9 @@ function ensureSqliteSchema() {
       "aiBillingMarkup" REAL,
       "aiBillingMinimum" INTEGER,
       "aiTaskPricingOverrides" JSON,
+      "licenseCustomerId" TEXT,
+      "licenseCodeHash" TEXT,
+      "licenseActivatedAt" DATETIME,
       "onboardingCompletedAt" DATETIME,
       "createdAt" DATETIME NOT NULL,
       "updatedAt" DATETIME NOT NULL
@@ -518,6 +521,9 @@ function ensureSqliteSchema() {
     'ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" REAL',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER',
     'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
+    'ALTER TABLE "User" ADD COLUMN "licenseCustomerId" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "licenseCodeHash" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "licenseActivatedAt" DATETIME',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "PlotState" ADD COLUMN "currentMap" TEXT NOT NULL DEFAULT \'\'',
@@ -762,9 +768,9 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseActivatedAt", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseActivatedAt, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
@@ -782,6 +788,9 @@ function syncCoreTables(store: unknown) {
         aiBillingMinimum: user.aiBillingMinimum == null ? null : integer(user.aiBillingMinimum),
         aiTaskPricingOverrides:
           user.aiTaskPricingOverrides == null ? null : JSON.stringify(user.aiTaskPricingOverrides),
+        licenseCustomerId: nullableText(user.licenseCustomerId),
+        licenseCodeHash: nullableText(user.licenseCodeHash),
+        licenseActivatedAt: user.licenseActivatedAt ? dateText(user.licenseActivatedAt) : null,
         onboardingCompletedAt: user.onboardingCompletedAt ? dateText(user.onboardingCompletedAt) : null,
         createdAt: dateText(user.createdAt),
         updatedAt: dateText(user.updatedAt)
@@ -1798,6 +1807,9 @@ function readCoreStoreFromDb<T>(fallback: T) {
           item.aiTaskPricingOverrides == null
             ? undefined
             : parseJsonObject(item.aiTaskPricingOverrides),
+        licenseCustomerId: maybeString(item.licenseCustomerId),
+        licenseCodeHash: maybeString(item.licenseCodeHash),
+        licenseActivatedAt: maybeString(item.licenseActivatedAt),
         onboardingCompletedAt: maybeString(item.onboardingCompletedAt),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)

@@ -58,12 +58,20 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
           <div className="topbar-meta">
             <span className="row" style={{ alignItems: "center" }}>
-              <Link href="/login" className="button">
-                登录
-              </Link>
-              <Link href="/register" className="button primary">
-                注册
-              </Link>
+              {billingMode === "subscription" ? (
+                <Link href="/activate" className="button primary">
+                  输入激活码
+                </Link>
+              ) : (
+                <>
+                  <Link href="/login" className="button">
+                    登录
+                  </Link>
+                  <Link href="/register" className="button primary">
+                    注册
+                  </Link>
+                </>
+              )}
             </span>
           </div>
         </header>
@@ -94,7 +102,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 {/* <Link href="/legal" className="button">
                   合规
                 </Link> */}
-                <LogoutButton />
+                <LogoutButton redirectTo={billingMode === "subscription" ? "/activate" : "/login"} />
               </span>
             </div>
           </header>

@@ -62,12 +62,15 @@
 项目支持两种运行模式，通过环境变量 `APP_BILLING_MODE` 控制：
 
 1. `credits`：默认 SaaS 模式，沿用灵石预扣、实际算力结算、失败返还和管理员调价。
-2. `subscription`：一次性授权/本地部署模式，不扣灵石，不展示充值入口；用户在 AI 设置页填写自己的请求地址、API Key 和模型名。
+2. `subscription`：一次性授权/PC 壳模式，不扣灵石，不展示登录注册和充值入口；首次启动先输入激活码，激活码会作为本机客户 ID，之后用户在 AI 设置页填写自己的请求地址、API Key 和模型名。
 
 卖源码给客户自部署时，建议设置：
 
 ```bash
 APP_BILLING_MODE="subscription"
+APP_ACTIVATION_CODES="CUSTOMER-2026-DEMO"
+# 可选：用 SHA-256 哈希保存激活码
+APP_ACTIVATION_CODE_HASHES=""
 ```
 
 ## 核心流程

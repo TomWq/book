@@ -241,6 +241,8 @@ export default async function AdminPage() {
 
                 <div className="meta-row">
                   <span className="chip">套餐 {user.plan}</span>
+                  {!isCreditsMode && user.licenseCustomerId ? <span className="chip">客户 {user.licenseCustomerId}</span> : null}
+                  {!isCreditsMode && user.licenseActivatedAt ? <span className="chip">激活 {formatTime(user.licenseActivatedAt)}</span> : null}
                   {isCreditsMode ? <span className="chip">灵石余额 {formatNumber(user.creditsBalance)}</span> : null}
                   <span className="chip">项目 {formatNumber(user.projectCount)}</span>
                   <span className="chip">任务 {formatNumber(user.aiJobCount)}</span>

@@ -3,14 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 
-export function LogoutButton() {
+export function LogoutButton({ redirectTo = "/login" }: { redirectTo?: string }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
   function handleLogout() {
     startTransition(async () => {
       await fetch("/api/auth/logout", { method: "POST" });
-      router.replace("/login");
+      router.replace(redirectTo);
       router.refresh();
     });
   }

@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 
-const PUBLIC_PATHS = new Set(["/", "/login", "/register", "/legal"]);
+const PUBLIC_PATHS = new Set(["/", "/activate", "/login", "/register", "/legal"]);
 
 export default function Loading() {
   const pathname = usePathname();

@@ -391,6 +391,9 @@ model User {
   aiBillingMarkup Float?
   aiBillingMinimum Int?
   aiTaskPricingOverrides Json?
+  licenseCustomerId String?
+  licenseCodeHash String?
+  licenseActivatedAt DateTime?
   onboardingCompletedAt DateTime?
   createdAt      DateTime
   updatedAt      DateTime
