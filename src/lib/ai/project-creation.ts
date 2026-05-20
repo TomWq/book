@@ -5,6 +5,7 @@ import {
 } from "@/lib/ai/client";
 
 export type ProjectCreationAssistAction = "titles" | "protagonists" | "description";
+export type TitleNamingStyle = "fanqie" | "qidian";
 
 export type ProjectCreationAssistInput = {
   action: ProjectCreationAssistAction;
@@ -17,6 +18,7 @@ export type ProjectCreationAssistInput = {
   goldenFinger?: string;
   openingHook?: string;
   description?: string;
+  titleNamingStyle?: TitleNamingStyle;
 };
 
 export type ProjectCreationAssistResult = {
@@ -40,9 +42,12 @@ function normalizeResult(value: Partial<ProjectCreationAssistResult>) {
 }
 
 export async function generateProjectCreationAssistWithAi(input: ProjectCreationAssistInput) {
+  const titleNamingStyle = input.titleNamingStyle === "qidian" ? "qidian" : "fanqie";
+  const titleTask = titleNamingStyle === "qidian"
+    ? "生成 6 个中文网文新书名。风格偏起点：更短、更传统、更有类型辨识度和意象感，优先 2-8 个中文字符，最多 12 字。可以使用职业身份、世界观概念、核心意象、命运主题来命名，例如偏《诡秘之主》《大奉打更人》《夜的命名术》《灵境行者》《赤心巡天》这类气质，但严禁照搬任何现有作品名。避免番茄式长句、第一人称设问、逗号标题、强行解释剧情的标题。"
+    : "生成 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、金手指、反差或爽点，常见形式可以是第一人称、设问、强反差、开局处境，例如“我都准备躺平了，同学们怎么才开挂”。不要照搬任何现有作品名。标题可长一些，建议 12-36 个中文字符，最多 60 字。";
   const actionPrompt = {
-    titles:
-      "生成 6 个中文网文新书名。风格参考当前平台常见长标题：标题本身要带出人物处境、金手指、反差或爽点，例如“我都准备躺平了，同学们怎么才开挂”。不要照搬任何现有作品名。标题可长一些，建议 12-36 个中文字符，最多 60 字。",
+    titles: titleTask,
     protagonists:
       "生成 8 个适合该题材的主角名。名字要像中文网文主角，易读、好记、有辨识度；避免生僻字堆砌，避免像真实公众人物。",
     description:
@@ -70,10 +75,13 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               coreSellingPoint: input.coreSellingPoint,
               goldenFinger: input.goldenFinger,
               openingHook: input.openingHook,
-              description: input.description
+              description: input.description,
+              titleNamingStyle
             },
             styleRules: [
-              "书名优先给长标题、强冲突、强卖点、强反差，但不要标题党到看不懂。",
+              titleNamingStyle === "qidian"
+                ? "书名优先短、稳、耐看，有类型气质和记忆点；不要把完整剧情塞进标题，不要使用“我都……怎么……”这类番茄长标题句式。"
+                : "书名优先给长标题、强冲突、强卖点、强反差，但不要标题党到看不懂。",
               "简介要先让读者知道主角是谁、被什么压住、靠什么翻盘、后面有什么更大期待。",
               "如果用户已经输入内容，请保留核心意思并增强网文吸引力。",
               "所有输出必须服务当前题材和标签，不要生成泛泛模板话。"

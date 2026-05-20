@@ -374,7 +374,9 @@ function isCultivationFantasyContext(context: Pick<ChapterDraftContext, "bible" 
 function buildNarrativeDictionRules(context: ChapterDraftContext) {
   const rules = [
     "正文称谓、对白和物件必须符合当前题材、时代感和世界观，不要混入与题材不符的现代口语。",
-    "亲属、师门、家族、宗门称谓必须稳定，不能同一人物一会儿现代口语一会儿古风称谓。"
+    "亲属、师门、家族、宗门称谓必须稳定，不能同一人物一会儿现代口语一会儿古风称谓。",
+    `本书作品类型固定为「${context.bible.workType}」，目标读者固定为「${context.bible.targetReader}」，正文不得擅自切换题材频道、时代背景、主角类型或核心卖点。`,
+    "创作圣经 immutableSettings、narrativeTaboos、corePleasure、styleGuide 中的主分类、题材边界、作品标签和禁止项都是硬约束；如果任务卡与圣经冲突，优先遵守圣经。"
   ];
 
   if (isCultivationFantasyContext(context)) {
@@ -426,6 +428,8 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             migrationRules: [
               "必须先从拆书结果抽象出结构功能，再迁移到当前新书变量。",
               "任务卡里的本章目标、承接、主线推进、爽点和章末钩子都必须服务当前 projectName、bible、plotState。",
+              "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
+              "不得为了套用拆书结构而改变当前新书的目标读者、主分类、主题标签、角色标签、时代背景、核心人设或力量体系。",
               "如果 chapterCharacterConstraints 不为空，本章任务卡必须显式使用这些人物约束，并把相关人物写入 requiredCharacters。",
               "如果拆书内容里出现具体人物、地点、道具、组织、案件、秘密、台词或章节事件，不得写入任务卡。",
               "可以借鉴“被压制 -> 反击 -> 获得收益 -> 引出更高压力”的节奏，但要换成当前新书自己的冲突、人物和伏笔。"
@@ -494,6 +498,7 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
                 "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
                 "正文必须围绕本章任务卡推进，不要写成大纲或总结。",
+                "正文必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得把故事写成另一个频道或另一个题材。",
                 "正文里凡是发生人物关系、伏笔、主线推进、战力能力、资源收益、知情边界变化，必须写清“谁、发生了什么、变化前后”，便于章节后沉淀到状态图谱。",
                 "不要照搬拆书来源作品的人物、地点、事件、道具、专有设定或章末钩子。"
               ],
@@ -610,6 +615,7 @@ export async function* streamChapterDraftTextWithAi(
               "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
               "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
               "先承接上一章钩子，再推进本章目标。",
+              "必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得把故事写成另一个频道或另一个题材。",
               "爽点必须有压制和释放，不要空泛总结。",
               "人物不能知道自己不知道的信息。",
               "正文里凡是发生人物关系、伏笔、主线推进、战力能力、资源收益、知情边界变化，必须写清“谁、发生了什么、变化前后”，便于章节后沉淀到状态图谱。",
@@ -659,6 +665,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
             continuationRules: [
               "只续写正文后半段，不要重复已有内容。",
               ...buildNarrativeDictionRules(context),
+              "续写也必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得补写成另一个频道或另一个题材。",
               "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
               "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
               "如果已有内容过早收尾，要把结尾钩子自然后移到补写内容最后。",
@@ -833,6 +840,11 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
               lastLedger: context.lastLedger,
               characters: context.characters,
               foreshadowings: context.foreshadowings,
+              reviewRules: [
+                "必须检查正文是否偏离创作圣经中的目标读者、作品类型、主分类、题材边界、作品标签和禁止偏离项。",
+                "如果正文把故事写成另一个频道、另一个题材，或无视主题/角色标签，应作为 high severity 问题指出。",
+                "如果任务卡 rulesNotToBreak 与正文冲突，应指出冲突位置和改法。"
+              ],
               outputSchema: {
                 overall: "string",
                 shouldUpdateState: "boolean",

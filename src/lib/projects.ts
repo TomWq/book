@@ -27,6 +27,7 @@ import {
   type ProjectCreationAssistAction,
   type ProjectCreationAssistInput
 } from "@/lib/ai/project-creation";
+import { novelTaxonomy, type TargetReader } from "@/lib/novel-taxonomy";
 import {
   assertChapterDraftComplete,
   assertEditedTextComplete,
@@ -53,7 +54,11 @@ import {
 } from "@/lib/ai-task-pricing";
 import { getBillingMode, isCreditsBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
 import { splitNovelText } from "@/lib/chapters";
-import { loadPersistedStore, savePersistedStore } from "@/lib/store-persistence";
+import {
+  getPersistencePostgresClient,
+  loadPersistedStore,
+  savePersistedStore
+} from "@/lib/store-persistence";
 
 export type StoredProject = {
   id: string;
@@ -176,11 +181,15 @@ export type StoredStoryAnalysis = {
 };
 
 export type StoredAiSettings = {
+  id?: string;
   userId?: string;
+  profileName?: string;
   providerName: string;
   baseUrl: string;
   apiKey: string;
   model: string;
+  models?: string[];
+  active?: boolean;
   timeoutMs: number;
   updatedAt?: string;
 };
@@ -414,6 +423,36 @@ export type StoredCreditTransaction = {
   createdAt: string;
 };
 
+export type StoredLicenseCode = {
+  id: string;
+  codeHash: string;
+  codePreview: string;
+  customerName?: string;
+  customerContact?: string;
+  status: "unused" | "active" | "disabled" | "expired";
+  maxActivations: number;
+  activationCount: number;
+  machineHash?: string;
+  activatedAt?: string;
+  lastVerifiedAt?: string;
+  expiresAt?: string;
+  disabledAt?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StoredLicenseActivationLog = {
+  id: string;
+  licenseCodeId?: string;
+  codeHash: string;
+  machineHash?: string;
+  result: "success" | "failed";
+  reason: string;
+  clientName?: string;
+  createdAt: string;
+};
+
 export type StoredSession = {
   id: string;
   userId: string;
@@ -444,6 +483,8 @@ type AppStore = {
   reviewReports: StoredReviewReport[];
   editReports: StoredEditReport[];
   creditTransactions: StoredCreditTransaction[];
+  licenseCodes: StoredLicenseCode[];
+  licenseActivationLogs: StoredLicenseActivationLog[];
   aiSettings?: StoredAiSettings | StoredAiSettings[];
 };
 
@@ -536,6 +577,35 @@ export type AdminDashboardSummary = {
   users: AdminUserSummary[];
 };
 
+export type AdminLicenseSummary = {
+  id: string;
+  codePreview: string;
+  customerName: string;
+  customerContact: string;
+  status: StoredLicenseCode["status"];
+  maxActivations: number;
+  activationCount: number;
+  machineHash?: string;
+  activatedAt?: string;
+  lastVerifiedAt?: string;
+  expiresAt?: string;
+  disabledAt?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  recentLogs: StoredLicenseActivationLog[];
+};
+
+export type AdminLicenseCenterSummary = {
+  total: number;
+  unused: number;
+  active: number;
+  disabled: number;
+  expired: number;
+  recentLogs: StoredLicenseActivationLog[];
+  licenses: AdminLicenseSummary[];
+};
+
 const initialStore: AppStore = {
   users: [],
   sessions: [],
@@ -557,6 +627,8 @@ const initialStore: AppStore = {
   reviewReports: [],
   editReports: [],
   creditTransactions: [],
+  licenseCodes: [],
+  licenseActivationLogs: [],
   aiSettings: undefined
 };
 
@@ -646,6 +718,72 @@ function hashActivationCode(value: string) {
   return createHash("sha256").update(normalizeActivationCode(value)).digest("hex");
 }
 
+function normalizeMachineHash(value?: string) {
+  return String(value ?? "").trim().slice(0, 160);
+}
+
+function normalizeLicenseText(value?: string) {
+  return String(value ?? "").trim().slice(0, 240);
+}
+
+function createActivationCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = randomBytes(16);
+  const chars = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]);
+  return `NW-${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}-${chars.slice(8, 12).join("")}-${chars.slice(12, 16).join("")}`;
+}
+
+function previewActivationCode(code: string) {
+  const normalized = normalizeActivationCode(code);
+  return normalized.length > 8 ? `${normalized.slice(0, 3)}...${normalized.slice(-4)}` : normalized;
+}
+
+function syncLegacyConfiguredCodes(store: AppStore) {
+  const timestamp = now();
+  const existing = new Set(store.licenseCodes.map((item) => item.codeHash));
+
+  for (const code of getConfiguredActivationCodes()) {
+    const codeHash = hashActivationCode(code);
+    if (existing.has(codeHash)) {
+      continue;
+    }
+    store.licenseCodes.push({
+      id: randomUUID(),
+      codeHash,
+      codePreview: previewActivationCode(code),
+      customerName: "本地演示授权",
+      customerContact: "",
+      status: "unused",
+      maxActivations: 1,
+      activationCount: 0,
+      notes: "由 APP_ACTIVATION_CODES 自动导入",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    existing.add(codeHash);
+  }
+
+  for (const codeHash of getConfiguredActivationCodeHashes()) {
+    if (existing.has(codeHash)) {
+      continue;
+    }
+    store.licenseCodes.push({
+      id: randomUUID(),
+      codeHash,
+      codePreview: `${codeHash.slice(0, 6)}...`,
+      customerName: "本地演示授权",
+      customerContact: "",
+      status: "unused",
+      maxActivations: 1,
+      activationCount: 0,
+      notes: "由 APP_ACTIVATION_CODE_HASHES 自动导入",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    existing.add(codeHash);
+  }
+}
+
 function getConfiguredActivationCodes() {
   return String(process.env.APP_ACTIVATION_CODES ?? process.env.APP_ACTIVATION_CODE ?? "")
     .split(/[\n,，]/)
@@ -676,6 +814,38 @@ function isValidActivationCode(code: string) {
 function activationEmail(customerId: string) {
   const safeId = customerId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "customer";
   return `${safeId}@license.local`;
+}
+
+function getLicenseServerUrl() {
+  return String(process.env.LICENSE_SERVER_URL ?? "").trim().replace(/\/+$/, "");
+}
+
+async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
+  const serverUrl = getLicenseServerUrl();
+
+  if (!serverUrl) {
+    return null;
+  }
+
+  const response = await fetch(`${serverUrl}/api/license/activate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      activationCode: input.activationCode,
+      machineHash: input.machineHash,
+      clientName: input.clientName,
+      centerOnly: true
+    }),
+    cache: "no-store"
+  });
+
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(body?.error ? String(body.error) : "授权中心验证失败");
+  }
+
+  return body?.license as LicenseActivationResult;
 }
 
 async function getCookieStore() {
@@ -816,20 +986,52 @@ function normalizeEmail(value: string) {
 
 function getPrimaryAiSettings(store: AppStore, userId: string) {
   const settings = Array.isArray(store.aiSettings) ? store.aiSettings : store.aiSettings ? [store.aiSettings] : [];
-  return settings.find((item) => item.userId === userId) ?? null;
+  const userSettings = settings.filter((item) => item.userId === userId);
+  return userSettings.find((item) => item.active) ?? userSettings[0] ?? null;
 }
 
 function setPrimaryAiSettings(store: AppStore, settings: StoredAiSettings) {
   const list = Array.isArray(store.aiSettings) ? store.aiSettings.slice() : store.aiSettings ? [store.aiSettings] : [];
-  const index = list.findIndex((item) => item.userId === settings.userId);
+  const id = settings.id || `${settings.userId || "global"}:default`;
+  const nextSettings = { ...settings, id, active: true };
+  const index = list.findIndex((item) => (item.id || `${item.userId || "global"}:default`) === id);
+  const nextList = list.map((item) =>
+    item.userId === settings.userId ? { ...item, active: false } : item
+  );
 
   if (index >= 0) {
-    list[index] = settings;
+    nextList[index] = nextSettings;
   } else {
-    list.push(settings);
+    nextList.push(nextSettings);
   }
 
-  store.aiSettings = list;
+  store.aiSettings = nextList;
+}
+
+function listUserAiProfiles(store: AppStore, userId: string) {
+  const list = Array.isArray(store.aiSettings) ? store.aiSettings : store.aiSettings ? [store.aiSettings] : [];
+  const profiles = list
+    .filter((item) => item.userId === userId)
+    .map((item, index) => ({
+      ...item,
+      id: item.id || `${userId}:default:${index}`,
+      profileName: item.profileName || item.providerName || `配置 ${index + 1}`,
+      models: Array.isArray(item.models) ? item.models : item.model ? [item.model] : []
+    }));
+
+  if (profiles.some((item) => item.active)) {
+    return profiles;
+  }
+
+  return profiles.map((item, index) => ({ ...item, active: index === 0 }));
+}
+
+function setUserAiProfiles(store: AppStore, userId: string, profiles: StoredAiSettings[]) {
+  const list = Array.isArray(store.aiSettings) ? store.aiSettings.slice() : store.aiSettings ? [store.aiSettings] : [];
+  store.aiSettings = [
+    ...list.filter((item) => item.userId !== userId),
+    ...profiles
+  ];
 }
 
 function ensureProjectOwner(project: StoredProject, userId: string) {
@@ -890,10 +1092,10 @@ async function writeStore(store: AppStore) {
 
 function getEnvAiSettings(): StoredAiSettings {
   return {
-    providerName: process.env.AI_PROVIDER_NAME ?? "DeepSeek",
-    baseUrl: process.env.AI_BASE_URL ?? "https://api.deepseek.com",
+    providerName: process.env.AI_PROVIDER_NAME ?? "",
+    baseUrl: process.env.AI_BASE_URL ?? "",
     apiKey: process.env.AI_API_KEY ?? "",
-    model: process.env.AI_MODEL ?? "deepseek-v4-flash",
+    model: process.env.AI_MODEL ?? "",
     timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 60000)
   };
 }
@@ -1009,7 +1211,262 @@ export async function getSubscriptionActivationStatus() {
   };
 }
 
-export async function activateSubscriptionLicense(input: { activationCode: string }) {
+export async function restoreSubscriptionSession() {
+  if (!isSubscriptionBillingMode()) {
+    return null;
+  }
+
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+
+  if (currentUser) {
+    return toAuthUser(currentUser);
+  }
+
+  const user = store.users.find((item) => Boolean(item.licenseCustomerId || item.licenseCodeHash));
+
+  if (!user) {
+    return null;
+  }
+
+  const timestamp = now();
+  const token = randomUUID();
+  store.sessions = store.sessions.filter((item) => item.userId !== user.id || item.expiresAt > timestamp);
+  store.sessions.push({
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  });
+
+  await writeStore(store);
+  await setSessionCookie(token);
+  return toAuthUser(user);
+}
+
+type LicenseActivationInput = {
+  activationCode: string;
+  machineHash?: string;
+  clientName?: string;
+};
+
+type LicenseActivationResult = {
+  licenseId: string;
+  customerId: string;
+  codePreview: string;
+  status: string;
+  activatedAt: string;
+  customerName?: string;
+  customerContact?: string;
+};
+
+async function activateLicenseInPostgres(input: {
+  codeHash: string;
+  machineHash: string;
+  clientName?: string;
+}) {
+  const sql = await getPersistencePostgresClient();
+
+  if (!sql) {
+    return null;
+  }
+
+  const timestamp = new Date();
+  const reusableRows = await sql`
+    UPDATE "LicenseCode"
+    SET "lastVerifiedAt" = ${timestamp},
+        "updatedAt" = ${timestamp}
+    WHERE "codeHash" = ${input.codeHash}
+      AND "status" = 'active'
+      AND "machineHash" = ${input.machineHash}
+      AND ("expiresAt" IS NULL OR "expiresAt" > now())
+    RETURNING *
+  ` as Array<Record<string, unknown>>;
+
+  if (reusableRows[0]) {
+    const license = reusableRows[0];
+    await sql`
+      INSERT INTO "LicenseActivationLog" ("id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt")
+      VALUES (${randomUUID()}, ${String(license.id)}, ${input.codeHash}, ${input.machineHash}, 'success', 'verified_same_machine', ${input.clientName ?? null}, ${timestamp})
+    `;
+    return license;
+  }
+
+  const activatedRows = await sql`
+    UPDATE "LicenseCode"
+    SET "status" = 'active',
+        "activationCount" = "activationCount" + 1,
+        "machineHash" = ${input.machineHash},
+        "activatedAt" = COALESCE("activatedAt", ${timestamp}),
+        "lastVerifiedAt" = ${timestamp},
+        "updatedAt" = ${timestamp}
+    WHERE "codeHash" = ${input.codeHash}
+      AND "status" = 'unused'
+      AND "activationCount" < "maxActivations"
+      AND ("expiresAt" IS NULL OR "expiresAt" > now())
+    RETURNING *
+  ` as Array<Record<string, unknown>>;
+
+  if (activatedRows[0]) {
+    const license = activatedRows[0];
+    await sql`
+      INSERT INTO "LicenseActivationLog" ("id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt")
+      VALUES (${randomUUID()}, ${String(license.id)}, ${input.codeHash}, ${input.machineHash}, 'success', 'activated', ${input.clientName ?? null}, ${timestamp})
+    `;
+    return license;
+  }
+
+  const rows = await sql`
+    SELECT * FROM "LicenseCode"
+    WHERE "codeHash" = ${input.codeHash}
+    LIMIT 1
+  ` as Array<Record<string, unknown>>;
+  const license = rows[0] ?? null;
+  const reason = !license
+    ? "not_found"
+    : String(license.status) === "disabled"
+      ? "disabled"
+      : license.machineHash && license.machineHash !== input.machineHash
+        ? "already_bound_other_machine"
+        : "not_available";
+
+  await sql`
+    INSERT INTO "LicenseActivationLog" ("id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt")
+    VALUES (${randomUUID()}, ${license?.id ? String(license.id) : null}, ${input.codeHash}, ${input.machineHash}, 'failed', ${reason}, ${input.clientName ?? null}, ${timestamp})
+  `;
+
+  throw new Error(
+    reason === "already_bound_other_machine"
+      ? "该授权码已绑定其他设备，如需更换设备请联系管理员重置"
+      : reason === "disabled"
+        ? "该授权码已被禁用"
+        : "授权码无效或已过期"
+  );
+}
+
+function licenseResultFromRecord(record: Record<string, unknown>): LicenseActivationResult {
+  return {
+    licenseId: String(record.id ?? ""),
+    customerId: String(record.id ?? ""),
+    codePreview: String(record.codePreview ?? ""),
+    status: String(record.status ?? "active"),
+    activatedAt: record.activatedAt ? new Date(String(record.activatedAt)).toISOString() : now(),
+    customerName: record.customerName ? String(record.customerName) : undefined,
+    customerContact: record.customerContact ? String(record.customerContact) : undefined
+  };
+}
+
+export async function activateLicenseWithCenter(input: LicenseActivationInput): Promise<LicenseActivationResult> {
+  const normalizedCode = normalizeActivationCode(input.activationCode);
+  const machineHash = normalizeMachineHash(input.machineHash);
+
+  if (!normalizedCode) {
+    throw new Error("请填写授权码");
+  }
+
+  if (!machineHash) {
+    throw new Error("缺少本机安装标识，请刷新后重试");
+  }
+
+  const codeHash = hashActivationCode(normalizedCode);
+  const clientName = normalizeLicenseText(input.clientName);
+  const postgresResult = await activateLicenseInPostgres({ codeHash, machineHash, clientName });
+
+  if (postgresResult) {
+    return licenseResultFromRecord(postgresResult);
+  }
+
+  const store = await readStore();
+  syncLegacyConfiguredCodes(store);
+
+  const timestamp = now();
+  const license = store.licenseCodes.find((item) => item.codeHash === codeHash);
+
+  function log(result: StoredLicenseActivationLog["result"], reason: string) {
+    store.licenseActivationLogs.unshift({
+      id: randomUUID(),
+      licenseCodeId: license?.id,
+      codeHash,
+      machineHash,
+      result,
+      reason,
+      clientName,
+      createdAt: timestamp
+    });
+    store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
+  }
+
+  if (!license) {
+    log("failed", "not_found");
+    await writeStore(store);
+    throw new Error("授权码无效或已过期");
+  }
+
+  if (license.status === "disabled") {
+    log("failed", "disabled");
+    await writeStore(store);
+    throw new Error("该授权码已被禁用");
+  }
+
+  if (license.expiresAt && Date.parse(license.expiresAt) <= Date.now()) {
+    license.status = "expired";
+    license.updatedAt = timestamp;
+    log("failed", "expired");
+    await writeStore(store);
+    throw new Error("授权码无效或已过期");
+  }
+
+  if (license.status === "active") {
+    if (license.machineHash && license.machineHash !== machineHash) {
+      log("failed", "already_bound_other_machine");
+      await writeStore(store);
+      throw new Error("该授权码已绑定其他设备，如需更换设备请联系管理员重置");
+    }
+    license.machineHash = license.machineHash || machineHash;
+    license.lastVerifiedAt = timestamp;
+    license.updatedAt = timestamp;
+    log("success", "verified_same_machine");
+    await writeStore(store);
+    return {
+      licenseId: license.id,
+      customerId: license.id,
+      codePreview: license.codePreview,
+      status: license.status,
+      activatedAt: license.activatedAt ?? timestamp,
+      customerName: license.customerName,
+      customerContact: license.customerContact
+    };
+  }
+
+  if (license.activationCount >= license.maxActivations) {
+    log("failed", "activation_limit_reached");
+    await writeStore(store);
+    throw new Error("该授权码已达到可激活次数");
+  }
+
+  license.status = "active";
+  license.activationCount += 1;
+  license.machineHash = machineHash;
+  license.activatedAt = license.activatedAt ?? timestamp;
+  license.lastVerifiedAt = timestamp;
+  license.updatedAt = timestamp;
+  log("success", "activated");
+  await writeStore(store);
+
+  return {
+    licenseId: license.id,
+    customerId: license.id,
+    codePreview: license.codePreview,
+    status: license.status,
+    activatedAt: license.activatedAt,
+    customerName: license.customerName,
+    customerContact: license.customerContact
+  };
+}
+
+export async function activateSubscriptionLicense(input: LicenseActivationInput) {
   if (!isSubscriptionBillingMode()) {
     throw new Error("当前不是一次性授权模式");
   }
@@ -1020,38 +1477,39 @@ export async function activateSubscriptionLicense(input: { activationCode: strin
     throw new Error("请填写激活码");
   }
 
-  if (!isValidActivationCode(normalizedCode)) {
-    throw new Error("激活码无效或已过期，请使用最新激活码");
-  }
+  const license = (await activateLicenseViaRemoteCenter(input)) ?? (await activateLicenseWithCenter(input));
 
   const store = await readStore();
   const timestamp = now();
   const codeHash = hashActivationCode(normalizedCode);
-  let user = store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === normalizedCode);
+  let user = store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId);
 
   if (!user) {
     const { salt, hash } = hashPassword(randomUUID());
     user = {
       id: randomUUID(),
-      email: activationEmail(normalizedCode),
-      name: `授权客户 ${normalizedCode.slice(-6)}`,
+      email: activationEmail(license.customerId),
+      name: license.customerName || `授权客户 ${license.codePreview}`,
       passwordSalt: salt,
       passwordHash: hash,
       role: "user",
       plan: "studio",
       creditsBalance: 0,
-      licenseCustomerId: normalizedCode,
+      licenseCustomerId: license.customerId,
       licenseCodeHash: codeHash,
-      licenseActivatedAt: timestamp,
+      licenseActivatedAt: license.activatedAt || timestamp,
       onboardingCompletedAt: timestamp,
       createdAt: timestamp,
       updatedAt: timestamp
     };
     store.users.push(user);
   } else {
-    user.licenseCustomerId = user.licenseCustomerId || normalizedCode;
+    user.licenseCustomerId = user.licenseCustomerId || license.customerId;
     user.licenseCodeHash = user.licenseCodeHash || codeHash;
-    user.licenseActivatedAt = user.licenseActivatedAt || timestamp;
+    user.licenseActivatedAt = user.licenseActivatedAt || license.activatedAt || timestamp;
+    if (license.customerName) {
+      user.name = license.customerName;
+    }
     user.plan = user.plan ?? "studio";
     user.updatedAt = timestamp;
   }
@@ -1695,7 +2153,7 @@ function readPositiveNumber(value: string | undefined, fallback: number) {
 }
 
 function getDefaultAiPriceConfig(modelName?: string) {
-  const model = (modelName || process.env.AI_MODEL || "deepseek-v4-flash").toLowerCase();
+  const model = (modelName || process.env.AI_MODEL || "").toLowerCase();
 
   if (model.includes("pro")) {
     return {
@@ -2234,7 +2692,7 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
         licenseCustomerId: user.licenseCustomerId,
         licenseActivatedAt: user.licenseActivatedAt,
         creditsBalance: getUserCreditBalance(user),
-        aiModel: getUserAiSettings(store, user.id).model || process.env.AI_MODEL || "deepseek-v4-flash",
+        aiModel: getUserAiSettings(store, user.id).model || process.env.AI_MODEL || "未配置",
         aiBillingMarkup: getUserAiBillingMarkup(user),
         aiBillingMinimum: getUserAiBillingMinimum(user),
         aiTaskPricing: buildUserAiTaskPricing(user),
@@ -2260,10 +2718,296 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
   };
 }
 
+function normalizeLicenseStatus(status: unknown): StoredLicenseCode["status"] {
+  return status === "active" || status === "disabled" || status === "expired" ? status : "unused";
+}
+
+function buildAdminLicenseCenter(store: AppStore): AdminLicenseCenterSummary {
+  syncLegacyConfiguredCodes(store);
+  const nowTime = Date.now();
+
+  store.licenseCodes.forEach((license) => {
+    if (license.status !== "disabled" && license.expiresAt && Date.parse(license.expiresAt) <= nowTime) {
+      license.status = "expired";
+    }
+  });
+
+  const recentLogs = store.licenseActivationLogs.slice(0, 20);
+  const licenses = store.licenseCodes
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((license) => ({
+      id: license.id,
+      codePreview: license.codePreview,
+      customerName: license.customerName ?? "",
+      customerContact: license.customerContact ?? "",
+      status: normalizeLicenseStatus(license.status),
+      maxActivations: license.maxActivations,
+      activationCount: license.activationCount,
+      machineHash: license.machineHash,
+      activatedAt: license.activatedAt,
+      lastVerifiedAt: license.lastVerifiedAt,
+      expiresAt: license.expiresAt,
+      disabledAt: license.disabledAt,
+      notes: license.notes,
+      createdAt: license.createdAt,
+      updatedAt: license.updatedAt,
+      recentLogs: store.licenseActivationLogs
+        .filter((log) => log.licenseCodeId === license.id)
+        .slice(0, 3)
+    }));
+
+  return {
+    total: store.licenseCodes.length,
+    unused: store.licenseCodes.filter((item) => item.status === "unused").length,
+    active: store.licenseCodes.filter((item) => item.status === "active").length,
+    disabled: store.licenseCodes.filter((item) => item.status === "disabled").length,
+    expired: store.licenseCodes.filter((item) => item.status === "expired").length,
+    recentLogs,
+    licenses
+  };
+}
+
+type LicenseSqlClient = NonNullable<Awaited<ReturnType<typeof getPersistencePostgresClient>>>;
+
+function dateFromDb(value: unknown) {
+  return value ? new Date(String(value)).toISOString() : undefined;
+}
+
+function licenseFromDb(row: Record<string, unknown>): StoredLicenseCode {
+  return {
+    id: String(row.id ?? ""),
+    codeHash: String(row.codeHash ?? ""),
+    codePreview: String(row.codePreview ?? ""),
+    customerName: row.customerName ? String(row.customerName) : undefined,
+    customerContact: row.customerContact ? String(row.customerContact) : undefined,
+    status: normalizeLicenseStatus(row.status),
+    maxActivations: Number(row.maxActivations ?? 1) || 1,
+    activationCount: Number(row.activationCount ?? 0) || 0,
+    machineHash: row.machineHash ? String(row.machineHash) : undefined,
+    activatedAt: dateFromDb(row.activatedAt),
+    lastVerifiedAt: dateFromDb(row.lastVerifiedAt),
+    expiresAt: dateFromDb(row.expiresAt),
+    disabledAt: dateFromDb(row.disabledAt),
+    notes: row.notes ? String(row.notes) : undefined,
+    createdAt: dateFromDb(row.createdAt) ?? now(),
+    updatedAt: dateFromDb(row.updatedAt) ?? now()
+  };
+}
+
+function licenseLogFromDb(row: Record<string, unknown>): StoredLicenseActivationLog {
+  return {
+    id: String(row.id ?? ""),
+    licenseCodeId: row.licenseCodeId ? String(row.licenseCodeId) : undefined,
+    codeHash: String(row.codeHash ?? ""),
+    machineHash: row.machineHash ? String(row.machineHash) : undefined,
+    result: row.result === "success" ? "success" : "failed",
+    reason: String(row.reason ?? ""),
+    clientName: row.clientName ? String(row.clientName) : undefined,
+    createdAt: dateFromDb(row.createdAt) ?? now()
+  };
+}
+
+async function buildAdminLicenseCenterFromPostgres(sql: LicenseSqlClient): Promise<AdminLicenseCenterSummary> {
+  const licenseRows = await sql`
+    SELECT * FROM "LicenseCode"
+    ORDER BY "createdAt" DESC, "id" DESC
+  ` as Array<Record<string, unknown>>;
+  const logRows = await sql`
+    SELECT * FROM "LicenseActivationLog"
+    ORDER BY "createdAt" DESC, "id" DESC
+    LIMIT 200
+  ` as Array<Record<string, unknown>>;
+  const licenses = licenseRows.map(licenseFromDb);
+  const logs = logRows.map(licenseLogFromDb);
+
+  return {
+    total: licenses.length,
+    unused: licenses.filter((item) => item.status === "unused").length,
+    active: licenses.filter((item) => item.status === "active").length,
+    disabled: licenses.filter((item) => item.status === "disabled").length,
+    expired: licenses.filter((item) => item.status === "expired").length,
+    recentLogs: logs.slice(0, 20),
+    licenses: licenses.map((license) => ({
+      id: license.id,
+      codePreview: license.codePreview,
+      customerName: license.customerName ?? "",
+      customerContact: license.customerContact ?? "",
+      status: license.status,
+      maxActivations: license.maxActivations,
+      activationCount: license.activationCount,
+      machineHash: license.machineHash,
+      activatedAt: license.activatedAt,
+      lastVerifiedAt: license.lastVerifiedAt,
+      expiresAt: license.expiresAt,
+      disabledAt: license.disabledAt,
+      notes: license.notes,
+      createdAt: license.createdAt,
+      updatedAt: license.updatedAt,
+      recentLogs: logs.filter((log) => log.licenseCodeId === license.id).slice(0, 3)
+    }))
+  };
+}
+
 export async function getAdminDashboard() {
   const store = await readStore();
   await requireAdminUser(store);
   return createDomainReadRepository(store).getAdminDashboard();
+}
+
+export async function getAdminLicenseCenter() {
+  const store = await readStore();
+  await requireAdminUser(store);
+  const sql = await getPersistencePostgresClient();
+
+  if (sql) {
+    return buildAdminLicenseCenterFromPostgres(sql);
+  }
+
+  const center = buildAdminLicenseCenter(store);
+  await writeStore(store);
+  return center;
+}
+
+export async function generateAdminLicenseCodes(input: {
+  quantity: number;
+  customerName?: string;
+  customerContact?: string;
+  maxActivations?: number;
+  expiresAt?: string;
+  notes?: string;
+}) {
+  const store = await readStore();
+  await requireAdminUser(store);
+  const sql = await getPersistencePostgresClient();
+  syncLegacyConfiguredCodes(store);
+
+  const quantity = Math.max(1, Math.min(50, Math.floor(Number(input.quantity) || 1)));
+  const maxActivations = Math.max(1, Math.min(10, Math.floor(Number(input.maxActivations) || 1)));
+  const timestamp = now();
+  const generated: string[] = [];
+  const existingHashes = new Set(store.licenseCodes.map((item) => item.codeHash));
+  const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+
+  if (sql) {
+    const existingRows = await sql`SELECT "codeHash" FROM "LicenseCode"` as Array<{ codeHash?: string }>;
+    existingRows.forEach((row) => {
+      if (row.codeHash) {
+        existingHashes.add(row.codeHash);
+      }
+    });
+  }
+
+  for (let index = 0; index < quantity; index += 1) {
+    let code = createActivationCode();
+    let codeHash = hashActivationCode(code);
+
+    while (existingHashes.has(codeHash)) {
+      code = createActivationCode();
+      codeHash = hashActivationCode(code);
+    }
+
+    existingHashes.add(codeHash);
+    generated.push(code);
+    const license: StoredLicenseCode = {
+      id: randomUUID(),
+      codeHash,
+      codePreview: previewActivationCode(code),
+      customerName: normalizeLicenseText(input.customerName),
+      customerContact: normalizeLicenseText(input.customerContact),
+      status: "unused",
+      maxActivations,
+      activationCount: 0,
+      expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt.toISOString() : undefined,
+      notes: normalizeLicenseText(input.notes),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+
+    store.licenseCodes.unshift(license);
+
+    if (sql) {
+      await sql`
+        INSERT INTO "LicenseCode" (
+          "id", "codeHash", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "expiresAt", "notes", "createdAt", "updatedAt"
+        ) VALUES (
+          ${license.id}, ${license.codeHash}, ${license.codePreview}, ${license.customerName || null}, ${license.customerContact || null}, ${license.status}, ${license.maxActivations}, ${license.activationCount}, ${license.expiresAt ? new Date(license.expiresAt) : null}, ${license.notes || null}, ${new Date(license.createdAt)}, ${new Date(license.updatedAt)}
+        )
+      `;
+    }
+  }
+
+  await writeStore(store);
+  return { codes: generated, center: sql ? await buildAdminLicenseCenterFromPostgres(sql) : buildAdminLicenseCenter(store) };
+}
+
+export async function updateAdminLicenseCode(input: {
+  licenseId: string;
+  action: "disable" | "reset" | "enable";
+}) {
+  const store = await readStore();
+  await requireAdminUser(store);
+  const sql = await getPersistencePostgresClient();
+
+  if (sql) {
+    const timestamp = new Date();
+    if (input.action === "disable") {
+      await sql`
+        UPDATE "LicenseCode"
+        SET "status" = 'disabled', "disabledAt" = ${timestamp}, "updatedAt" = ${timestamp}
+        WHERE "id" = ${input.licenseId}
+      `;
+    } else if (input.action === "reset") {
+      await sql`
+        UPDATE "LicenseCode"
+        SET "status" = 'unused',
+            "activationCount" = 0,
+            "machineHash" = NULL,
+            "activatedAt" = NULL,
+            "lastVerifiedAt" = NULL,
+            "disabledAt" = NULL,
+            "updatedAt" = ${timestamp}
+        WHERE "id" = ${input.licenseId}
+      `;
+    } else if (input.action === "enable") {
+      await sql`
+        UPDATE "LicenseCode"
+        SET "status" = CASE WHEN "activationCount" > 0 THEN 'active' ELSE 'unused' END,
+            "disabledAt" = NULL,
+            "updatedAt" = ${timestamp}
+        WHERE "id" = ${input.licenseId}
+      `;
+    }
+
+    return buildAdminLicenseCenterFromPostgres(sql);
+  }
+
+  const license = store.licenseCodes.find((item) => item.id === input.licenseId);
+
+  if (!license) {
+    throw new Error("授权码不存在");
+  }
+
+  const timestamp = now();
+
+  if (input.action === "disable") {
+    license.status = "disabled";
+    license.disabledAt = timestamp;
+  } else if (input.action === "reset") {
+    license.status = "unused";
+    license.activationCount = 0;
+    license.machineHash = undefined;
+    license.activatedAt = undefined;
+    license.lastVerifiedAt = undefined;
+    license.disabledAt = undefined;
+  } else if (input.action === "enable") {
+    license.status = license.activationCount > 0 ? "active" : "unused";
+    license.disabledAt = undefined;
+  }
+
+  license.updatedAt = timestamp;
+  await writeStore(store);
+  return buildAdminLicenseCenter(store);
 }
 
 export async function grantCreditsToUser(input: {
@@ -2309,10 +3053,10 @@ export async function updateUserAiControls(input: {
   }
 
   const model = input.model.trim();
-  const allowedModels = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+  const allowedModels = new Set(["platform-fast", "platform-quality"]);
 
   if (!allowedModels.has(model)) {
-    throw new Error("模型只能选择 deepseek-v4-flash 或 deepseek-v4-pro");
+    throw new Error("模型只能选择 platform-fast 或 platform-quality");
   }
 
   const markup = Number(input.aiBillingMarkup);
@@ -2329,7 +3073,7 @@ export async function updateUserAiControls(input: {
   const current = getPrimaryAiSettings(store, target.id);
   setPrimaryAiSettings(store, {
     userId: target.id,
-    providerName: current?.providerName || "DeepSeek",
+    providerName: current?.providerName || "",
     baseUrl: current?.baseUrl || "",
     apiKey: current?.apiKey || "",
     model,
@@ -2486,6 +3230,40 @@ function cleanList(values?: string[]) {
   );
 }
 
+function resolveTargetReader(value: string): TargetReader | null {
+  return value === "男频" || value === "女频" ? value : null;
+}
+
+function getCategoryDescription(targetReader: string, genre: string) {
+  const reader = resolveTargetReader(targetReader);
+
+  if (!reader) {
+    return "";
+  }
+
+  return novelTaxonomy[reader].mainCategories.find((category) => category.name === genre)?.description ?? "";
+}
+
+function buildGenreBoundaryRules(input: {
+  targetReader: string;
+  genre: string;
+  categoryDescription?: string;
+  tags: string[];
+}) {
+  return [
+    input.targetReader ? `目标读者频道固定为：${input.targetReader}。` : "",
+    input.genre ? `主分类固定为：${input.genre}。` : "",
+    input.categoryDescription ? `主分类定义：${input.categoryDescription}` : "",
+    input.tags.length ? `作品主题/角色标签固定为：${input.tags.join("、")}。` : "",
+    input.genre
+      ? `后续任务卡、正文、人物、地图、能力体系和爽点设计必须优先服务「${input.genre}」这个主分类，不得擅自切换到不相干题材。`
+      : "",
+    input.tags.length
+      ? "可以扩展细节，但不能把已选主题/角色标签写反、写丢，或引入与这些标签明显冲突的核心设定。"
+      : ""
+  ].filter(Boolean);
+}
+
 function removeLegacyPlacedLines(value: string, prefixes: string[]) {
   const lines = value.split(/\r?\n/);
   const cleaned: string[] = [];
@@ -2617,6 +3395,13 @@ function applyInitialProjectState(
   const foreshadowingPlan = cleanList(input.foreshadowingPlan).slice(0, 12);
   const pleasureDistribution = input.pleasureDistribution?.trim() ?? "";
   const targetReader = input.targetReader?.trim() ?? "";
+  const categoryDescription = getCategoryDescription(targetReader, project.genre);
+  const genreBoundaryRules = buildGenreBoundaryRules({
+    targetReader,
+    genre: project.genre,
+    categoryDescription,
+    tags
+  });
   const bible = store.writingBibles.find((item) => item.projectId === project.id);
   const plotState = store.plotStates.find((item) => item.projectId === project.id);
 
@@ -2627,6 +3412,8 @@ function applyInitialProjectState(
   bible.workType = project.genre ? `${project.genre}长篇连载` : bible.workType;
   bible.targetReader = targetReader || bible.targetReader;
   bible.corePleasure = [
+    project.genre ? `主分类：${project.genre}` : "",
+    categoryDescription ? `题材边界：${categoryDescription}` : "",
     coreSellingPoint,
     tags.length ? `作品标签：${tags.join("、")}` : "",
     openingHook ? `开局情绪：${openingHook}` : ""
@@ -2640,12 +3427,21 @@ function applyInitialProjectState(
   bible.immutableSettings = [
     "不改变主角核心身份、底层欲望和已公开事实。",
     "不让人物提前知道未揭露真相。",
+    ...genreBoundaryRules,
     worldSetting ? "世界规则以「世界规则」字段为准，不随章节临时改写。" : "",
     goldenFinger ? `关键机制：${goldenFinger}` : "",
     openingHook ? `开局钩子必须被承接：${openingHook}` : ""
   ].filter(Boolean).join("\n") || bible.immutableSettings;
+  bible.narrativeTaboos = cleanList([
+    bible.narrativeTaboos,
+    project.genre ? `禁止偏离主分类：${project.genre}` : "",
+    tags.length ? `禁止无视或反向改写作品标签：${tags.join("、")}` : "",
+    "禁止为了制造爽点临时改换目标读者、题材频道、核心人设或力量体系。"
+  ]).join("\n") || bible.narrativeTaboos;
   bible.styleGuide = [
     bible.styleGuide,
+    project.genre ? `题材口味：${project.genre}${categoryDescription ? `，${categoryDescription}` : ""}` : "",
+    tags.length ? `标签口味：${tags.join("、")}` : "",
     first100Pacing ? `前100章节奏：${first100Pacing}` : "",
     pleasureDistribution ? `爽点分布：${pleasureDistribution}` : ""
   ].filter(Boolean).join("\n");
@@ -2757,9 +3553,9 @@ function hasConfiguredAiSettings(store: AppStore, userId?: string) {
   const settings = userId ? getPrimaryAiSettings(store, userId) : normalizeStoredAiSettings(store.aiSettings)[0];
 
   return Boolean(
-    (settings?.baseUrl || process.env.AI_BASE_URL) &&
-      (settings?.apiKey || process.env.AI_API_KEY) &&
-      (settings?.model || process.env.AI_MODEL)
+    settings?.baseUrl &&
+      settings?.apiKey &&
+      settings?.model
   );
 }
 
@@ -2767,7 +3563,7 @@ function getActiveAiModel(store: AppStore, fallbackModel: string, userId?: strin
   const settings = userId ? getPrimaryAiSettings(store, userId) : normalizeStoredAiSettings(store.aiSettings)[0];
 
   return hasConfiguredAiSettings(store, userId)
-    ? settings?.model || process.env.AI_MODEL || fallbackModel
+    ? settings?.model || fallbackModel
     : fallbackModel;
 }
 
@@ -4422,14 +5218,31 @@ export async function getAiSettings() {
 }
 
 export async function getPublicAiSettings() {
-  const settings = await getAiSettings();
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+  const settings = currentUser ? getUserAiSettings(store, currentUser.id) : mergeAiSettings();
+  const profiles = currentUser ? listUserAiProfiles(store, currentUser.id) : [];
   const key = settings.apiKey.trim();
 
   return {
     billingMode: getBillingMode(),
+    activeProfileId: settings.id || "",
     providerName: settings.providerName,
     baseUrl: settings.baseUrl,
     model: settings.model,
+    profiles: profiles.map((profile) => ({
+      id: profile.id || "",
+      profileName: profile.profileName || profile.providerName || "默认配置",
+      providerName: profile.providerName,
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      models: profile.models ?? [],
+      timeoutMs: profile.timeoutMs,
+      active: Boolean(profile.active),
+      hasApiKey: profile.apiKey.trim().length > 0,
+      apiKeyPreview: profile.apiKey ? `...${profile.apiKey.slice(-4)}` : "",
+      updatedAt: profile.updatedAt
+    })),
     timeoutMs: settings.timeoutMs,
     hasApiKey: key.length > 0,
     apiKeyPreview: key ? `...${key.slice(-4)}` : "",
@@ -4437,40 +5250,134 @@ export async function getPublicAiSettings() {
   };
 }
 
+export async function getCurrentUserAiSetupStatus() {
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+
+  return {
+    configured: Boolean(currentUser && hasConfiguredAiSettings(store, currentUser.id))
+  };
+}
+
 export async function updateAiSettings(input: {
+  profileId?: string;
+  profileName?: string;
   providerName: string;
   baseUrl: string;
   apiKey?: string;
   model: string;
+  models?: string[];
   timeoutMs: number;
   clearApiKey?: boolean;
 }) {
   const store = await readStore();
   const currentUser = await requireCurrentUser(store);
-  const current = getPrimaryAiSettings(store, currentUser.id);
+  const profiles = listUserAiProfiles(store, currentUser.id);
+  const rawProfileId = input.profileId?.trim() || "";
+  const requestedProfileId = rawProfileId === "new" ? "" : rawProfileId;
+  const current = requestedProfileId
+    ? profiles.find((profile) => profile.id === requestedProfileId) ?? null
+    : null;
   const timestamp = now();
   const billingMode = getBillingMode();
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
   const model = input.model.trim();
   const providerName = input.providerName.trim();
+  const profileId = requestedProfileId || randomUUID();
   const nextApiKey = input.clearApiKey ? "" : input.apiKey?.trim() || current?.apiKey || "";
 
   const nextSettings: StoredAiSettings = {
+    id: profileId,
     userId: currentUser.id,
-    providerName: billingMode === "credits" ? "DeepSeek" : providerName || "Custom",
-    baseUrl: billingMode === "credits" ? "https://api.deepseek.com" : baseUrl,
+    profileName: input.profileName?.trim() || providerName || "默认配置",
+    providerName: providerName || "OpenAI Compatible",
+    baseUrl,
     apiKey: billingMode === "credits" ? current?.apiKey || "" : nextApiKey,
     model,
+    models: Array.from(new Set([...(input.models ?? []), model].map((item) => item.trim()).filter(Boolean))),
+    active: true,
     timeoutMs: Number.isFinite(input.timeoutMs) && input.timeoutMs > 0 ? input.timeoutMs : 60000,
     updatedAt: timestamp
   };
   setPrimaryAiSettings(store, nextSettings);
 
   await writeStore(store);
-  return {
-    ...nextSettings,
-    billingMode
-  };
+  return getPublicAiSettings();
+}
+
+export async function switchAiProfile(profileId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const profiles = listUserAiProfiles(store, currentUser.id);
+  const target = profiles.find((item) => item.id === profileId);
+
+  if (!target) {
+    throw new Error("AI 配置不存在");
+  }
+
+  setUserAiProfiles(
+    store,
+    currentUser.id,
+    profiles.map((profile) => ({ ...profile, active: profile.id === profileId, updatedAt: now() }))
+  );
+  await writeStore(store);
+  return getPublicAiSettings();
+}
+
+export async function deleteAiProfile(profileId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const profiles = listUserAiProfiles(store, currentUser.id);
+
+  if (profiles.length <= 1) {
+    throw new Error("至少保留一个 AI 配置");
+  }
+
+  const nextProfiles = profiles.filter((profile) => profile.id !== profileId);
+
+  if (nextProfiles.length === profiles.length) {
+    throw new Error("AI 配置不存在");
+  }
+
+  if (!nextProfiles.some((profile) => profile.active)) {
+    nextProfiles[0].active = true;
+  }
+
+  setUserAiProfiles(store, currentUser.id, nextProfiles);
+  await writeStore(store);
+  return getPublicAiSettings();
+}
+
+export async function listAiProviderModels(input: { baseUrl: string; apiKey: string }) {
+  const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
+  const apiKey = input.apiKey.trim();
+
+  if (!baseUrl) {
+    throw new Error("请先填写请求地址");
+  }
+
+  if (!apiKey) {
+    throw new Error("请先填写 API Key");
+  }
+
+  const response = await fetch(`${baseUrl}/models`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`获取模型失败：${response.status} ${text}`);
+  }
+
+  const payload = await response.json();
+  const models = Array.isArray(payload?.data)
+    ? payload.data.map((item: unknown) =>
+        item && typeof item === "object" && "id" in item ? String((item as { id: unknown }).id) : ""
+      )
+    : [];
+
+  return Array.from(new Set(models.filter(Boolean))).sort();
 }
 
 export async function createTemplateFromProject(projectId: string) {
@@ -6561,11 +7468,7 @@ export async function analyzeProject(
     throw new Error("当前分析范围内没有章节，请重新选择章节区间");
   }
 
-  const useAi = Boolean(
-    (getUserAiSettings(store, currentUser.id).baseUrl || process.env.AI_BASE_URL) &&
-      (getUserAiSettings(store, currentUser.id).apiKey || process.env.AI_API_KEY) &&
-      (getUserAiSettings(store, currentUser.id).model || process.env.AI_MODEL)
-  );
+  const useAi = hasConfiguredAiSettings(store, currentUser.id);
   const hasActiveAnalysisJob = store.aiJobs.some(
     (item) =>
       item.projectId === projectId &&
@@ -6585,7 +7488,7 @@ export async function analyzeProject(
     projectId,
     type: "analyze_chapters",
     payload: { chapterCount: selectedCount, fromChapter, toChapter, scope },
-    model: useAi ? getUserAiSettings(store, currentUser.id).model || process.env.AI_MODEL || "local-rule-analyzer" : "local-rule-analyzer",
+    model: useAi ? getUserAiSettings(store, currentUser.id).model || "local-rule-analyzer" : "local-rule-analyzer",
     retryOfJobId: options?.retryOfJobId
   });
 
@@ -6619,17 +7522,13 @@ export async function generateOutline(
   const currentUser = await requireCurrentUser(store);
   const template = createDomainWriteRepository(store).requireTemplateForUser(templateId, currentUser.id);
 
-  const useAi = Boolean(
-    (getUserAiSettings(store, currentUser.id).baseUrl || process.env.AI_BASE_URL) &&
-      (getUserAiSettings(store, currentUser.id).apiKey || process.env.AI_API_KEY) &&
-      (getUserAiSettings(store, currentUser.id).model || process.env.AI_MODEL)
-  );
+  const useAi = hasConfiguredAiSettings(store, currentUser.id);
   const timestamp = now();
   const job = createAiJob(store, {
     userId: currentUser.id,
     type: "generate_outline",
     payload: { templateId, variables },
-    model: useAi ? getUserAiSettings(store, currentUser.id).model || process.env.AI_MODEL || "local-outline-generator" : "local-outline-generator",
+    model: useAi ? getUserAiSettings(store, currentUser.id).model || "local-outline-generator" : "local-outline-generator",
     retryOfJobId: options?.retryOfJobId
   });
 

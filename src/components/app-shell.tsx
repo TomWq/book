@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 import { getBillingMode } from "@/lib/billing-mode";
-import { getCurrentUserAccess } from "@/lib/projects";
+import { getCurrentUserAccess, getCurrentUserAiSetupStatus } from "@/lib/projects";
 import { LogoutButton } from "@/components/logout-button";
 import { SideNav, type SideNavItem } from "@/components/side-nav";
 
@@ -14,6 +14,9 @@ const navItems: SideNavItem[] = [
 export async function AppShell({ children }: { children: ReactNode }) {
   const { user, isAdmin } = await getCurrentUserAccess();
   const billingMode = getBillingMode();
+  const aiSetup = user && !isAdmin && billingMode === "subscription"
+    ? await getCurrentUserAiSetupStatus()
+    : { configured: true };
   const visibleNavItems = isAdmin ? [{ href: "/admin", label: "管理后台" }] : navItems;
   const brandHref = isAdmin ? "/admin" : "/";
 
@@ -94,18 +97,30 @@ export async function AppShell({ children }: { children: ReactNode }) {
                     {billingMode === "subscription" ? "AI 设置" : "AI 模式"}
                   </Link>
                 ) : null}
-                {!isAdmin ? (
+                {!isAdmin && billingMode === "credits" ? (
                   <Link href="/settings/account" className="button">
-                    {billingMode === "subscription" ? "账号" : "用量"}
+                    用量
                   </Link>
                 ) : null}
                 {/* <Link href="/legal" className="button">
                   合规
                 </Link> */}
-                <LogoutButton redirectTo={billingMode === "subscription" ? "/activate" : "/login"} />
+                {billingMode === "credits" ? <LogoutButton redirectTo="/login" /> : null}
               </span>
             </div>
           </header>
+        ) : null}
+
+        {user && !isAdmin && billingMode === "subscription" && !aiSetup.configured ? (
+          <div className="setup-alert">
+            <div>
+              <strong>请先配置 AI 模型</strong>
+              <span>当前是授权版，本地不会内置模型服务。请填写请求地址、API Key，并选择一个模型后再开始拆书或创作。</span>
+            </div>
+            <Link href="/settings/ai" className="button primary">
+              去配置 AI
+            </Link>
+          </div>
         ) : null}
 
         <main className="app-main">{children}</main>

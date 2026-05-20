@@ -30,6 +30,7 @@ export function proxy(request: NextRequest) {
     if (
       pathname === "/activate" ||
       pathname === "/api/license/activate" ||
+      pathname === "/api/license/restore" ||
       pathname === "/api/health" ||
       pathname === "/api/jobs/worker"
     ) {

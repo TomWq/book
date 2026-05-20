@@ -1,4 +1,4 @@
-import { activateSubscriptionLicense } from "@/lib/projects";
+import { activateLicenseWithCenter, activateSubscriptionLicense } from "@/lib/projects";
 
 export const runtime = "nodejs";
 
@@ -6,8 +6,20 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
 
   try {
+    if (body.centerOnly) {
+      const license = await activateLicenseWithCenter({
+        activationCode: String(body.activationCode ?? ""),
+        machineHash: String(body.machineHash ?? ""),
+        clientName: String(body.clientName ?? "")
+      });
+
+      return Response.json({ license });
+    }
+
     const user = await activateSubscriptionLicense({
-      activationCode: String(body.activationCode ?? "")
+      activationCode: String(body.activationCode ?? ""),
+      machineHash: String(body.machineHash ?? ""),
+      clientName: String(body.clientName ?? "")
     });
 
     return Response.json({ user });

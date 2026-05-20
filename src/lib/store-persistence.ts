@@ -25,6 +25,8 @@ const STORE_RECORD_ENTITY_KEYS = [
   "editReports",
   "aiJobs",
   "creditTransactions",
+  "licenseCodes",
+  "licenseActivationLogs",
   "aiSettings"
 ];
 
@@ -106,6 +108,10 @@ async function getPostgresClient() {
   return globalForPersistence.__appStatePostgres;
 }
 
+export async function getPersistencePostgresClient() {
+  return getPostgresClient();
+}
+
 async function ensurePostgresSchema(sql: PostgresClient) {
   await sql`
     CREATE TABLE IF NOT EXISTS "AppState" (
@@ -133,6 +139,43 @@ async function ensurePostgresSchema(sql: PostgresClient) {
   await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_userId_idx" ON "StoreRecord" ("userId")`;
   await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_ownerUserId_idx" ON "StoreRecord" ("ownerUserId")`;
   await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_projectId_idx" ON "StoreRecord" ("projectId")`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS "LicenseCode" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "codeHash" TEXT NOT NULL UNIQUE,
+      "codePreview" TEXT NOT NULL,
+      "customerName" TEXT,
+      "customerContact" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'unused',
+      "maxActivations" INTEGER NOT NULL DEFAULT 1,
+      "activationCount" INTEGER NOT NULL DEFAULT 0,
+      "machineHash" TEXT,
+      "activatedAt" TIMESTAMPTZ,
+      "lastVerifiedAt" TIMESTAMPTZ,
+      "expiresAt" TIMESTAMPTZ,
+      "disabledAt" TIMESTAMPTZ,
+      "notes" TEXT,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS "LicenseActivationLog" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "licenseCodeId" TEXT,
+      "codeHash" TEXT NOT NULL,
+      "machineHash" TEXT,
+      "result" TEXT NOT NULL,
+      "reason" TEXT NOT NULL,
+      "clientName" TEXT,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS "LicenseActivationLog_licenseCodeId_idx" ON "LicenseActivationLog" ("licenseCodeId")`;
+  await sql`CREATE INDEX IF NOT EXISTS "LicenseActivationLog_codeHash_idx" ON "LicenseActivationLog" ("codeHash")`;
 }
 
 function ensureSqliteSchema() {
@@ -513,6 +556,36 @@ function ensureSqliteSchema() {
       "orderId" TEXT,
       "createdAt" DATETIME NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS "LicenseCode" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "codeHash" TEXT NOT NULL UNIQUE,
+      "codePreview" TEXT NOT NULL,
+      "customerName" TEXT,
+      "customerContact" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'unused',
+      "maxActivations" INTEGER NOT NULL DEFAULT 1,
+      "activationCount" INTEGER NOT NULL DEFAULT 0,
+      "machineHash" TEXT,
+      "activatedAt" DATETIME,
+      "lastVerifiedAt" DATETIME,
+      "expiresAt" DATETIME,
+      "disabledAt" DATETIME,
+      "notes" TEXT,
+      "createdAt" DATETIME NOT NULL,
+      "updatedAt" DATETIME NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS "LicenseActivationLog" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "licenseCodeId" TEXT,
+      "codeHash" TEXT NOT NULL,
+      "machineHash" TEXT,
+      "result" TEXT NOT NULL,
+      "reason" TEXT NOT NULL,
+      "clientName" TEXT,
+      "createdAt" DATETIME NOT NULL
+    );
   `);
 
   [
@@ -526,6 +599,9 @@ function ensureSqliteSchema() {
     'ALTER TABLE "User" ADD COLUMN "licenseActivatedAt" DATETIME',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
+    'ALTER TABLE "AiSetting" ADD COLUMN "profileName" TEXT',
+    'ALTER TABLE "AiSetting" ADD COLUMN "models" JSON',
+    'ALTER TABLE "AiSetting" ADD COLUMN "active" INTEGER',
     'ALTER TABLE "PlotState" ADD COLUMN "currentMap" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "shortTermGoal" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "currentEnemy" TEXT NOT NULL DEFAULT \'\'',
@@ -739,6 +815,8 @@ function syncCoreTables(store: unknown) {
   const editReports = asRecordArray(store, "editReports");
   const aiJobs = asRecordArray(store, "aiJobs");
   const creditTransactions = asRecordArray(store, "creditTransactions");
+  const licenseCodes = asRecordArray(store, "licenseCodes");
+  const licenseActivationLogs = asRecordArray(store, "licenseActivationLogs");
   const aiSettings = asEntityRecordArray(store, "aiSettings");
   const projectIds = new Set(projects.map((project) => text(project.id)));
   const storyAnalysisIds = new Set(storyAnalyses.map((analysis) => text(analysis.id)));
@@ -763,6 +841,8 @@ function syncCoreTables(store: unknown) {
     db.prepare('DELETE FROM "Project"').run();
     db.prepare('DELETE FROM "AiSetting"').run();
     db.prepare('DELETE FROM "CreditTransaction"').run();
+    db.prepare('DELETE FROM "LicenseActivationLog"').run();
+    db.prepare('DELETE FROM "LicenseCode"').run();
     db.prepare('DELETE FROM "Session"').run();
     db.prepare('DELETE FROM "User"').run();
 
@@ -1273,20 +1353,23 @@ function syncCoreTables(store: unknown) {
 
     const insertAiSetting = db.prepare(`
         INSERT INTO "AiSetting" (
-          "id", "userId", "providerName", "baseUrl", "apiKey", "model", "timeoutMs", "updatedAt"
+          "id", "userId", "profileName", "providerName", "baseUrl", "apiKey", "model", "models", "active", "timeoutMs", "updatedAt"
         ) VALUES (
-          @id, @userId, @providerName, @baseUrl, @apiKey, @model, @timeoutMs, @updatedAt
+          @id, @userId, @profileName, @providerName, @baseUrl, @apiKey, @model, @models, @active, @timeoutMs, @updatedAt
         )
       `);
 
     aiSettings.forEach((settings, index) => {
       insertAiSetting.run({
-        id: text(settings.userId) || text(settings.id) || `${DEFAULT_STATE_ID}:${index}`,
+        id: text(settings.id) || text(settings.userId) || `${DEFAULT_STATE_ID}:${index}`,
         userId: nullableText(settings.userId),
+        profileName: nullableText(settings.profileName),
         providerName: text(settings.providerName),
         baseUrl: text(settings.baseUrl),
         apiKey: text(settings.apiKey),
         model: text(settings.model),
+        models: jsonText(settings.models),
+        active: settings.active ? 1 : 0,
         timeoutMs: integer(settings.timeoutMs),
         updatedAt: dateText(settings.updatedAt)
       });
@@ -1311,6 +1394,56 @@ function syncCoreTables(store: unknown) {
         relatedJobId: nullableText(transaction.relatedJobId),
         orderId: nullableText(transaction.orderId),
         createdAt: dateText(transaction.createdAt)
+      });
+    });
+
+    const insertLicenseCode = db.prepare(`
+      INSERT INTO "LicenseCode" (
+        "id", "codeHash", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
+      ) VALUES (
+        @id, @codeHash, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
+      )
+    `);
+
+    licenseCodes.forEach((licenseCode) => {
+      insertLicenseCode.run({
+        id: text(licenseCode.id),
+        codeHash: text(licenseCode.codeHash),
+        codePreview: text(licenseCode.codePreview),
+        customerName: nullableText(licenseCode.customerName),
+        customerContact: nullableText(licenseCode.customerContact),
+        status: text(licenseCode.status) || "unused",
+        maxActivations: integer(licenseCode.maxActivations) || 1,
+        activationCount: integer(licenseCode.activationCount),
+        machineHash: nullableText(licenseCode.machineHash),
+        activatedAt: licenseCode.activatedAt ? dateText(licenseCode.activatedAt) : null,
+        lastVerifiedAt: licenseCode.lastVerifiedAt ? dateText(licenseCode.lastVerifiedAt) : null,
+        expiresAt: licenseCode.expiresAt ? dateText(licenseCode.expiresAt) : null,
+        disabledAt: licenseCode.disabledAt ? dateText(licenseCode.disabledAt) : null,
+        notes: nullableText(licenseCode.notes),
+        createdAt: dateText(licenseCode.createdAt),
+        updatedAt: dateText(licenseCode.updatedAt)
+      });
+    });
+
+    const insertLicenseActivationLog = db.prepare(`
+      INSERT INTO "LicenseActivationLog" (
+        "id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt"
+      ) VALUES (
+        @id, @licenseCodeId, @codeHash, @machineHash, @result, @reason, @clientName, @createdAt
+      )
+    `);
+
+    licenseActivationLogs.forEach((log) => {
+      insertLicenseActivationLog.run({
+        id: text(log.id),
+        licenseCodeId: nullableText(log.licenseCodeId),
+        codeHash: text(log.codeHash),
+        machineHash: nullableText(log.machineHash),
+        result: text(log.result),
+        reason: text(log.reason),
+        clientName: nullableText(log.clientName),
+        createdAt: dateText(log.createdAt)
       });
     });
   });
@@ -1784,11 +1917,15 @@ function readCoreStoreFromDb<T>(fallback: T) {
         finishedAt: item.finishedAt ? dateText(item.finishedAt) : undefined
       })),
       aiSettings: aiSettingRows.map((aiSetting) => ({
+        id: maybeString(aiSetting.id),
         userId: maybeString(aiSetting.userId),
+        profileName: maybeString(aiSetting.profileName),
         providerName: text(aiSetting.providerName),
         baseUrl: text(aiSetting.baseUrl),
         apiKey: text(aiSetting.apiKey),
         model: text(aiSetting.model),
+        models: parseJsonArray(aiSetting.models),
+        active: Boolean(aiSetting.active),
         timeoutMs: integer(aiSetting.timeoutMs),
         updatedAt: dateText(aiSetting.updatedAt)
       })),
@@ -1831,6 +1968,34 @@ function readCoreStoreFromDb<T>(fallback: T) {
         reason: text(item.reason),
         relatedJobId: maybeString(item.relatedJobId),
         orderId: maybeString(item.orderId),
+        createdAt: dateText(item.createdAt)
+      })),
+      licenseCodes: rows(db, "LicenseCode").map((item) => ({
+        id: text(item.id),
+        codeHash: text(item.codeHash),
+        codePreview: text(item.codePreview),
+        customerName: maybeString(item.customerName),
+        customerContact: maybeString(item.customerContact),
+        status: text(item.status),
+        maxActivations: integer(item.maxActivations) || 1,
+        activationCount: integer(item.activationCount),
+        machineHash: maybeString(item.machineHash),
+        activatedAt: item.activatedAt ? dateText(item.activatedAt) : undefined,
+        lastVerifiedAt: item.lastVerifiedAt ? dateText(item.lastVerifiedAt) : undefined,
+        expiresAt: item.expiresAt ? dateText(item.expiresAt) : undefined,
+        disabledAt: item.disabledAt ? dateText(item.disabledAt) : undefined,
+        notes: maybeString(item.notes),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      })),
+      licenseActivationLogs: rows(db, "LicenseActivationLog").map((item) => ({
+        id: text(item.id),
+        licenseCodeId: maybeString(item.licenseCodeId),
+        codeHash: text(item.codeHash),
+        machineHash: maybeString(item.machineHash),
+        result: text(item.result),
+        reason: text(item.reason),
+        clientName: maybeString(item.clientName),
         createdAt: dateText(item.createdAt)
       }))
     } as T;

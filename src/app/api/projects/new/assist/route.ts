@@ -30,7 +30,8 @@ export async function POST(request: Request) {
       coreSellingPoint: String(body.coreSellingPoint ?? ""),
       goldenFinger: String(body.goldenFinger ?? ""),
       openingHook: String(body.openingHook ?? ""),
-      description: String(body.description ?? "")
+      description: String(body.description ?? ""),
+      titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie"
     });
 
     return Response.json({ result });

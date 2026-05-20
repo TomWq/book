@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
-import { ApiForm } from "@/components/api-form";
+import { ApiButton, ApiForm } from "@/components/api-form";
+import { LicenseCodeGenerator } from "@/components/license-code-generator";
 import { Panel } from "@/components/panel";
 import { getBillingMode } from "@/lib/billing-mode";
-import { getAdminDashboard } from "@/lib/projects";
+import { getAdminDashboard, getAdminLicenseCenter } from "@/lib/projects";
 import { getPersistenceStatus } from "@/lib/store-persistence";
 
 export const dynamic = "force-dynamic";
@@ -72,12 +73,36 @@ function previewTaskCredits(item: {
   return Math.ceil((item.baseCredits + item.unitCredits) * item.multiplier);
 }
 
+function licenseStatusName(status: string) {
+  switch (status) {
+    case "unused":
+      return "未使用";
+    case "active":
+      return "已激活";
+    case "disabled":
+      return "已禁用";
+    case "expired":
+      return "已过期";
+    default:
+      return "未知";
+  }
+}
+
+function licenseStatusClass(status: string) {
+  return status === "active" ? "success" : status === "unused" ? "warning" : "danger";
+}
+
 export default async function AdminPage() {
   let dashboard;
+  let licenseCenter;
   let storage: Awaited<ReturnType<typeof getPersistenceStatus>>;
 
   try {
-    [dashboard, storage] = await Promise.all([getAdminDashboard(), getPersistenceStatus()]);
+    [dashboard, licenseCenter, storage] = await Promise.all([
+      getAdminDashboard(),
+      getAdminLicenseCenter(),
+      getPersistenceStatus()
+    ]);
   } catch {
     notFound();
   }
@@ -148,6 +173,89 @@ export default async function AdminPage() {
               ))}
             </div>
           ) : null}
+        </div>
+      </Panel>
+
+      <Panel title="授权码管理" description="生成一次性授权码，查看激活状态，并处理客户换设备或误激活。">
+        <div className="usage-summary">
+          <div className="stat-card">
+            <strong>{formatNumber(licenseCenter.total)}</strong>
+            <span>授权码总数</span>
+          </div>
+          <div className="stat-card">
+            <strong>{formatNumber(licenseCenter.unused)}</strong>
+            <span>未使用</span>
+          </div>
+          <div className="stat-card">
+            <strong>{formatNumber(licenseCenter.active)}</strong>
+            <span>已激活</span>
+          </div>
+          <div className="stat-card">
+            <strong>{formatNumber(licenseCenter.disabled + licenseCenter.expired)}</strong>
+            <span>不可用</span>
+          </div>
+        </div>
+
+        <LicenseCodeGenerator />
+
+        <div className="list license-list">
+          {licenseCenter.licenses.length === 0 ? (
+            <div className="empty-state">
+              <strong>暂无授权码</strong>
+              <span>生成后会显示在这里；完整授权码只会在生成当次展示。</span>
+            </div>
+          ) : (
+            licenseCenter.licenses.map((license) => (
+              <div key={license.id} className="list-item">
+                <div className="row">
+                  <div>
+                    <strong>{license.customerName || "未命名客户"}</strong>
+                    <div className="muted">{license.customerContact || "未填写联系方式"}</div>
+                  </div>
+                  <span className={`pill ${licenseStatusClass(license.status)}`}>
+                    {licenseStatusName(license.status)}
+                  </span>
+                </div>
+                <div className="meta-row">
+                  <span className="chip">授权码 {license.codePreview}</span>
+                  <span className="chip">激活 {license.activationCount}/{license.maxActivations}</span>
+                  {license.machineHash ? <span className="chip">设备 {license.machineHash.slice(0, 8)}...</span> : null}
+                  {license.activatedAt ? <span className="chip">首次激活 {formatTime(license.activatedAt)}</span> : null}
+                  {license.lastVerifiedAt ? <span className="chip">最近验证 {formatTime(license.lastVerifiedAt)}</span> : null}
+                  {license.expiresAt ? <span className="chip">到期 {formatTime(license.expiresAt)}</span> : null}
+                </div>
+                {license.notes ? <div className="muted">备注：{license.notes}</div> : null}
+                <div className="row admin-license-actions">
+                  {license.status === "disabled" ? (
+                    <ApiButton
+                      endpoint="/api/admin/licenses"
+                      method="PATCH"
+                      body={{ licenseId: license.id, action: "enable" }}
+                      label="恢复授权码"
+                      className="button secondary"
+                    />
+                  ) : (
+                    <ApiButton
+                      endpoint="/api/admin/licenses"
+                      method="PATCH"
+                      body={{ licenseId: license.id, action: "disable" }}
+                      label="禁用授权码"
+                      className="button danger"
+                      confirmMessage="确定禁用这个授权码吗？"
+                    />
+                  )}
+                  <ApiButton
+                    endpoint="/api/admin/licenses"
+                    method="PATCH"
+                    body={{ licenseId: license.id, action: "reset" }}
+                    label="重置设备绑定"
+                    className="button secondary"
+                    confirmMessage="确定重置这个授权码的设备绑定吗？客户需要重新激活。"
+                  />
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </Panel>
 
@@ -282,8 +390,8 @@ export default async function AdminPage() {
                     <div className="field">
                       <div className="field-label">模型档位</div>
                       <select name="model" defaultValue={user.aiModel}>
-                        <option value="deepseek-v4-flash">Flash：成本低，适合拆书和常规生成</option>
-                        <option value="deepseek-v4-pro">Pro：质量更稳，适合重点正文</option>
+                        <option value="platform-fast">快速档：成本低，适合拆书和常规生成</option>
+                        <option value="platform-quality">质量档：质量更稳，适合重点正文</option>
                       </select>
                     </div>
                     <div className="field">

@@ -3,6 +3,23 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+const MACHINE_ID_KEY = "nw_license_machine_id";
+
+function getMachineId() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const existing = window.localStorage.getItem(MACHINE_ID_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const id = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem(MACHINE_ID_KEY, id);
+  return id;
+}
+
 export function LicenseActivationForm({
   nextPath,
   initialError
@@ -23,7 +40,9 @@ export function LicenseActivationForm({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        activationCode: String(formData.get("activationCode") ?? "")
+        activationCode: String(formData.get("activationCode") ?? ""),
+        machineHash: getMachineId(),
+        clientName: window.navigator.userAgent.slice(0, 160)
       })
     });
 
@@ -45,21 +64,21 @@ export function LicenseActivationForm({
 
       <form className="auth-form" onSubmit={handleSubmit} aria-busy={isPending}>
         <label className="auth-field">
-          <span>激活码</span>
+          <span>授权码</span>
           <input
             name="activationCode"
             autoComplete="off"
-            placeholder="输入你收到的一次性授权码"
+            placeholder="请输入授权码"
             required
           />
         </label>
         <button className="button auth-submit" type="submit" disabled={isPending}>
-          {isPending ? "激活中..." : "激活并进入工作台"}
+          {isPending ? "验证中..." : "验证并进入"}
         </button>
       </form>
 
       <div className="auth-switch">
-        <span>激活码就是本机客户身份。</span>
+        <span>授权码由服务方提供，请妥善保存。</span>
       </div>
     </>
   );

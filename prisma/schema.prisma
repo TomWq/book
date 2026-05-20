@@ -371,10 +371,13 @@ model AiJob {
 model AiSetting {
   id          String   @id @default("default")
   userId      String?
+  profileName String?
   providerName String
   baseUrl      String
   apiKey       String
   model        String
+  models       Json?
+  active       Boolean?
   timeoutMs    Int
   updatedAt    DateTime @updatedAt
 }
@@ -426,4 +429,39 @@ model CreditTransaction {
 
   @@index([userId])
   @@index([relatedJobId])
+}
+
+model LicenseCode {
+  id              String    @id
+  codeHash        String    @unique
+  codePreview     String
+  customerName    String?
+  customerContact String?
+  status          String    @default("unused")
+  maxActivations  Int       @default(1)
+  activationCount Int       @default(0)
+  machineHash     String?
+  activatedAt     DateTime?
+  lastVerifiedAt  DateTime?
+  expiresAt       DateTime?
+  disabledAt      DateTime?
+  notes           String?
+  createdAt       DateTime
+  updatedAt       DateTime
+  logs            LicenseActivationLog[]
+}
+
+model LicenseActivationLog {
+  id            String   @id
+  licenseCodeId String?
+  codeHash      String
+  machineHash   String?
+  result        String
+  reason        String
+  clientName    String?
+  createdAt     DateTime
+  licenseCode   LicenseCode? @relation(fields: [licenseCodeId], references: [id], onDelete: SetNull)
+
+  @@index([licenseCodeId])
+  @@index([codeHash])
 }

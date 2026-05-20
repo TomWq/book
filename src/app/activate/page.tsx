@@ -14,15 +14,19 @@ export default async function ActivatePage({
   }
 
   const params = await searchParams;
-  const status = await getSubscriptionActivationStatus();
   const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
+  const status = await getSubscriptionActivationStatus();
 
   if (status.currentUser) {
     redirect(nextPath);
   }
 
+  if (status.activated) {
+    redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
+  }
+
   return (
-    <section className="auth-page">
+    <section className="auth-page license-auth-page">
       <div className="auth-immersive">
         <header className="auth-immersive-nav">
           <Link href="/activate" className="auth-immersive-brand">
@@ -35,30 +39,22 @@ export default async function ActivatePage({
         </header>
 
         <div className="auth-slogan">
-          <div className="auth-calligraphy">授权<br />激活<br />进入工作台</div>
+          <div className="auth-calligraphy">好故事<br />不止一章<br />更要稳稳写下去</div>
           <div className="auth-slogan-side">
-            <strong>License first</strong>
-            <span>local workspace</span>
-            <span>bring your key</span>
+            <strong>Good stories</strong>
+            <span>structure first</span>
+            <span>write longer</span>
           </div>
         </div>
 
-        <div className="auth-card">
+        <div className="auth-card license-card">
           <div className="auth-card-head">
             <div>
-              <h2>输入激活码</h2>
-              <p>激活后会直接进入本地工作台，不需要注册或登录。</p>
+              <h2>授权码激活</h2>
+              <p>输入交付给你的授权码，验证后进入写作工作台。</p>
             </div>
-            <div className="chip">本机授权</div>
+            <div className="chip">授权码</div>
           </div>
-
-          {status.activated ? (
-            <div className="auth-current-account">
-              <span>已激活客户</span>
-              <strong>{status.customerId || "本地客户"}</strong>
-              <div>当前 session 已过期，请重新输入激活码进入。</div>
-            </div>
-          ) : null}
 
           <LicenseActivationForm nextPath={nextPath} initialError={params.error} />
         </div>

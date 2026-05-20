@@ -3,19 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-
-const genreOptions = [
-  "都市逆袭",
-  "玄幻升级",
-  "修仙",
-  "规则怪谈",
-  "悬疑脑洞",
-  "末世",
-  "女频重生",
-  "历史权谋",
-  "直播",
-  "其他"
-];
+import { novelTaxonomy, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
 function asText(value: FormDataEntryValue | null) {
   return String(value ?? "").trim();
@@ -25,6 +13,13 @@ export function AnalysisProjectForm() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [targetReader, setTargetReader] = useState<TargetReader>("男频");
+  const [genre, setGenre] = useState(novelTaxonomy.男频.mainCategories[0].name);
+
+  function updateTargetReader(nextReader: TargetReader) {
+    setTargetReader(nextReader);
+    setGenre(novelTaxonomy[nextReader].mainCategories[0].name);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,7 +41,7 @@ export function AnalysisProjectForm() {
         body: JSON.stringify({
           name: asText(formData.get("name")),
           type: "analysis",
-          genre: asText(formData.get("genre")),
+          genre,
           description
         })
       });
@@ -83,15 +78,38 @@ export function AnalysisProjectForm() {
           <input name="sourceTitle" placeholder="例如：书名、平台、题材来源" />
         </div>
         <div className="field">
-          <div className="field-label">题材方向</div>
-          <select name="genre" defaultValue="都市逆袭">
-            {genreOptions.map((genre) => (
-              <option key={genre} value={genre}>
-                {genre}
-              </option>
+          <div className="field-label">目标读者</div>
+          <div className="segmented-row">
+            {readerOptions.map((reader) => (
+              <label key={reader}>
+                <input
+                  type="radio"
+                  name="targetReader"
+                  value={reader}
+                  checked={targetReader === reader}
+                  onChange={() => updateTargetReader(reader)}
+                />
+                <span>{reader}</span>
+              </label>
             ))}
-          </select>
+          </div>
         </div>
+      </div>
+
+      <div className="field">
+        <div className="field-label">题材方向</div>
+        <select name="genre" value={genre} onChange={(event) => setGenre(event.target.value)}>
+          {novelTaxonomy[targetReader].mainCategories.map((category) => (
+            <option key={category.name} value={category.name}>
+              {category.name} - {category.description}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="analysis-genre-summary">
+        <strong>{genre}</strong>
+        <span>{novelTaxonomy[targetReader].mainCategories.find((category) => category.name === genre)?.description}</span>
       </div>
 
       <div className="field">

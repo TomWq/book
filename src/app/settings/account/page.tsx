@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { formatAiJobType, getAccountOverview } from "@/lib/projects";
 
@@ -228,7 +229,12 @@ export default async function AccountSettingsPage({
   ];
   const billing = overview.billing;
   const isSubscriptionMode = overview.billingMode === "subscription";
-  const activeModel = overview.aiSettings.model || "deepseek-v4-flash";
+
+  if (isSubscriptionMode) {
+    redirect("/settings/ai");
+  }
+
+  const activeModel = overview.aiSettings.model || "";
   const totalTransactionPages = Math.max(1, Math.ceil(billing.transactionTotalCount / billing.transactionLimit));
   const currentTransactionPage = Math.min(requestedPage, totalTransactionPages);
   const creditEntries = buildCreditEntries(billing.recentTransactions);

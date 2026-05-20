@@ -1,21 +1,21 @@
 import { redirect } from "next/navigation";
 import { AiConnectionTester } from "@/components/ai-connection-tester";
+import { AiProfileManager } from "@/components/ai-profile-manager";
 import { ApiForm } from "@/components/api-form";
 import { Panel } from "@/components/panel";
 import { getCurrentUser, getPublicAiSettings } from "@/lib/projects";
 
-const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-const DEFAULT_MODEL = "deepseek-v4-flash";
+const DEFAULT_MODEL = "";
 const AI_MODES = [
   {
-    value: "deepseek-v4-flash",
+    value: "platform-fast",
     label: "省灵石模式",
     badge: "推荐日常使用",
     description: "适合拆书分析、任务卡、普通审稿和大多数测试，速度更快，灵石消耗更省。",
     examples: ["拆书分析", "生成任务卡", "日常审稿"]
   },
   {
-    value: "deepseek-v4-pro",
+    value: "platform-quality",
     label: "高质量模式",
     badge: "适合关键正文",
     description: "适合正式正文、关键章节、复杂设定承接和二稿精修，质量更稳，灵石消耗更高。",
@@ -48,51 +48,18 @@ export default async function AiSettingsPage() {
               <div className="pill success">自带 AI Key</div>
               <h1>配置你自己的 AI 服务</h1>
               <p>
-                当前是一次性授权/本地部署模式，不走灵石扣费。这里保存的是当前账号自己的 AI 地址、Key 和模型名。
+               你可以保存多组 API 配置，并随时切换当前使用的模型。
               </p>
             </div>
             <div className="hero-actions">
-              <span className="chip">{settings.hasApiKey ? `Key ${settings.apiKeyPreview}` : "未填写 Key"}</span>
+              <span className="chip">当前模型 {settings.model || "未配置"}</span>
+              <span className="chip">配置 {settings.profiles.length}</span>
             </div>
           </div>
         </section>
 
-        <Panel title="AI 接口配置" description="保存后，新建的分析、创作、审稿和二稿任务会使用这里的配置。">
-          <ApiForm className="forms" endpoint="/api/settings/ai" method="PUT" booleanFields={["clearApiKey"]}>
-            <div className="split-panels">
-              <div className="field">
-                <div className="field-label">服务商名称</div>
-                <input name="providerName" defaultValue={settings.providerName || "Custom"} placeholder="例如：DeepSeek / OpenAI / OpenRouter" />
-              </div>
-              <div className="field">
-                <div className="field-label">模型名称</div>
-                <input name="model" defaultValue={settings.model} placeholder="例如：deepseek-chat / gpt-4.1-mini" />
-              </div>
-            </div>
-            <div className="field">
-              <div className="field-label">请求地址</div>
-              <input name="baseUrl" defaultValue={settings.baseUrl} placeholder="例如：https://api.deepseek.com" />
-            </div>
-            <div className="split-panels">
-              <div className="field">
-                <div className="field-label">API Key</div>
-                <input name="apiKey" type="password" placeholder={settings.hasApiKey ? `已保存 ${settings.apiKeyPreview}，留空则不修改` : "填写你的 API Key"} />
-              </div>
-              <div className="field">
-                <div className="field-label">超时时间 ms</div>
-                <input name="timeoutMs" type="number" min="1000" step="1000" defaultValue={settings.timeoutMs || 60000} />
-              </div>
-            </div>
-            <label className="checkbox-row">
-              <input name="clearApiKey" type="checkbox" value="true" />
-              <span>清空已保存的 API Key</span>
-            </label>
-            <div className="hero-actions">
-              <button className="button primary" type="submit">
-                保存 AI 配置
-              </button>
-            </div>
-          </ApiForm>
+        <Panel title="AI 配置档案" description="填写兼容 OpenAI 的请求地址和 API Key，读取模型列表后选择当前模型。">
+          <AiProfileManager profiles={settings.profiles} />
         </Panel>
 
         <Panel title="连接测试" description="确认配置能正常请求模型。">
@@ -125,8 +92,8 @@ export default async function AiSettingsPage() {
           endpoint="/api/settings/ai"
           method="PUT"
           body={{
-            providerName: "DeepSeek",
-            baseUrl: DEEPSEEK_BASE_URL,
+            providerName: "Platform",
+            baseUrl: "",
             timeoutMs: settings.timeoutMs || 60000
           }}
         >

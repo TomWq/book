@@ -17,10 +17,8 @@ export const AI_MODEL_PRESET_GROUPS: AiModelPresetGroup[] = [
     ]
   },
   {
-    label: "国内常用模型",
+    label: "通用兼容模型",
     options: [
-      { value: "deepseek-chat", label: "deepseek-chat" },
-      { value: "deepseek-reasoner", label: "deepseek-reasoner" },
       { value: "qwen-plus", label: "qwen-plus" },
       { value: "qwen-max", label: "qwen-max" },
       { value: "moonshot-v1-8k", label: "moonshot-v1-8k" },
