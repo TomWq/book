@@ -2,16 +2,18 @@ import { redirect } from "next/navigation";
 import { AiConnectionTester } from "@/components/ai-connection-tester";
 import { AiProfileManager } from "@/components/ai-profile-manager";
 import { Panel } from "@/components/panel";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getCurrentUser, getPublicAiSettings } from "@/lib/projects";
 
 export default async function AiSettingsPage() {
   const user = await getCurrentUser();
+  const desktopRuntime = isDesktopRuntime();
 
   if (!user) {
     redirect("/login?next=/settings/ai");
   }
 
-  if (user.role === "admin") {
+  if (user.role === "admin" && !desktopRuntime) {
     redirect("/admin");
   }
 

@@ -434,6 +434,7 @@ model CreditTransaction {
 model LicenseCode {
   id              String    @id
   codeHash        String    @unique
+  plainCode       String?
   codePreview     String
   customerName    String?
   customerContact String?

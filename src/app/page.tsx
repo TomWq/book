@@ -13,12 +13,13 @@ import { Panel } from "@/components/panel";
 
 export default async function HomePage() {
   const user = await getCurrentUser();
+  const desktopRuntime = isDesktopRuntime();
 
-  if (user?.role === "admin") {
+  if (user?.role === "admin" && !desktopRuntime) {
     redirect("/admin");
   }
 
-  if (!user && isDesktopRuntime()) {
+  if (!user && desktopRuntime) {
     redirect("/activate");
   }
 

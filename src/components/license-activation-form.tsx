@@ -29,40 +29,54 @@ export function LicenseActivationForm({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(initialError ?? "");
+  const isBusy = isSubmitting || isPending;
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
-
-    const formData = new FormData(event.currentTarget);
-    const response = await fetch("/api/license/activate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        activationCode: String(formData.get("activationCode") ?? ""),
-        machineHash: getMachineId(),
-        clientName: window.navigator.userAgent.slice(0, 160)
-      })
-    });
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => null);
-      setError(body?.error ? String(body.error) : "激活失败，请检查激活码");
+    if (isBusy) {
       return;
     }
 
-    startTransition(() => {
-      router.push(nextPath);
-      router.refresh();
-    });
+    setError("");
+    setIsSubmitting(true);
+
+    const formData = new FormData(event.currentTarget);
+
+    try {
+      const response = await fetch("/api/license/activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          activationCode: String(formData.get("activationCode") ?? ""),
+          machineHash: getMachineId(),
+          clientName: window.navigator.userAgent.slice(0, 160)
+        })
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setError(body?.error ? String(body.error) : "激活失败，请检查激活码");
+        return;
+      }
+
+      startTransition(() => {
+        router.push(nextPath);
+        router.refresh();
+      });
+    } catch {
+      setError("连接授权中心失败，请检查网络或授权中心地址");
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
     <>
       {error ? <div className="pill danger auth-alert">{error}</div> : null}
 
-      <form className="auth-form" onSubmit={handleSubmit} aria-busy={isPending}>
+      <form className="auth-form" onSubmit={handleSubmit} aria-busy={isBusy}>
         <label className="auth-field">
           <span>授权码</span>
           <input
@@ -70,11 +84,13 @@ export function LicenseActivationForm({
             autoComplete="off"
             placeholder="请输入授权码"
             required
+            disabled={isBusy}
           />
         </label>
-        <button className="button auth-submit" type="submit" disabled={isPending}>
-          {isPending ? "验证中..." : "验证并进入"}
+        <button className="button auth-submit" type="submit" disabled={isBusy}>
+          {isSubmitting ? "正在连接授权中心..." : isPending ? "正在进入..." : "验证并进入"}
         </button>
+        {isSubmitting ? <div className="pill form-status">正在验证授权码，请不要关闭页面。</div> : null}
       </form>
 
       <div className="auth-switch">

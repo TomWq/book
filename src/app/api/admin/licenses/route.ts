@@ -30,7 +30,7 @@ export async function PATCH(request: Request) {
   try {
     const result = await updateAdminLicenseCode({
       licenseId: String(body.licenseId ?? ""),
-      action: String(body.action ?? "") as "disable" | "reset" | "enable"
+      action: String(body.action ?? "") as "disable" | "reset" | "enable" | "delete"
     });
 
     return Response.json(result);

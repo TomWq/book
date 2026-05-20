@@ -144,6 +144,7 @@ async function ensurePostgresSchema(sql: PostgresClient) {
     CREATE TABLE IF NOT EXISTS "LicenseCode" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "codeHash" TEXT NOT NULL UNIQUE,
+      "plainCode" TEXT,
       "codePreview" TEXT NOT NULL,
       "customerName" TEXT,
       "customerContact" TEXT,
@@ -160,6 +161,8 @@ async function ensurePostgresSchema(sql: PostgresClient) {
       "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `;
+
+  await sql`ALTER TABLE "LicenseCode" ADD COLUMN IF NOT EXISTS "plainCode" TEXT`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS "LicenseActivationLog" (
@@ -560,6 +563,7 @@ function ensureSqliteSchema() {
     CREATE TABLE IF NOT EXISTS "LicenseCode" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "codeHash" TEXT NOT NULL UNIQUE,
+      "plainCode" TEXT,
       "codePreview" TEXT NOT NULL,
       "customerName" TEXT,
       "customerContact" TEXT,
@@ -597,6 +601,7 @@ function ensureSqliteSchema() {
     'ALTER TABLE "User" ADD COLUMN "licenseCustomerId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseCodeHash" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseActivatedAt" DATETIME',
+    'ALTER TABLE "LicenseCode" ADD COLUMN "plainCode" TEXT',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "profileName" TEXT',
@@ -1399,9 +1404,9 @@ function syncCoreTables(store: unknown) {
 
     const insertLicenseCode = db.prepare(`
       INSERT INTO "LicenseCode" (
-        "id", "codeHash", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
+        "id", "codeHash", "plainCode", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @codeHash, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
+        @id, @codeHash, @plainCode, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
       )
     `);
 
@@ -1409,6 +1414,7 @@ function syncCoreTables(store: unknown) {
       insertLicenseCode.run({
         id: text(licenseCode.id),
         codeHash: text(licenseCode.codeHash),
+        plainCode: nullableText(licenseCode.plainCode),
         codePreview: text(licenseCode.codePreview),
         customerName: nullableText(licenseCode.customerName),
         customerContact: nullableText(licenseCode.customerContact),
@@ -1973,6 +1979,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
       licenseCodes: rows(db, "LicenseCode").map((item) => ({
         id: text(item.id),
         codeHash: text(item.codeHash),
+        plainCode: maybeString(item.plainCode),
         codePreview: text(item.codePreview),
         customerName: maybeString(item.customerName),
         customerContact: maybeString(item.customerContact),

@@ -427,6 +427,7 @@ export type StoredCreditTransaction = {
 export type StoredLicenseCode = {
   id: string;
   codeHash: string;
+  plainCode?: string;
   codePreview: string;
   customerName?: string;
   customerContact?: string;
@@ -580,6 +581,7 @@ export type AdminDashboardSummary = {
 
 export type AdminLicenseSummary = {
   id: string;
+  plainCode?: string;
   codePreview: string;
   customerName: string;
   customerContact: string;
@@ -830,22 +832,35 @@ async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
     return null;
   }
 
-  const response = await fetch(`${serverUrl}/api/license/activate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      activationCode: input.activationCode,
-      machineHash: input.machineHash,
-      clientName: input.clientName,
-      centerOnly: true
-    }),
-    cache: "no-store"
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.LICENSE_SERVER_TIMEOUT_MS ?? 8000));
+  let response: Response;
+
+  try {
+    response = await fetch(`${serverUrl}/api/license/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        activationCode: input.activationCode,
+        machineHash: input.machineHash,
+        clientName: input.clientName,
+        centerOnly: true
+      }),
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } catch (error) {
+    const isAbort = error instanceof Error && error.name === "AbortError";
+    throw new Error(isAbort ? `连接授权中心超时：${serverUrl}` : `无法连接授权中心：${serverUrl}`);
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const body = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(body?.error ? String(body.error) : "授权中心验证失败");
+    const message = body?.error ? String(body.error) : "授权中心验证失败";
+    throw new Error(`授权中心 ${serverUrl} 返回：${message}`);
   }
 
   return body?.license as LicenseActivationResult;
@@ -2743,6 +2758,7 @@ function buildAdminLicenseCenter(store: AppStore): AdminLicenseCenterSummary {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((license) => ({
       id: license.id,
+      plainCode: license.plainCode,
       codePreview: license.codePreview,
       customerName: license.customerName ?? "",
       customerContact: license.customerContact ?? "",
@@ -2783,6 +2799,7 @@ function licenseFromDb(row: Record<string, unknown>): StoredLicenseCode {
   return {
     id: String(row.id ?? ""),
     codeHash: String(row.codeHash ?? ""),
+    plainCode: row.plainCode ? String(row.plainCode) : undefined,
     codePreview: String(row.codePreview ?? ""),
     customerName: row.customerName ? String(row.customerName) : undefined,
     customerContact: row.customerContact ? String(row.customerContact) : undefined,
@@ -2835,6 +2852,7 @@ async function buildAdminLicenseCenterFromPostgres(sql: LicenseSqlClient): Promi
     recentLogs: logs.slice(0, 20),
     licenses: licenses.map((license) => ({
       id: license.id,
+      plainCode: license.plainCode,
       codePreview: license.codePreview,
       customerName: license.customerName ?? "",
       customerContact: license.customerContact ?? "",
@@ -2917,6 +2935,7 @@ export async function generateAdminLicenseCodes(input: {
     const license: StoredLicenseCode = {
       id: randomUUID(),
       codeHash,
+      plainCode: code,
       codePreview: previewActivationCode(code),
       customerName: normalizeLicenseText(input.customerName),
       customerContact: normalizeLicenseText(input.customerContact),
@@ -2934,9 +2953,9 @@ export async function generateAdminLicenseCodes(input: {
     if (sql) {
       await sql`
         INSERT INTO "LicenseCode" (
-          "id", "codeHash", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "expiresAt", "notes", "createdAt", "updatedAt"
+          "id", "codeHash", "plainCode", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "expiresAt", "notes", "createdAt", "updatedAt"
         ) VALUES (
-          ${license.id}, ${license.codeHash}, ${license.codePreview}, ${license.customerName || null}, ${license.customerContact || null}, ${license.status}, ${license.maxActivations}, ${license.activationCount}, ${license.expiresAt ? new Date(license.expiresAt) : null}, ${license.notes || null}, ${new Date(license.createdAt)}, ${new Date(license.updatedAt)}
+          ${license.id}, ${license.codeHash}, ${license.plainCode || null}, ${license.codePreview}, ${license.customerName || null}, ${license.customerContact || null}, ${license.status}, ${license.maxActivations}, ${license.activationCount}, ${license.expiresAt ? new Date(license.expiresAt) : null}, ${license.notes || null}, ${new Date(license.createdAt)}, ${new Date(license.updatedAt)}
         )
       `;
     }
@@ -2948,7 +2967,7 @@ export async function generateAdminLicenseCodes(input: {
 
 export async function updateAdminLicenseCode(input: {
   licenseId: string;
-  action: "disable" | "reset" | "enable";
+  action: "disable" | "reset" | "enable" | "delete";
 }) {
   const store = await readStore();
   await requireAdminUser(store);
@@ -2956,6 +2975,12 @@ export async function updateAdminLicenseCode(input: {
 
   if (sql) {
     const timestamp = new Date();
+    if (input.action === "delete") {
+      await sql`DELETE FROM "LicenseActivationLog" WHERE "licenseCodeId" = ${input.licenseId}`;
+      await sql`DELETE FROM "LicenseCode" WHERE "id" = ${input.licenseId}`;
+      return buildAdminLicenseCenterFromPostgres(sql);
+    }
+
     if (input.action === "disable") {
       await sql`
         UPDATE "LicenseCode"
@@ -2994,6 +3019,13 @@ export async function updateAdminLicenseCode(input: {
   }
 
   const timestamp = now();
+
+  if (input.action === "delete") {
+    store.licenseCodes = store.licenseCodes.filter((item) => item.id !== input.licenseId);
+    store.licenseActivationLogs = store.licenseActivationLogs.filter((item) => item.licenseCodeId !== input.licenseId);
+    await writeStore(store);
+    return buildAdminLicenseCenter(store);
+  }
 
   if (input.action === "disable") {
     license.status = "disabled";

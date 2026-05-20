@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { DraftExportActions } from "@/components/draft-export-actions";
 
 type StreamState =
   | { status: "idle"; content: string; error?: string }
@@ -11,10 +12,16 @@ type StreamState =
 
 export function StreamDraftButton({
   projectId,
-  taskCardId
+  taskCardId,
+  projectName,
+  chapterNumber,
+  title
 }: {
   projectId: string;
   taskCardId: string;
+  projectName?: string;
+  chapterNumber?: number;
+  title?: string;
 }) {
   const router = useRouter();
   const [state, setState] = useState<StreamState>({ status: "idle", content: "" });
@@ -187,6 +194,13 @@ export function StreamDraftButton({
             </div>
             <div className="hero-actions">
               <span className="field-hint">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
+              <DraftExportActions
+                content={state.content}
+                projectName={projectName}
+                chapterNumber={chapterNumber}
+                title={title}
+                compact
+              />
               <button
                 className="mini-action-button"
                 type="button"
@@ -211,6 +225,13 @@ export function StreamDraftButton({
               </div>
               <div className="hero-actions">
                 <span className="chip">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
+                <DraftExportActions
+                  content={state.content}
+                  projectName={projectName}
+                  chapterNumber={chapterNumber}
+                  title={title}
+                  compact
+                />
                 <button className="button" type="button" onClick={() => setIsPreviewOpen(false)}>
                   关闭预览
                 </button>

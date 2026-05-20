@@ -51,30 +51,14 @@ export function LicenseCodeGenerator() {
   return (
     <div className="list">
       <form className="forms" onSubmit={handleSubmit} aria-busy={pending}>
-        <div className="admin-control-grid">
+        <div className="admin-control-grid compact-admin-control-grid">
           <div className="field">
             <div className="field-label">生成数量</div>
             <input name="quantity" type="number" min="1" max="50" step="1" defaultValue="1" />
           </div>
           <div className="field">
-            <div className="field-label">客户名称</div>
-            <input name="customerName" placeholder="例如：某某工作室" />
-          </div>
-          <div className="field">
-            <div className="field-label">联系方式</div>
-            <input name="customerContact" placeholder="微信 / 邮箱 / 手机" />
-          </div>
-          <div className="field">
             <div className="field-label">可激活设备数</div>
             <input name="maxActivations" type="number" min="1" max="10" step="1" defaultValue="1" />
-          </div>
-          <div className="field">
-            <div className="field-label">到期时间</div>
-            <input name="expiresAt" type="date" />
-          </div>
-          <div className="field">
-            <div className="field-label">备注</div>
-            <input name="notes" placeholder="例如：终身版 / 内测客户" />
           </div>
         </div>
         <button className="button" type="submit" disabled={pending}>
@@ -87,7 +71,7 @@ export function LicenseCodeGenerator() {
         <div className="list-item license-generated-box">
           <div className="row">
             <strong>本次生成的授权码</strong>
-            <span className="pill warning">只显示这一次</span>
+            <span className="pill success">列表可继续复制</span>
           </div>
           <textarea readOnly value={codes.join("\n")} rows={Math.min(8, codes.length + 1)} />
         </div>

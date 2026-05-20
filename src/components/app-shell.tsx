@@ -14,11 +14,12 @@ const navItems: SideNavItem[] = [
 export async function AppShell({ children }: { children: ReactNode }) {
   const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
-  const aiSetup = user && !isAdmin
+  const isAdminMode = isAdmin && !desktopRuntime;
+  const aiSetup = user && !isAdminMode
     ? await getCurrentUserAiSetupStatus()
     : { configured: true };
-  const visibleNavItems = isAdmin ? [{ href: "/admin", label: "管理后台" }] : navItems;
-  const brandHref = isAdmin ? "/admin" : "/";
+  const visibleNavItems = isAdminMode ? [{ href: "/admin", label: "管理后台" }] : navItems;
+  const brandHref = isAdminMode ? "/admin" : "/";
 
   return (
     <div className={`app-shell ${user ? "app-shell-auth" : "app-shell-public"}`}>
@@ -29,14 +30,14 @@ export async function AppShell({ children }: { children: ReactNode }) {
             <div>
               <div className="brand-title">AI 网文写作助手</div>
               <div className="brand-subtitle">
-                {isAdmin ? "授权中心 · 客户与版本管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
+                {isAdminMode ? "授权中心 · 客户与版本管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
               </div>
             </div>
           </Link>
 
           <SideNav items={visibleNavItems} />
 
-          {!isAdmin ? (
+          {!isAdminMode ? (
             <div className="sidebar-actions">
               <Link href="/projects/new" className="button primary">
                 新建作品
@@ -84,20 +85,20 @@ export async function AppShell({ children }: { children: ReactNode }) {
         {user ? (
           <header className="workspace-topbar">
             <div>
-              <strong>{isAdmin ? "管理后台" : "个人工作台"}</strong>
+              <strong>{isAdminMode ? "管理后台" : "个人工作台"}</strong>
               <span>
-                {isAdmin ? "查看授权码、客户激活状态和 AI 用量。" : "按项目推进拆书、模板迁移和长篇创作。"}
+                {isAdminMode ? "查看授权码、客户激活状态和 AI 用量。" : "按项目推进拆书、模板迁移和长篇创作。"}
               </span>
             </div>
             <div className="topbar-meta">
               <span className="row" style={{ alignItems: "center" }}>
-                <span className="chip">{user.name}</span>
-                {!isAdmin ? (
+                {!desktopRuntime ? <span className="chip">{user.name}</span> : null}
+                {!isAdminMode ? (
                   <Link href="/settings/ai" className="button">
                     AI 设置
                   </Link>
                 ) : null}
-                {!isAdmin ? (
+                {!isAdminMode && !desktopRuntime ? (
                   <Link href="/settings/account" className="button">
                     用量
                   </Link>
@@ -111,7 +112,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
           </header>
         ) : null}
 
-        {user && !isAdmin && !aiSetup.configured ? (
+        {user && !isAdminMode && !aiSetup.configured ? (
           <div className="setup-alert">
             <div>
               <strong>请先配置 AI 模型</strong>

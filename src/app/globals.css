@@ -448,6 +448,17 @@ form[aria-busy="true"] button[type="submit"] {
   font-size: 13px;
 }
 
+.draft-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.compact-draft-actions {
+  gap: 6px;
+}
+
 .icon-button {
   width: 34px;
   height: 34px;
@@ -2262,6 +2273,24 @@ form[aria-busy="true"] button[type="submit"] {
   max-width: 780px;
   margin: 0 auto 18px;
   text-indent: 2em;
+}
+
+.draft-reader-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+
+.draft-reader-toolbar strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 15px;
 }
 
 .writing-prep-stack {
@@ -4331,6 +4360,10 @@ form[aria-busy="true"] button[type="submit"] {
   gap: 14px;
 }
 
+.compact-admin-control-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
 .license-admin-page .hero {
   min-height: 0;
 }
@@ -4350,12 +4383,31 @@ form[aria-busy="true"] button[type="submit"] {
 
 .license-table-row {
   display: grid;
-  grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) minmax(90px, 0.55fr) minmax(90px, 0.55fr) minmax(110px, 0.7fr) minmax(170px, 1.05fr) minmax(180px, 1.15fr) minmax(150px, 0.9fr);
+  grid-template-columns: minmax(210px, 1.15fr) minmax(150px, 1fr) minmax(90px, 0.55fr) minmax(90px, 0.55fr) minmax(110px, 0.7fr) minmax(170px, 1.05fr) minmax(180px, 1.15fr) minmax(150px, 0.9fr);
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
   background: #ffffff;
   font-size: 13px;
+}
+
+.license-code-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.license-code-cell strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .license-table-head {
@@ -6355,6 +6407,11 @@ form[aria-busy="true"] button[type="submit"] {
 
   .writing-action-strip .hero-actions {
     justify-content: flex-start;
+  }
+
+  .draft-reader-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .state-side {

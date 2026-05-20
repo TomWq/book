@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
+import { CopyButton } from "@/components/copy-button";
 import { LicenseCodeGenerator } from "@/components/license-code-generator";
 import { Panel } from "@/components/panel";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getAdminLicenseCenter } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
@@ -73,6 +75,10 @@ export default async function AdminPage({
 }: {
   searchParams?: Promise<{ page?: string | string[] }>;
 }) {
+  if (isDesktopRuntime()) {
+    redirect("/projects");
+  }
+
   let licenseCenter;
 
   try {
@@ -122,7 +128,7 @@ export default async function AdminPage({
         </div>
       </section>
 
-      <Panel title="批量生成授权码" description="完整授权码只会在生成后显示一次，建议立即交付或保存到你自己的客户记录里。">
+      <Panel title="批量生成授权码" description="生成后可在授权码列表继续复制，旧版只保存哈希的授权码无法还原完整内容。">
         <LicenseCodeGenerator />
       </Panel>
 
@@ -151,7 +157,11 @@ export default async function AdminPage({
               return (
                 <div key={license.id} className="license-table-row">
                   <div>
-                    <strong>{license.codePreview}</strong>
+                    <div className="license-code-cell">
+                      <strong>{license.plainCode || license.codePreview}</strong>
+                      {license.plainCode ? <CopyButton value={license.plainCode} /> : null}
+                    </div>
+                    {!license.plainCode ? <div className="muted">旧记录仅保留预览，无法复制完整码</div> : null}
                     {license.notes ? <div className="muted">{license.notes}</div> : null}
                   </div>
                   <div>
@@ -214,6 +224,14 @@ export default async function AdminPage({
                       label="重置设备"
                       className="button secondary"
                       confirmMessage="确定重置这个授权码的设备绑定吗？客户需要重新激活。"
+                    />
+                    <ApiButton
+                      endpoint="/api/admin/licenses"
+                      method="PATCH"
+                      body={{ licenseId: license.id, action: "delete" }}
+                      label="删除"
+                      className="button danger"
+                      confirmMessage="确定永久删除这个授权码吗？测试数据和相关激活记录都会被删除。"
                     />
                   </div>
                 </div>

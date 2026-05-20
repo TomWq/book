@@ -30,9 +30,7 @@ export function proxy(request: NextRequest) {
         return NextResponse.redirect(new URL("/", request.url));
       }
 
-      if (pathname !== "/") {
-        return NextResponse.next();
-      }
+      return NextResponse.next();
     }
 
     if (pathname.startsWith("/api")) {

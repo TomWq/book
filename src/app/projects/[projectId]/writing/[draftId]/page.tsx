@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { DraftExportActions } from "@/components/draft-export-actions";
 import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
 
@@ -52,6 +53,12 @@ export default async function ChapterDraftReaderPage({
             </p>
           </div>
           <div className="hero-actions">
+            <DraftExportActions
+              content={draft.content}
+              projectName={writingState.project.name}
+              chapterNumber={draft.chapterNumber}
+              title={draft.title}
+            />
             <Link className="button" href={`/projects/${projectId}/writing`}>
               返回创作台
             </Link>
@@ -76,6 +83,19 @@ export default async function ChapterDraftReaderPage({
       <div className="writing-layout">
         <main className="writing-main">
           <Panel title="章节正文" description="这里用于连续阅读已生成的章节草稿。">
+            <div className="draft-reader-toolbar">
+              <div>
+                <div className="mini-label">本章操作</div>
+                <strong>复制或导出当前章节</strong>
+              </div>
+              <DraftExportActions
+                content={draft.content}
+                projectName={writingState.project.name}
+                chapterNumber={draft.chapterNumber}
+                title={draft.title}
+                compact
+              />
+            </div>
             <article className="draft-reader">
               {paragraphs.map((paragraph, index) => (
                 <p key={`${index}-${paragraph.slice(0, 12)}`}>{paragraph}</p>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
+import { DraftExportActions } from "@/components/draft-export-actions";
 import { Panel } from "@/components/panel";
 import { StreamDraftButton } from "@/components/stream-draft-button";
 import { getProjectAnalysis, getProjectWritingState } from "@/lib/projects";
@@ -336,7 +337,13 @@ export default async function ProjectWritingPage({
                 </div>
                 <div className="quote-box">{activeTaskCard.endingHook}</div>
                 <div className="list">
-                  <StreamDraftButton projectId={projectId} taskCardId={activeTaskCard.id} />
+                  <StreamDraftButton
+                    projectId={projectId}
+                    taskCardId={activeTaskCard.id}
+                    projectName={writingState.project.name}
+                    chapterNumber={activeTaskCard.chapterNumber}
+                    title={activeTaskCard.title}
+                  />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
                     body={{ action: "delete_task_card", taskCardId: activeTaskCard.id }}
@@ -378,6 +385,12 @@ export default async function ProjectWritingPage({
                   <Link className="button primary" href={`/projects/${projectId}/writing/${latestDraft.id}`}>
                     全屏阅读
                   </Link>
+                  <DraftExportActions
+                    content={latestDraft.content}
+                    projectName={writingState.project.name}
+                    chapterNumber={latestDraft.chapterNumber}
+                    title={latestDraft.title}
+                  />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
                     body={{ action: "create_ledger", draftId: latestDraft.id }}
@@ -499,6 +512,15 @@ export default async function ProjectWritingPage({
                         <Link className="button small-button" href={`/projects/${projectId}/writing/${chapter.draft.id}`}>
                           阅读正文
                         </Link>
+                      ) : null}
+                      {chapter.draft ? (
+                        <DraftExportActions
+                          content={chapter.draft.content}
+                          projectName={writingState.project.name}
+                          chapterNumber={chapter.draft.chapterNumber}
+                          title={chapter.draft.title}
+                          compact
+                        />
                       ) : null}
                       <ApiButton
                         endpoint={`/api/projects/${projectId}/writing`}

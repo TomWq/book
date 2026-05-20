@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
+import { DraftExportActions } from "@/components/draft-export-actions";
 import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
 
@@ -127,6 +128,13 @@ export default async function WritingChapterDirectoryPage({
                       <Link className="button primary small-button" href={`/projects/${projectId}/writing/${draft.id}`}>
                         阅读正文
                       </Link>
+                      <DraftExportActions
+                        content={draft.content}
+                        projectName={writingState.project.name}
+                        chapterNumber={draft.chapterNumber}
+                        title={draft.title}
+                        compact
+                      />
                       <ApiButton
                         endpoint={`/api/projects/${projectId}/writing`}
                         body={{ action: "delete_chapters_from", chapterNumber: draft.chapterNumber }}
