@@ -26,7 +26,12 @@ export function AuthForm({
     const formData = new FormData(event.currentTarget);
     const response = await fetch(`/api/auth/${mode}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-nw-name": encodeURIComponent(String(formData.get("name") ?? "")),
+        "x-nw-email": encodeURIComponent(String(formData.get("email") ?? "")),
+        "x-nw-password": encodeURIComponent(String(formData.get("password") ?? ""))
+      },
       body: JSON.stringify({
         name: String(formData.get("name") ?? ""),
         email: String(formData.get("email") ?? ""),

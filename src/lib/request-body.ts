@@ -1,3 +1,25 @@
+function decodeHeaderValue(value: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function readHeaderBody(request: Request) {
+  const body = {
+    name: decodeHeaderValue(request.headers.get("x-nw-name")),
+    email: decodeHeaderValue(request.headers.get("x-nw-email")),
+    password: decodeHeaderValue(request.headers.get("x-nw-password"))
+  };
+
+  return Object.fromEntries(Object.entries(body).filter(([, value]) => value));
+}
+
 export async function readRequestBodyWithMeta(request: Request) {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 
@@ -12,6 +34,15 @@ export async function readRequestBodyWithMeta(request: Request) {
   const raw = await request.text().catch(() => "");
 
   if (!raw.trim()) {
+    const headerBody = readHeaderBody(request);
+
+    if (Object.keys(headerBody).length > 0) {
+      return {
+        body: headerBody,
+        meta: { contentType, rawLength: raw.length, parseMode: "headers" }
+      };
+    }
+
     return {
       body: {},
       meta: { contentType, rawLength: raw.length, parseMode: "empty" }
