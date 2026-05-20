@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import {
-  getCurrentUser,
+  getCurrentUserAccess,
   getDashboardStats,
   formatProjectStatus,
   getProjects,
@@ -12,10 +12,10 @@ import {
 import { Panel } from "@/components/panel";
 
 export default async function HomePage() {
-  const user = await getCurrentUser();
+  const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
 
-  if (user?.role === "admin" && !desktopRuntime) {
+  if (isAdmin && !desktopRuntime) {
     redirect("/admin");
   }
 

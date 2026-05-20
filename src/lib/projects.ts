@@ -1,6 +1,8 @@
 import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { request as httpsRequest } from "node:https";
+import { SocksProxyAgent } from "socks-proxy-agent";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import {
@@ -825,6 +827,73 @@ function getLicenseServerUrl() {
   return String(process.env.LICENSE_SERVER_URL ?? "").trim().replace(/\/+$/, "");
 }
 
+function getLicenseServerProxyAgent() {
+  const proxyUrl = String(process.env.LICENSE_SERVER_PROXY ?? "").trim();
+
+  if (!proxyUrl) {
+    return null;
+  }
+
+  return new SocksProxyAgent(proxyUrl);
+}
+
+function postJsonWithSocksProxy(input: {
+  url: string;
+  payload: Record<string, unknown>;
+  timeoutMs: number;
+  agent: SocksProxyAgent;
+}) {
+  const target = new URL(input.url);
+  const body = JSON.stringify(input.payload);
+
+  return new Promise<{ ok: boolean; status: number; body: unknown }>((resolve, reject) => {
+    const request = httpsRequest(
+      target,
+      {
+        method: "POST",
+        agent: input.agent,
+        timeout: input.timeoutMs,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
+        }
+      },
+      (response) => {
+        let raw = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          raw += chunk;
+        });
+        response.on("end", () => {
+          const status = response.statusCode ?? 0;
+          let parsed: unknown = null;
+
+          try {
+            parsed = raw ? JSON.parse(raw) : null;
+          } catch {
+            parsed = raw;
+          }
+
+          resolve({ ok: status >= 200 && status < 300, status, body: parsed });
+        });
+      }
+    );
+
+    request.on("timeout", () => {
+      request.destroy(new Error("timeout"));
+    });
+    request.on("error", reject);
+    request.write(body);
+    request.end();
+  });
+}
+
+function readRemoteLicenseErrorMessage(body: unknown) {
+  return body && typeof body === "object" && "error" in body
+    ? String((body as { error: unknown }).error)
+    : "授权中心验证失败";
+}
+
 async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
   const serverUrl = getLicenseServerUrl();
 
@@ -832,40 +901,54 @@ async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
     return null;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number(process.env.LICENSE_SERVER_TIMEOUT_MS ?? 8000));
-  let response: Response;
+  const timeoutMs = Number(process.env.LICENSE_SERVER_TIMEOUT_MS ?? 30000);
+  const url = serverUrl + "/api/license/activate";
+  const payload = {
+    activationCode: input.activationCode,
+    machineHash: input.machineHash,
+    clientName: input.clientName,
+    centerOnly: true
+  };
+  const proxyAgent = getLicenseServerProxyAgent();
+  let result: { ok: boolean; status: number; body: unknown };
 
   try {
-    response = await fetch(`${serverUrl}/api/license/activate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        activationCode: input.activationCode,
-        machineHash: input.machineHash,
-        clientName: input.clientName,
-        centerOnly: true
-      }),
-      cache: "no-store",
-      signal: controller.signal
-    });
+    if (proxyAgent) {
+      result = await postJsonWithSocksProxy({ url, payload, timeoutMs, agent: proxyAgent });
+    } else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          cache: "no-store",
+          signal: controller.signal
+        });
+        result = {
+          ok: response.ok,
+          status: response.status,
+          body: await response.json().catch(() => null)
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
   } catch (error) {
-    const isAbort = error instanceof Error && error.name === "AbortError";
-    throw new Error(isAbort ? `连接授权中心超时：${serverUrl}` : `无法连接授权中心：${serverUrl}`);
-  } finally {
-    clearTimeout(timeout);
+    const message = error instanceof Error ? error.message : "fetch failed";
+    const isTimeout = error instanceof Error && (error.name === "AbortError" || message === "timeout");
+    const proxyHint = proxyAgent ? "，当前代理：" + process.env.LICENSE_SERVER_PROXY : "";
+    throw new Error(isTimeout ? "连接授权中心超时：" + serverUrl + proxyHint : "无法连接授权中心：" + serverUrl + proxyHint + "，" + message);
   }
 
-  const body = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message = body?.error ? String(body.error) : "授权中心验证失败";
-    throw new Error(`授权中心 ${serverUrl} 返回：${message}`);
+  if (!result.ok) {
+    throw new Error("授权中心 " + serverUrl + " 返回：" + readRemoteLicenseErrorMessage(result.body));
   }
 
-  return body?.license as LicenseActivationResult;
+  return (result.body as { license?: LicenseActivationResult } | null)?.license as LicenseActivationResult;
 }
-
 async function getCookieStore() {
   try {
     return await cookies();

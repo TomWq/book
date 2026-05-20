@@ -1,7 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import Database from "better-sqlite3";
+import { createRequire } from "node:module";
+import type DatabaseConstructor from "better-sqlite3";
 import type postgres from "postgres";
+
+const require = createRequire(import.meta.url);
+const loadSqlite = () => require("better-sqlite3") as typeof DatabaseConstructor;
 
 const DEFAULT_STATE_ID = "default";
 const STORE_RECORD_ENTITY_KEYS = [
@@ -188,6 +192,7 @@ function ensureSqliteSchema() {
     return;
   }
 
+  const Database = loadSqlite();
   const db = new Database(sqlitePath);
 
   db.exec(`
@@ -798,6 +803,7 @@ function syncCoreTables(store: unknown) {
   }
 
   ensureSqliteSchema();
+  const Database = loadSqlite();
   const db = new Database(sqlitePath);
 
   const projects = asRecordArray(store, "projects");
@@ -1482,6 +1488,7 @@ function readAppStateFromSqlite<T>(fallback: T) {
   }
 
   ensureSqliteSchema();
+  const Database = loadSqlite();
   const db = new Database(sqlitePath, { readonly: true });
 
   try {
@@ -1509,6 +1516,7 @@ function upsertAppStateInSqlite(payload: string) {
   }
 
   ensureSqliteSchema();
+  const Database = loadSqlite();
   const db = new Database(sqlitePath);
 
   try {
@@ -1571,7 +1579,9 @@ async function ensureDataDir(storePath: string) {
   });
 }
 
-function rows<T extends Record<string, unknown>>(db: Database.Database, tableName: string) {
+type SqliteDatabase = InstanceType<typeof DatabaseConstructor>;
+
+function rows<T extends Record<string, unknown>>(db: SqliteDatabase, tableName: string) {
   return db.prepare(`SELECT * FROM "${tableName}"`).all() as T[];
 }
 
@@ -1613,6 +1623,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
   }
 
   ensureSqliteSchema();
+  const Database = loadSqlite();
   const db = new Database(sqlitePath, { readonly: true });
 
   try {
@@ -2130,6 +2141,7 @@ export async function getPersistenceStatus() {
 
   if (sqlitePath) {
     ensureSqliteSchema();
+    const Database = loadSqlite();
     const db = new Database(sqlitePath, { readonly: true });
 
     try {

@@ -21,7 +21,8 @@
     "next": "^16.2.6",
     "postgres": "3.4.7",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "socks-proxy-agent": "^10.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

@@ -69,6 +69,7 @@
 ```bash
 APP_RUNTIME="desktop"
 LICENSE_SERVER_URL="https://你的授权中心域名"
+LICENSE_SERVER_TIMEOUT_MS="30000"
 ```
 
 云端授权中心建议设置：
