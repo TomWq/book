@@ -52,6 +52,7 @@ export function proxy(request: NextRequest) {
     pathname === "/legal" ||
     pathname.startsWith("/api/auth") ||
     pathname === "/api/debug/persistence" ||
+    pathname === "/api/debug/echo" ||
     pathname === "/api/license/activate" ||
     pathname === "/api/health" ||
     pathname === "/api/jobs/worker"
