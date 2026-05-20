@@ -2,7 +2,6 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { estimateAiTaskCredits } from "@/lib/ai-task-pricing";
 
 type AnalysisMode = "first" | "range" | "single" | "all";
 const MAX_ANALYSIS_CHAPTERS = 30;
@@ -15,14 +14,12 @@ export function AnalysisRangeForm({
   projectId,
   chaptersCount,
   hasStoryAnalysis,
-  analysisRunning = false,
-  showCreditEstimate = true
+  analysisRunning = false
 }: {
   projectId: string;
   chaptersCount: number;
   hasStoryAnalysis: boolean;
   analysisRunning?: boolean;
-  showCreditEstimate?: boolean;
 }) {
   const router = useRouter();
   const [mode, setMode] = useState<AnalysisMode>("first");
@@ -55,9 +52,6 @@ export function AnalysisRangeForm({
     const to = Math.max(startChapter, endChapter);
     return Math.min(MAX_ANALYSIS_CHAPTERS, Math.max(0, Math.min(chaptersCount, to) - Math.max(1, from) + 1));
   }, [chaptersCount, endChapter, limit, mode, startChapter]);
-  const estimatedCredits =
-    selectedCount > 0 ? estimateAiTaskCredits("analyze_chapters", { chapterCount: selectedCount }) : 0;
-
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -173,11 +167,7 @@ export function AnalysisRangeForm({
       <div className="section-card subtle-card">
         <div className="row">
           <strong>将分析 {selectedCount.toLocaleString("zh-CN")} 章</strong>
-          {showCreditEstimate ? (
-            <span className="chip">预计 {estimatedCredits.toLocaleString("zh-CN")} 灵石</span>
-          ) : (
-            <span className="chip">自带 Key 模式</span>
-          )}
+          <span className="chip">自带 Key 模式</span>
         </div>
         <div className="muted">
           项目共 {chaptersCount.toLocaleString("zh-CN")} 章。第一版单次最多分析 {MAX_ANALYSIS_CHAPTERS} 章，会按章节逐步执行，最后汇总整书结论。

@@ -22,7 +22,7 @@ export function SideNav({ items }: { items: SideNavItem[] }) {
   return (
     <nav className="side-nav" aria-label="全局导航">
       {items.map((item) => {
-        const active = isActivePath(pathname, item.href);
+        const active = items.length === 1 || isActivePath(pathname, item.href);
 
         return (
           <Link

@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "acceptance": "node scripts/acceptance-check.mjs",
     "acceptance:flow": "node scripts/main-flow-check.mjs",
-    "worker": "node scripts/run-worker.mjs"
+    "worker": "node scripts/run-worker.mjs",
+    "activation:reset": "node scripts/reset-local-activation.mjs"
   },
   "dependencies": {
     "@antv/g6": "^5.1.1",

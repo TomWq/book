@@ -15,14 +15,6 @@ export function proxy(request: NextRequest) {
   }
 
   if (isDesktopRuntime()) {
-    if (hasSession) {
-      if (pathname === "/login" || pathname === "/register" || pathname === "/activate") {
-        return NextResponse.redirect(new URL("/", request.url));
-      }
-
-      return NextResponse.next();
-    }
-
     if (
       pathname === "/activate" ||
       pathname === "/api/license/activate" ||
@@ -31,6 +23,16 @@ export function proxy(request: NextRequest) {
       pathname === "/api/jobs/worker"
     ) {
       return NextResponse.next();
+    }
+
+    if (hasSession) {
+      if (pathname === "/login" || pathname === "/register") {
+        return NextResponse.redirect(new URL("/", request.url));
+      }
+
+      if (pathname !== "/") {
+        return NextResponse.next();
+      }
     }
 
     if (pathname.startsWith("/api")) {

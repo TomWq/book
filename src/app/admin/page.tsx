@@ -1,76 +1,27 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ApiButton, ApiForm } from "@/components/api-form";
+import { ApiButton } from "@/components/api-form";
 import { LicenseCodeGenerator } from "@/components/license-code-generator";
 import { Panel } from "@/components/panel";
-import { getBillingMode } from "@/lib/billing-mode";
-import { getAdminDashboard, getAdminLicenseCenter } from "@/lib/projects";
-import { getPersistenceStatus } from "@/lib/store-persistence";
+import { getAdminLicenseCenter } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
+
+const PAGE_SIZE = 20;
 
 function formatNumber(value: number) {
   return Math.round(value).toLocaleString("zh-CN");
 }
 
-function formatTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN");
+function formatTime(value?: string) {
+  return value ? new Date(value).toLocaleString("zh-CN") : "-";
 }
 
-function avg(total: number, units: number) {
-  return units > 0 ? total / units : 0;
-}
+function numberParam(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const parsed = Number(raw ?? 1);
 
-function unitName(type: string) {
-  switch (type) {
-    case "analyze_chapters":
-      return "章";
-    case "generate_chapter":
-      return "章正文";
-    case "generate_task_card":
-      return "任务卡";
-    case "review_chapter":
-      return "审稿";
-    case "edit_second_draft":
-      return "二稿";
-    case "generate_outline":
-      return "大纲";
-    default:
-      return "次";
-  }
-}
-
-function typeName(type: string) {
-  switch (type) {
-    case "analyze_chapters":
-      return "章节分析";
-    case "generate_outline":
-      return "生成大纲";
-    case "generate_task_card":
-      return "生成任务卡";
-    case "generate_chapter":
-      return "创作正文";
-    case "review_chapter":
-      return "审稿";
-    case "edit_second_draft":
-      return "二稿编辑";
-    default:
-      return "AI 任务";
-  }
-}
-
-function usageByType(
-  dashboard: Awaited<ReturnType<typeof getAdminDashboard>>,
-  type: string
-) {
-  return dashboard.aiUsage.byType.find((item) => item.type === type);
-}
-
-function previewTaskCredits(item: {
-  baseCredits: number;
-  unitCredits: number;
-  multiplier: number;
-}) {
-  return Math.ceil((item.baseCredits + item.unitCredits) * item.multiplier);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
 }
 
 function licenseStatusName(status: string) {
@@ -92,92 +43,66 @@ function licenseStatusClass(status: string) {
   return status === "active" ? "success" : status === "unused" ? "warning" : "danger";
 }
 
-export default async function AdminPage() {
-  let dashboard;
+function logReasonName(reason: string) {
+  switch (reason) {
+    case "activated":
+      return "首次激活";
+    case "verified_same_machine":
+      return "同设备验证";
+    case "not_found":
+      return "授权码不存在";
+    case "disabled":
+      return "授权码已禁用";
+    case "expired":
+      return "授权码已过期";
+    case "already_bound_other_machine":
+      return "其他设备尝试";
+    case "activation_limit_reached":
+      return "超过激活次数";
+    default:
+      return reason || "未知原因";
+  }
+}
+
+function compactMachine(value?: string) {
+  return value ? `${value.slice(0, 10)}...` : "-";
+}
+
+export default async function AdminPage({
+  searchParams
+}: {
+  searchParams?: Promise<{ page?: string | string[] }>;
+}) {
   let licenseCenter;
-  let storage: Awaited<ReturnType<typeof getPersistenceStatus>>;
 
   try {
-    [dashboard, licenseCenter, storage] = await Promise.all([
-      getAdminDashboard(),
-      getAdminLicenseCenter(),
-      getPersistenceStatus()
-    ]);
+    licenseCenter = await getAdminLicenseCenter();
   } catch {
     notFound();
   }
-  const analysisUsage = usageByType(dashboard, "analyze_chapters");
-  const chapterDraftUsage = usageByType(dashboard, "generate_chapter");
-  const reviewUsage = usageByType(dashboard, "review_chapter");
-  const taskCardUsage = usageByType(dashboard, "generate_task_card");
-  const isCreditsMode = getBillingMode() === "credits";
+
+  const query = searchParams ? await searchParams : {};
+  const totalPages = Math.max(1, Math.ceil(licenseCenter.licenses.length / PAGE_SIZE));
+  const currentPage = Math.min(totalPages, numberParam(query.page));
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pageLicenses = licenseCenter.licenses.slice(pageStart, pageStart + PAGE_SIZE);
 
   return (
-    <div className="grid">
-      <section className="hero">
+    <div className="grid license-admin-page">
+      <section className="hero license-admin-hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">管理后台</div>
-            <h1>{isCreditsMode ? "用户、灵石和 AI 任务运营" : "用户、授权和 AI 用量"}</h1>
-            <p>{isCreditsMode ? "这里用于查看注册用户、灵石余额、AI 消耗情况，并给用户手动充值或赠送灵石。" : "当前是一次性授权/本地部署模式，这里主要查看用户、存储状态和 AI 任务用量。"}</p>
+            <div className="pill success">授权中心</div>
+            <h1>授权码管理</h1>
+            <p>批量生成一次性授权码，查看激活状态、设备绑定、最近验证和异常激活记录。</p>
           </div>
           <div className="hero-actions">
-            <span className="chip">用户 {formatNumber(dashboard.totalUsers)}</span>
-            <span className="chip">管理员 {formatNumber(dashboard.adminUsers)}</span>
-            <span className="chip">AI 任务 {formatNumber(dashboard.totalAiJobs)}</span>
+            <span className="chip">每页 {PAGE_SIZE}</span>
+            <span className="chip">第 {currentPage} / {totalPages} 页</span>
           </div>
         </div>
 
         <div className="grid stats">
-          <div className="stat-card">
-            <strong>{formatNumber(dashboard.totalUsers)}</strong>
-            <span>注册用户</span>
-          </div>
-          <div className="stat-card">
-            <strong>{isCreditsMode ? formatNumber(dashboard.totalCreditsBalance) : "自带 Key"}</strong>
-            <span>{isCreditsMode ? "用户剩余灵石" : "计费模式"}</span>
-          </div>
-          <div className="stat-card">
-            <strong>{isCreditsMode ? formatNumber(dashboard.totalConsumed) : formatNumber(dashboard.aiUsage.totalTokens)}</strong>
-            <span>{isCreditsMode ? "累计消耗灵石" : "累计算力"}</span>
-          </div>
-          <div className="stat-card">
-            <strong>{isCreditsMode ? formatNumber(dashboard.totalRecharged) : formatNumber(dashboard.aiUsage.aiJobs)}</strong>
-            <span>{isCreditsMode ? "累计充值/赠送" : "AI 调用任务"}</span>
-          </div>
-        </div>
-      </section>
-
-      <Panel title="存储状态" description="查看当前数据桥接和 PostgreSQL 镜像进度。">
-        <div className="list">
-          <div className="list-item">
-            <div className="row">
-              <strong>存储模式</strong>
-              <span className={`pill ${storage.mode === "postgres" ? "success" : "warning"}`}>
-                {storage.mode === "postgres" ? "PostgreSQL" : storage.mode === "sqlite" ? "SQLite" : "文件"}
-              </span>
-            </div>
-            <div className="muted">数据库来源：{storage.databaseUrlConfigured ? "已配置" : "未配置"}</div>
-            <div className="muted">读模式：{storage.readMode}</div>
-          </div>
-          <div className="meta-row">
-            <span className="chip">AppState {storage.appStateCount}</span>
-            <span className="chip">StoreRecord {storage.storeRecordCount}</span>
-          </div>
-          {storage.storeRecordEntities.length > 0 ? (
-            <div className="meta-row">
-              {storage.storeRecordEntities.slice(0, 6).map((item) => (
-                <span key={item.entityType} className="chip">
-                  {item.entityType} {item.count}
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </Panel>
-
-      <Panel title="授权码管理" description="生成一次性授权码，查看激活状态，并处理客户换设备或误激活。">
-        <div className="usage-summary">
           <div className="stat-card">
             <strong>{formatNumber(licenseCenter.total)}</strong>
             <span>授权码总数</span>
@@ -195,279 +120,157 @@ export default async function AdminPage() {
             <span>不可用</span>
           </div>
         </div>
+      </section>
 
+      <Panel title="批量生成授权码" description="完整授权码只会在生成后显示一次，建议立即交付或保存到你自己的客户记录里。">
         <LicenseCodeGenerator />
+      </Panel>
 
-        <div className="list license-list">
-          {licenseCenter.licenses.length === 0 ? (
-            <div className="empty-state">
-              <strong>暂无授权码</strong>
-              <span>生成后会显示在这里；完整授权码只会在生成当次展示。</span>
+      <Panel title="授权码列表" description="按创建时间倒序显示，支持分页、禁用、恢复和重置设备绑定。">
+        {pageLicenses.length === 0 ? (
+          <div className="empty-state">
+            <strong>暂无授权码</strong>
+            <span>先在上方批量生成授权码。</span>
+          </div>
+        ) : (
+          <div className="license-table">
+            <div className="license-table-row license-table-head">
+              <span>授权码</span>
+              <span>客户</span>
+              <span>状态</span>
+              <span>激活</span>
+              <span>设备</span>
+              <span>时间</span>
+              <span>最近来源</span>
+              <span>操作</span>
             </div>
-          ) : (
-            licenseCenter.licenses.map((license) => (
-              <div key={license.id} className="list-item">
-                <div className="row">
+
+            {pageLicenses.map((license) => {
+              const latestLog = license.recentLogs[0];
+
+              return (
+                <div key={license.id} className="license-table-row">
                   <div>
-                    <strong>{license.customerName || "未命名客户"}</strong>
-                    <div className="muted">{license.customerContact || "未填写联系方式"}</div>
+                    <strong>{license.codePreview}</strong>
+                    {license.notes ? <div className="muted">{license.notes}</div> : null}
                   </div>
-                  <span className={`pill ${licenseStatusClass(license.status)}`}>
-                    {licenseStatusName(license.status)}
-                  </span>
-                </div>
-                <div className="meta-row">
-                  <span className="chip">授权码 {license.codePreview}</span>
-                  <span className="chip">激活 {license.activationCount}/{license.maxActivations}</span>
-                  {license.machineHash ? <span className="chip">设备 {license.machineHash.slice(0, 8)}...</span> : null}
-                  {license.activatedAt ? <span className="chip">首次激活 {formatTime(license.activatedAt)}</span> : null}
-                  {license.lastVerifiedAt ? <span className="chip">最近验证 {formatTime(license.lastVerifiedAt)}</span> : null}
-                  {license.expiresAt ? <span className="chip">到期 {formatTime(license.expiresAt)}</span> : null}
-                </div>
-                {license.notes ? <div className="muted">备注：{license.notes}</div> : null}
-                <div className="row admin-license-actions">
-                  {license.status === "disabled" ? (
+                  <div>
+                    <strong>{license.customerName || "未填写"}</strong>
+                    <div className="muted">{license.customerContact || "无联系方式"}</div>
+                  </div>
+                  <div>
+                    <span className={`pill ${licenseStatusClass(license.status)}`}>
+                      {licenseStatusName(license.status)}
+                    </span>
+                  </div>
+                  <div>
+                    <strong>{license.activationCount}/{license.maxActivations}</strong>
+                    {license.expiresAt ? <div className="muted">到期 {formatTime(license.expiresAt)}</div> : null}
+                  </div>
+                  <div>
+                    <span className="chip">{compactMachine(license.machineHash)}</span>
+                  </div>
+                  <div>
+                    <div>创建 {formatTime(license.createdAt)}</div>
+                    <div className="muted">激活 {formatTime(license.activatedAt)}</div>
+                    <div className="muted">验证 {formatTime(license.lastVerifiedAt)}</div>
+                  </div>
+                  <div>
+                    {latestLog ? (
+                      <>
+                        <span className={`pill ${latestLog.result === "success" ? "success" : "danger"}`}>
+                          {logReasonName(latestLog.reason)}
+                        </span>
+                        <div className="muted license-client-name">{latestLog.clientName || "未记录来源"}</div>
+                        <div className="muted">{formatTime(latestLog.createdAt)}</div>
+                      </>
+                    ) : (
+                      <span className="muted">暂无记录</span>
+                    )}
+                  </div>
+                  <div className="license-actions">
+                    {license.status === "disabled" ? (
+                      <ApiButton
+                        endpoint="/api/admin/licenses"
+                        method="PATCH"
+                        body={{ licenseId: license.id, action: "enable" }}
+                        label="恢复"
+                        className="button secondary"
+                      />
+                    ) : (
+                      <ApiButton
+                        endpoint="/api/admin/licenses"
+                        method="PATCH"
+                        body={{ licenseId: license.id, action: "disable" }}
+                        label="禁用"
+                        className="button danger"
+                        confirmMessage="确定禁用这个授权码吗？"
+                      />
+                    )}
                     <ApiButton
                       endpoint="/api/admin/licenses"
                       method="PATCH"
-                      body={{ licenseId: license.id, action: "enable" }}
-                      label="恢复授权码"
+                      body={{ licenseId: license.id, action: "reset" }}
+                      label="重置设备"
                       className="button secondary"
+                      confirmMessage="确定重置这个授权码的设备绑定吗？客户需要重新激活。"
                     />
-                  ) : (
-                    <ApiButton
-                      endpoint="/api/admin/licenses"
-                      method="PATCH"
-                      body={{ licenseId: license.id, action: "disable" }}
-                      label="禁用授权码"
-                      className="button danger"
-                      confirmMessage="确定禁用这个授权码吗？"
-                    />
-                  )}
-                  <ApiButton
-                    endpoint="/api/admin/licenses"
-                    method="PATCH"
-                    body={{ licenseId: license.id, action: "reset" }}
-                    label="重置设备绑定"
-                    className="button secondary"
-                    confirmMessage="确定重置这个授权码的设备绑定吗？客户需要重新激活。"
-                  />
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })}
+          </div>
+        )}
+
+        <div className="pagination">
+          {currentPage > 1 ? (
+            <Link className="button secondary" href={`/admin?page=${currentPage - 1}`}>
+              上一页
+            </Link>
+          ) : (
+            <span className="button secondary disabled">上一页</span>
+          )}
+          <span className="chip">
+            第 {currentPage.toLocaleString("zh-CN")} / {totalPages.toLocaleString("zh-CN")} 页
+          </span>
+          {currentPage < totalPages ? (
+            <Link className="button secondary" href={`/admin?page=${currentPage + 1}`}>
+              下一页
+            </Link>
+          ) : (
+            <span className="button secondary disabled">下一页</span>
           )}
         </div>
       </Panel>
 
-      <Panel title="AI 消耗看板" description={isCreditsMode ? "看清每类功能的算力用量和灵石成本。" : "看清每类功能的算力用量；模型费用由部署方或用户自己的 Key 承担。"}>
-        <div className="usage-summary">
-          <div className="stat-card">
-            <strong>{formatNumber(dashboard.aiUsage.totalTokens)}</strong>
-            <span>总算力用量</span>
+      <Panel title="最近激活记录" description="展示最近的授权验证、首次激活和失败原因，用于排查客户换机或误输授权码。">
+        {licenseCenter.recentLogs.length === 0 ? (
+          <div className="empty-state">
+            <strong>暂无激活记录</strong>
+            <span>客户端完成激活或验证后会出现在这里。</span>
           </div>
-          <div className="stat-card">
-            <strong>{isCreditsMode ? formatNumber(dashboard.aiUsage.actualCredits) : "不扣费"}</strong>
-            <span>{isCreditsMode ? "AI 实扣灵石" : "平台计费"}</span>
-          </div>
-          <div className="stat-card">
-            <strong>{formatNumber(avg(analysisUsage?.totalTokens ?? 0, analysisUsage?.units ?? 0))}</strong>
-            <span>分析一章算力</span>
-          </div>
-          <div className="stat-card">
-            <strong>{formatNumber(avg(chapterDraftUsage?.totalTokens ?? 0, chapterDraftUsage?.units ?? 0))}</strong>
-            <span>创作一章算力</span>
-          </div>
-        </div>
-
-        <div className="usage-summary">
-          <div className="stat-card">
-            <strong>{isCreditsMode ? formatNumber(avg(analysisUsage?.actualCredits ?? 0, analysisUsage?.units ?? 0)) : "自理"}</strong>
-            <span>{isCreditsMode ? "分析一章灵石" : "分析费用"}</span>
-          </div>
-          <div className="stat-card">
-            <strong>{isCreditsMode ? formatNumber(avg(chapterDraftUsage?.actualCredits ?? 0, chapterDraftUsage?.units ?? 0)) : "自理"}</strong>
-            <span>{isCreditsMode ? "创作一章灵石" : "创作费用"}</span>
-          </div>
-          <div className="stat-card">
-            <strong>{formatNumber(avg(reviewUsage?.totalTokens ?? 0, reviewUsage?.units ?? 0))}</strong>
-            <span>审稿一次算力</span>
-          </div>
-          <div className="stat-card">
-            <strong>{formatNumber(avg(taskCardUsage?.totalTokens ?? 0, taskCardUsage?.units ?? 0))}</strong>
-            <span>任务卡一次算力</span>
-          </div>
-        </div>
-
-        {dashboard.aiUsage.byType.length > 0 ? (
-          <div className="usage-table">
+        ) : (
+          <div className="usage-table license-log-table">
             <div className="usage-table-row usage-table-head">
-              <span>功能</span>
-              <span>次数</span>
-              <span>单位</span>
-              <span>总算力</span>
-              <span>平均算力</span>
-              <span>{isCreditsMode ? "平均灵石" : "费用"}</span>
+              <span>结果</span>
+              <span>原因</span>
+              <span>设备</span>
+              <span>来源</span>
+              <span>时间</span>
             </div>
-            {dashboard.aiUsage.byType.map((item) => (
-              <div key={item.type} className="usage-table-row">
-                <strong>{typeName(item.type)}</strong>
-                <span>{formatNumber(item.jobs)}</span>
-                <span>{formatNumber(item.units)} {unitName(item.type)}</span>
-                <span>{formatNumber(item.totalTokens)}</span>
-                <span>{formatNumber(avg(item.totalTokens, item.units))} / {unitName(item.type)}</span>
-                <span>{isCreditsMode ? `${formatNumber(avg(item.actualCredits, item.units))} / ${unitName(item.type)}` : "自理"}</span>
+            {licenseCenter.recentLogs.map((log) => (
+              <div key={log.id} className="usage-table-row">
+                <span className={`pill ${log.result === "success" ? "success" : "danger"}`}>
+                  {log.result === "success" ? "成功" : "失败"}
+                </span>
+                <strong>{logReasonName(log.reason)}</strong>
+                <span>{compactMachine(log.machineHash)}</span>
+                <span className="license-client-name">{log.clientName || "未记录来源"}</span>
+                <span>{formatTime(log.createdAt)}</span>
               </div>
             ))}
           </div>
-        ) : (
-          <div className="empty-state">
-            <strong>暂无 AI 消耗数据</strong>
-            <span>完成一次章节分析、正文生成或审稿后，这里会显示每类功能的平均成本。</span>
-          </div>
         )}
-      </Panel>
-
-      <Panel title="用户列表" description={isCreditsMode ? "查看用户用量，并为用户手动补灵石。" : "查看用户项目、任务和 AI 用量。"}>
-        <div className="list">
-          {dashboard.users.length === 0 ? (
-            <div className="empty-state">
-              <strong>暂无用户</strong>
-              <span>注册用户后会显示在这里。</span>
-            </div>
-          ) : (
-            dashboard.users.map((user) => (
-              <div key={user.id} className="list-item">
-                <div className="row">
-                  <div>
-                    <strong>{user.name}</strong>
-                    <div className="muted">{user.email}</div>
-                  </div>
-                  <span className={`pill ${user.role === "admin" ? "success" : "warning"}`}>
-                    {user.role === "admin" ? "管理员" : "用户"}
-                  </span>
-                </div>
-
-                <div className="meta-row">
-                  <span className="chip">套餐 {user.plan}</span>
-                  {!isCreditsMode && user.licenseCustomerId ? <span className="chip">客户 {user.licenseCustomerId}</span> : null}
-                  {!isCreditsMode && user.licenseActivatedAt ? <span className="chip">激活 {formatTime(user.licenseActivatedAt)}</span> : null}
-                  {isCreditsMode ? <span className="chip">灵石余额 {formatNumber(user.creditsBalance)}</span> : null}
-                  <span className="chip">项目 {formatNumber(user.projectCount)}</span>
-                  <span className="chip">任务 {formatNumber(user.aiJobCount)}</span>
-                  <span className="chip">模型 {user.aiModel}</span>
-                  {isCreditsMode ? <span className="chip">倍率 {user.aiBillingMarkup}x</span> : null}
-                  {isCreditsMode ? <span className="chip">最低 {formatNumber(user.aiBillingMinimum)} 灵石</span> : null}
-                  <span className="chip">算力 {formatNumber(user.aiTokenTotal)}</span>
-                  {isCreditsMode ? <span className="chip">AI实扣灵石 {formatNumber(user.aiCreditActual)}</span> : null}
-                  {isCreditsMode ? <span className="chip">消耗 {formatNumber(user.creditConsumed)}</span> : null}
-                  {isCreditsMode ? <span className="chip">充值/赠送 {formatNumber(user.creditRecharged)}</span> : null}
-                  <span className="chip">活跃 {formatTime(user.lastActiveAt)}</span>
-                </div>
-
-                {isCreditsMode ? (
-                <ApiForm className="forms" endpoint="/api/admin/credits" resetOnSuccess>
-                  <input type="hidden" name="userId" value={user.id} />
-                  <div className="split-panels">
-                    <div className="field">
-                      <div className="field-label">赠送灵石</div>
-                      <input name="amount" type="number" min="1" step="1" placeholder="例如：10000" />
-                    </div>
-                    <div className="field">
-                      <div className="field-label">备注</div>
-                      <input name="reason" placeholder="例如：内测补贴 / 客服补偿 / 线下充值" />
-                    </div>
-                  </div>
-                  <button className="button" type="submit">
-                    手动充值灵石
-                  </button>
-                </ApiForm>
-                ) : null}
-
-                {isCreditsMode ? (
-                <ApiForm className="forms" endpoint="/api/admin/user-ai-controls">
-                  <input type="hidden" name="userId" value={user.id} />
-                  <div className="admin-control-grid">
-                    <div className="field">
-                      <div className="field-label">模型档位</div>
-                      <select name="model" defaultValue={user.aiModel}>
-                        <option value="platform-fast">快速档：成本低，适合拆书和常规生成</option>
-                        <option value="platform-quality">质量档：质量更稳，适合重点正文</option>
-                      </select>
-                    </div>
-                    <div className="field">
-                      <div className="field-label">灵石倍率</div>
-                      <input
-                        name="aiBillingMarkup"
-                        type="number"
-                        min="1"
-                        step="0.1"
-                        defaultValue={user.aiBillingMarkup}
-                      />
-                    </div>
-                    <div className="field">
-                      <div className="field-label">最低实扣灵石</div>
-                      <input
-                        name="aiBillingMinimum"
-                        type="number"
-                        min="1"
-                        step="1"
-                        defaultValue={user.aiBillingMinimum}
-                      />
-                    </div>
-                  </div>
-                  <div className="usage-table task-pricing-table">
-                    <div className="usage-table-row usage-table-head">
-                      <span>任务</span>
-                      <span>基础价</span>
-                      <span>单位价</span>
-                      <span>倍率</span>
-                      <span>预览</span>
-                    </div>
-                    {user.aiTaskPricing.map((item) => (
-                      <div key={item.type} className="usage-table-row">
-                        <strong>
-                          {item.label}
-                          <span className="muted"> / {item.unitLabel}</span>
-                        </strong>
-                        <input
-                          name={`pricing.${item.type}.baseCredits`}
-                          type="number"
-                          min="0"
-                          step="1"
-                          defaultValue={item.baseCredits}
-                          aria-label={`${item.label}基础价`}
-                        />
-                        <input
-                          name={`pricing.${item.type}.unitCredits`}
-                          type="number"
-                          min="0"
-                          step="1"
-                          defaultValue={item.unitCredits}
-                          aria-label={`${item.label}单位价`}
-                        />
-                        <input
-                          name={`pricing.${item.type}.multiplier`}
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          defaultValue={item.multiplier}
-                          aria-label={`${item.label}倍率`}
-                        />
-                        <span className="chip">
-                          {item.isCustom ? "自定义" : "默认"} {formatNumber(previewTaskCredits(item))} 灵石
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <button className="button secondary" type="submit">
-                    保存 AI 与灵石策略
-                  </button>
-                </ApiForm>
-                ) : null}
-              </div>
-            ))
-          )}
-        </div>
       </Panel>
     </div>
   );

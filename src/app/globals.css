@@ -4327,8 +4327,63 @@ form[aria-busy="true"] button[type="submit"] {
 
 .admin-control-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 1.4fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr);
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
   gap: 14px;
+}
+
+.license-admin-page .hero {
+  min-height: 0;
+}
+
+.license-admin-page .stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.license-table {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--line);
+}
+
+.license-table-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) minmax(90px, 0.55fr) minmax(90px, 0.55fr) minmax(110px, 0.7fr) minmax(170px, 1.05fr) minmax(180px, 1.15fr) minmax(150px, 0.9fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.license-table-head {
+  color: var(--muted);
+  background: var(--bg-soft);
+  font-weight: 700;
+}
+
+.license-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.license-actions .button {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.license-client-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.license-log-table .usage-table-row {
+  grid-template-columns: minmax(70px, 0.55fr) minmax(130px, 0.9fr) minmax(120px, 0.8fr) minmax(260px, 1.8fr) minmax(150px, 0.9fr);
 }
 
 .license-generated-box textarea {
@@ -6203,6 +6258,7 @@ form[aria-busy="true"] button[type="submit"] {
   .grid.three-col,
   .usage-summary,
   .usage-table-row,
+  .license-table-row,
   .token-grid,
   .chapter-card-head,
   .analysis-snippets,

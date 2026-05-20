@@ -39,9 +39,9 @@
 2. 支持邮箱 + 密码注册和登录。
 3. 登录后通过会话 Cookie 保持状态。
 4. 每个用户只能看到和操作自己的项目、模板、AI 设置和任务。
-5. 默认使用 DeepSeek，模型地址、Key 和模型名优先走服务端环境配置。
-6. 支持账号额度查看和数据导出，账号删除不作为普通用户日常功能入口。
-7. 支持管理员后台查看注册用户、积分余额、积分消耗和手动充值积分。
+5. 客户端由用户自行配置 AI 服务商、请求地址、API Key 和模型名。
+6. 支持账号用量查看和数据导出，账号删除不作为普通用户日常功能入口。
+7. 支持管理员后台生成授权码、查看客户激活状态和 AI 用量。
 
 ## 上线前能力
 
@@ -68,7 +68,6 @@
 
 ```bash
 APP_RUNTIME="desktop"
-APP_BILLING_MODE="subscription"
 LICENSE_SERVER_URL="https://你的授权中心域名"
 ```
 
@@ -76,7 +75,6 @@ LICENSE_SERVER_URL="https://你的授权中心域名"
 
 ```bash
 APP_RUNTIME="cloud"
-APP_BILLING_MODE="subscription"
 DATABASE_URL="postgresql://USER:PASSWORD@HOST/db?sslmode=require"
 ADMIN_EMAILS="你的管理员邮箱"
 ```
@@ -560,7 +558,7 @@ Web 前端
 当前最应该先做的是：
 
 1. 跑完整体验收闭环，把“拆书 → 模板 → 大纲 → 创作 → 审稿”真正串通。
-2. 完善积分计费和充值入口，方便后续接真实支付。
+2. 完成 Electron 客户端打包、自动更新和本地数据库路径迁移。
 3. 补齐自动化测试和错误提示，让真实用户不容易卡住。
 
 现在已经不是搭骨架的阶段，而是把整套工作流磨顺的阶段。

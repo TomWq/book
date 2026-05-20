@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { isDesktopRuntime } from "@/lib/app-runtime";
-import { getBillingMode } from "@/lib/billing-mode";
 import {
   getCurrentUser,
   getDashboardStats,
@@ -19,7 +18,7 @@ export default async function HomePage() {
     redirect("/admin");
   }
 
-  if (!user && isDesktopRuntime() && getBillingMode() === "subscription") {
+  if (!user && isDesktopRuntime()) {
     redirect("/activate");
   }
 

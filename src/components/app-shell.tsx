@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 import { isDesktopRuntime } from "@/lib/app-runtime";
-import { getBillingMode } from "@/lib/billing-mode";
 import { getCurrentUserAccess, getCurrentUserAiSetupStatus } from "@/lib/projects";
 import { LogoutButton } from "@/components/logout-button";
 import { SideNav, type SideNavItem } from "@/components/side-nav";
@@ -14,9 +13,8 @@ const navItems: SideNavItem[] = [
 
 export async function AppShell({ children }: { children: ReactNode }) {
   const { user, isAdmin } = await getCurrentUserAccess();
-  const billingMode = getBillingMode();
   const desktopRuntime = isDesktopRuntime();
-  const aiSetup = user && !isAdmin && billingMode === "subscription"
+  const aiSetup = user && !isAdmin
     ? await getCurrentUserAiSetupStatus()
     : { configured: true };
   const visibleNavItems = isAdmin ? [{ href: "/admin", label: "管理后台" }] : navItems;
@@ -31,7 +29,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
             <div>
               <div className="brand-title">AI 网文写作助手</div>
               <div className="brand-subtitle">
-                {isAdmin ? "运营后台 · 用户与灵石管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
+                {isAdmin ? "授权中心 · 客户与版本管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
               </div>
             </div>
           </Link>
@@ -63,7 +61,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
           <div className="topbar-meta">
             <span className="row" style={{ alignItems: "center" }}>
-              {desktopRuntime && billingMode === "subscription" ? (
+              {desktopRuntime ? (
                 <Link href="/activate" className="button primary">
                   输入激活码
                 </Link>
@@ -88,7 +86,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
             <div>
               <strong>{isAdmin ? "管理后台" : "个人工作台"}</strong>
               <span>
-                {isAdmin ? "查看用户、灵石、模型档位和 AI 成本。" : "按项目推进拆书、模板迁移和长篇创作。"}
+                {isAdmin ? "查看授权码、客户激活状态和 AI 用量。" : "按项目推进拆书、模板迁移和长篇创作。"}
               </span>
             </div>
             <div className="topbar-meta">
@@ -96,10 +94,10 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 <span className="chip">{user.name}</span>
                 {!isAdmin ? (
                   <Link href="/settings/ai" className="button">
-                    {billingMode === "subscription" ? "AI 设置" : "AI 模式"}
+                    AI 设置
                   </Link>
                 ) : null}
-                {!isAdmin && billingMode === "credits" ? (
+                {!isAdmin ? (
                   <Link href="/settings/account" className="button">
                     用量
                   </Link>
@@ -113,7 +111,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
           </header>
         ) : null}
 
-        {user && !isAdmin && billingMode === "subscription" && !aiSetup.configured ? (
+        {user && !isAdmin && !aiSetup.configured ? (
           <div className="setup-alert">
             <div>
               <strong>请先配置 AI 模型</strong>

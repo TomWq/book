@@ -649,6 +649,8 @@ type AuthUserView = {
   name: string;
   role: "user" | "admin";
   plan: "trial" | "creator" | "studio";
+  licenseCustomerId?: string;
+  licenseActivatedAt?: string;
 };
 
 export type PlanKey = "trial" | "creator" | "studio";
@@ -868,7 +870,9 @@ function toAuthUser(user: StoredUser): AuthUserView {
     email: user.email,
     name: user.name,
     role: user.role,
-    plan: user.plan ?? "trial"
+    plan: user.plan ?? "trial",
+    licenseCustomerId: user.licenseCustomerId,
+    licenseActivatedAt: user.licenseActivatedAt
   };
 }
 
@@ -5280,7 +5284,6 @@ export async function updateAiSettings(input: {
     ? profiles.find((profile) => profile.id === requestedProfileId) ?? null
     : null;
   const timestamp = now();
-  const billingMode = getBillingMode();
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
   const model = input.model.trim();
   const providerName = input.providerName.trim();
@@ -5293,7 +5296,7 @@ export async function updateAiSettings(input: {
     profileName: input.profileName?.trim() || providerName || "默认配置",
     providerName: providerName || "OpenAI Compatible",
     baseUrl,
-    apiKey: billingMode === "credits" ? current?.apiKey || "" : nextApiKey,
+    apiKey: nextApiKey,
     model,
     models: Array.from(new Set([...(input.models ?? []), model].map((item) => item.trim()).filter(Boolean))),
     active: true,
