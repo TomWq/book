@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
+import { getBillingMode } from "@/lib/billing-mode";
 import { getCurrentUserAccess } from "@/lib/projects";
 import { LogoutButton } from "@/components/logout-button";
 import { SideNav, type SideNavItem } from "@/components/side-nav";
@@ -12,6 +13,7 @@ const navItems: SideNavItem[] = [
 
 export async function AppShell({ children }: { children: ReactNode }) {
   const { user, isAdmin } = await getCurrentUserAccess();
+  const billingMode = getBillingMode();
   const visibleNavItems = isAdmin ? [{ href: "/admin", label: "管理后台" }] : navItems;
   const brandHref = isAdmin ? "/admin" : "/";
 
@@ -81,12 +83,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 <span className="chip">{user.name}</span>
                 {!isAdmin ? (
                   <Link href="/settings/ai" className="button">
-                    AI 模式
+                    {billingMode === "subscription" ? "AI 设置" : "AI 模式"}
                   </Link>
                 ) : null}
                 {!isAdmin ? (
                   <Link href="/settings/account" className="button">
-                    用量
+                    {billingMode === "subscription" ? "账号" : "用量"}
                   </Link>
                 ) : null}
                 {/* <Link href="/legal" className="button">

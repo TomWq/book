@@ -227,6 +227,7 @@ export default async function AccountSettingsPage({
     { label: "导入字符", value: overview.usage.importedCharacters, limit: overview.limits.importedCharacters }
   ];
   const billing = overview.billing;
+  const isSubscriptionMode = overview.billingMode === "subscription";
   const activeModel = overview.aiSettings.model || "deepseek-v4-flash";
   const totalTransactionPages = Math.max(1, Math.ceil(billing.transactionTotalCount / billing.transactionLimit));
   const currentTransactionPage = Math.min(requestedPage, totalTransactionPages);
@@ -235,12 +236,18 @@ export default async function AccountSettingsPage({
   return (
     <div className="account-page">
       <Panel
-        title="账号与额度"
-        description="查看当前套餐、用量和账号状态。"
+        title={isSubscriptionMode ? "账号与授权" : "账号与额度"}
+        description={isSubscriptionMode ? "当前是一次性授权/本地部署模式，AI 消耗由你自己的 Key 承担。" : "查看当前套餐、用量和账号状态。"}
         action={
-          <a className="button primary" href="#recharge-lingshi">
-            补充灵石
-          </a>
+          isSubscriptionMode ? (
+            <Link className="button primary" href="/settings/ai">
+              配置 AI Key
+            </Link>
+          ) : (
+            <a className="button primary" href="#recharge-lingshi">
+              补充灵石
+            </a>
+          )
         }
       >
         <div className="account-overview">
@@ -253,9 +260,9 @@ export default async function AccountSettingsPage({
             </a>
           </div>
           <div className="account-balance-card">
-            <span className="muted">可用灵石</span>
-            <strong>{billing.creditsBalance.toLocaleString("zh-CN")}</strong>
-            <p>AI 任务开始预扣，结束后按实际算力自动结算。</p>
+            <span className="muted">{isSubscriptionMode ? "计费模式" : "可用灵石"}</span>
+            <strong>{isSubscriptionMode ? "自带 Key" : billing.creditsBalance.toLocaleString("zh-CN")}</strong>
+            <p>{isSubscriptionMode ? "本地部署不扣灵石，模型费用由你配置的 AI 服务商结算。" : "AI 任务开始预扣，结束后按实际算力自动结算。"}</p>
           </div>
           <div className="account-usage-grid">
             {usageRows.map((row) => (
@@ -276,16 +283,17 @@ export default async function AccountSettingsPage({
             </div>
           </div>
           <div className="account-model-card">
-            <span className="muted">当前 AI 模式</span>
-            <strong>{activeModel.includes("pro") ? "高质量模式" : "省灵石模式"}</strong>
-            <p>{activeModel.includes("pro") ? "适合正文和复杂二稿，灵石消耗更高。" : "适合拆书、任务卡和日常审稿。"}</p>
+            <span className="muted">{isSubscriptionMode ? "当前模型" : "当前 AI 模式"}</span>
+            <strong>{isSubscriptionMode ? activeModel : activeModel.includes("pro") ? "高质量模式" : "省灵石模式"}</strong>
+            <p>{isSubscriptionMode ? "分析、创作和审稿会使用你在 AI 设置里保存的地址、Key 和模型。" : activeModel.includes("pro") ? "适合正文和复杂二稿，灵石消耗更高。" : "适合拆书、任务卡和日常审稿。"}</p>
             <Link href="/settings/ai" className="button small-button">
-              切换 AI 模式
+              {isSubscriptionMode ? "配置 AI 服务" : "切换 AI 模式"}
             </Link>
           </div>
         </div>
       </Panel>
 
+      {!isSubscriptionMode ? (
       <Panel title="灵石流水" description="AI 任务按“预扣预计灵石 → 实际算力结算”的方式记录。">
         <div className="list">
           <div className="quote-box">
@@ -362,7 +370,9 @@ export default async function AccountSettingsPage({
           ) : null}
         </div>
       </Panel>
+      ) : null}
 
+      {!isSubscriptionMode ? (
       <section id="recharge-lingshi" className="recharge-modal" aria-labelledby="recharge-title">
         <a className="recharge-backdrop" href="/settings/account" aria-label="关闭灵石补给窗口" />
         <div className="recharge-dialog">
@@ -432,6 +442,7 @@ export default async function AccountSettingsPage({
           </div>
         </div>
       </section>
+      ) : null}
     </div>
   );
 }

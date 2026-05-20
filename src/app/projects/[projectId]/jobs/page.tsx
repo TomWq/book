@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
 import { Panel } from "@/components/panel";
+import { getBillingMode } from "@/lib/billing-mode";
 import { calculateAiJobProgress, formatAiJobType, getProject, getProjectAiJobs } from "@/lib/projects";
 
 const PAGE_SIZE = 20;
@@ -279,6 +280,7 @@ export default async function ProjectJobsPage({
   if (!project) {
     notFound();
   }
+  const isCreditsMode = getBillingMode() === "credits";
   const totalPages = Math.max(1, Math.ceil(jobs.length / PAGE_SIZE));
   const currentPage = Math.min(totalPages, numberParam(query.page));
   const pageStart = (currentPage - 1) * PAGE_SIZE;
@@ -303,8 +305,8 @@ export default async function ProjectJobsPage({
             <span>总算力</span>
           </div>
           <div className="stat-card">
-            <strong>{formatNumber(usageStats.total.actualCredits)}</strong>
-            <span>实扣灵石</span>
+            <strong>{isCreditsMode ? formatNumber(usageStats.total.actualCredits) : "自带 Key"}</strong>
+            <span>{isCreditsMode ? "实扣灵石" : "计费模式"}</span>
           </div>
           <div className="stat-card">
             <strong>
@@ -327,7 +329,7 @@ export default async function ProjectJobsPage({
               <span>单位</span>
               <span>算力</span>
               <span>均值</span>
-              <span>实扣</span>
+              <span>{isCreditsMode ? "实扣" : "费用"}</span>
             </div>
             {usageStats.byType.map((item) => (
               <div key={item.type} className="usage-table-row">
@@ -338,7 +340,7 @@ export default async function ProjectJobsPage({
                 <span>
                   {item.units > 0 ? formatNumber(item.totalTokens / item.units) : "0"} / {getUnitLabel(item.type)}
                 </span>
-                <span>{formatNumber(item.actualCredits)}</span>
+                <span>{isCreditsMode ? formatNumber(item.actualCredits) : "自理"}</span>
               </div>
             ))}
           </div>
@@ -393,12 +395,12 @@ export default async function ProjectJobsPage({
                         均值 {formatNumber(avgTokens)} / {getUnitLabel(job.type)}
                       </span>
                     ) : null}
-                    {output?.billing ? (
+                    {isCreditsMode && output?.billing ? (
                       <span className="chip">
                         实扣 {Number(output.billing.actualCredits ?? 0).toLocaleString("zh-CN")} 灵石
                       </span>
                     ) : null}
-                    {output?.billing ? (
+                    {isCreditsMode && output?.billing ? (
                       <span className="chip">
                         单位 {formatNumber(avgCredits)} 灵石
                       </span>

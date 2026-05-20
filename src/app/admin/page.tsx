@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { ApiForm } from "@/components/api-form";
 import { Panel } from "@/components/panel";
+import { getBillingMode } from "@/lib/billing-mode";
 import { getAdminDashboard } from "@/lib/projects";
 import { getPersistenceStatus } from "@/lib/store-persistence";
 
@@ -84,6 +85,7 @@ export default async function AdminPage() {
   const chapterDraftUsage = usageByType(dashboard, "generate_chapter");
   const reviewUsage = usageByType(dashboard, "review_chapter");
   const taskCardUsage = usageByType(dashboard, "generate_task_card");
+  const isCreditsMode = getBillingMode() === "credits";
 
   return (
     <div className="grid">
@@ -91,8 +93,8 @@ export default async function AdminPage() {
         <div className="hero-top">
           <div>
             <div className="pill success">管理后台</div>
-            <h1>用户、灵石和 AI 任务运营</h1>
-            <p>这里用于查看注册用户、灵石余额、AI 消耗情况，并给用户手动充值或赠送灵石。</p>
+            <h1>{isCreditsMode ? "用户、灵石和 AI 任务运营" : "用户、授权和 AI 用量"}</h1>
+            <p>{isCreditsMode ? "这里用于查看注册用户、灵石余额、AI 消耗情况，并给用户手动充值或赠送灵石。" : "当前是一次性授权/本地部署模式，这里主要查看用户、存储状态和 AI 任务用量。"}</p>
           </div>
           <div className="hero-actions">
             <span className="chip">用户 {formatNumber(dashboard.totalUsers)}</span>
@@ -107,16 +109,16 @@ export default async function AdminPage() {
             <span>注册用户</span>
           </div>
           <div className="stat-card">
-            <strong>{formatNumber(dashboard.totalCreditsBalance)}</strong>
-            <span>用户剩余灵石</span>
+            <strong>{isCreditsMode ? formatNumber(dashboard.totalCreditsBalance) : "自带 Key"}</strong>
+            <span>{isCreditsMode ? "用户剩余灵石" : "计费模式"}</span>
           </div>
           <div className="stat-card">
-            <strong>{formatNumber(dashboard.totalConsumed)}</strong>
-            <span>累计消耗灵石</span>
+            <strong>{isCreditsMode ? formatNumber(dashboard.totalConsumed) : formatNumber(dashboard.aiUsage.totalTokens)}</strong>
+            <span>{isCreditsMode ? "累计消耗灵石" : "累计算力"}</span>
           </div>
           <div className="stat-card">
-            <strong>{formatNumber(dashboard.totalRecharged)}</strong>
-            <span>累计充值/赠送</span>
+            <strong>{isCreditsMode ? formatNumber(dashboard.totalRecharged) : formatNumber(dashboard.aiUsage.aiJobs)}</strong>
+            <span>{isCreditsMode ? "累计充值/赠送" : "AI 调用任务"}</span>
           </div>
         </div>
       </section>
@@ -149,15 +151,15 @@ export default async function AdminPage() {
         </div>
       </Panel>
 
-      <Panel title="AI 消耗看板" description="看清每类功能的算力用量和灵石成本。">
+      <Panel title="AI 消耗看板" description={isCreditsMode ? "看清每类功能的算力用量和灵石成本。" : "看清每类功能的算力用量；模型费用由部署方或用户自己的 Key 承担。"}>
         <div className="usage-summary">
           <div className="stat-card">
             <strong>{formatNumber(dashboard.aiUsage.totalTokens)}</strong>
             <span>总算力用量</span>
           </div>
           <div className="stat-card">
-            <strong>{formatNumber(dashboard.aiUsage.actualCredits)}</strong>
-            <span>AI 实扣灵石</span>
+            <strong>{isCreditsMode ? formatNumber(dashboard.aiUsage.actualCredits) : "不扣费"}</strong>
+            <span>{isCreditsMode ? "AI 实扣灵石" : "平台计费"}</span>
           </div>
           <div className="stat-card">
             <strong>{formatNumber(avg(analysisUsage?.totalTokens ?? 0, analysisUsage?.units ?? 0))}</strong>
@@ -171,12 +173,12 @@ export default async function AdminPage() {
 
         <div className="usage-summary">
           <div className="stat-card">
-            <strong>{formatNumber(avg(analysisUsage?.actualCredits ?? 0, analysisUsage?.units ?? 0))}</strong>
-            <span>分析一章灵石</span>
+            <strong>{isCreditsMode ? formatNumber(avg(analysisUsage?.actualCredits ?? 0, analysisUsage?.units ?? 0)) : "自理"}</strong>
+            <span>{isCreditsMode ? "分析一章灵石" : "分析费用"}</span>
           </div>
           <div className="stat-card">
-            <strong>{formatNumber(avg(chapterDraftUsage?.actualCredits ?? 0, chapterDraftUsage?.units ?? 0))}</strong>
-            <span>创作一章灵石</span>
+            <strong>{isCreditsMode ? formatNumber(avg(chapterDraftUsage?.actualCredits ?? 0, chapterDraftUsage?.units ?? 0)) : "自理"}</strong>
+            <span>{isCreditsMode ? "创作一章灵石" : "创作费用"}</span>
           </div>
           <div className="stat-card">
             <strong>{formatNumber(avg(reviewUsage?.totalTokens ?? 0, reviewUsage?.units ?? 0))}</strong>
@@ -196,7 +198,7 @@ export default async function AdminPage() {
               <span>单位</span>
               <span>总算力</span>
               <span>平均算力</span>
-              <span>平均灵石</span>
+              <span>{isCreditsMode ? "平均灵石" : "费用"}</span>
             </div>
             {dashboard.aiUsage.byType.map((item) => (
               <div key={item.type} className="usage-table-row">
@@ -205,7 +207,7 @@ export default async function AdminPage() {
                 <span>{formatNumber(item.units)} {unitName(item.type)}</span>
                 <span>{formatNumber(item.totalTokens)}</span>
                 <span>{formatNumber(avg(item.totalTokens, item.units))} / {unitName(item.type)}</span>
-                <span>{formatNumber(avg(item.actualCredits, item.units))} / {unitName(item.type)}</span>
+                <span>{isCreditsMode ? `${formatNumber(avg(item.actualCredits, item.units))} / ${unitName(item.type)}` : "自理"}</span>
               </div>
             ))}
           </div>
@@ -217,7 +219,7 @@ export default async function AdminPage() {
         )}
       </Panel>
 
-      <Panel title="用户列表" description="查看用户用量，并为用户手动补灵石。">
+      <Panel title="用户列表" description={isCreditsMode ? "查看用户用量，并为用户手动补灵石。" : "查看用户项目、任务和 AI 用量。"}>
         <div className="list">
           {dashboard.users.length === 0 ? (
             <div className="empty-state">
@@ -239,19 +241,20 @@ export default async function AdminPage() {
 
                 <div className="meta-row">
                   <span className="chip">套餐 {user.plan}</span>
-                  <span className="chip">灵石余额 {formatNumber(user.creditsBalance)}</span>
+                  {isCreditsMode ? <span className="chip">灵石余额 {formatNumber(user.creditsBalance)}</span> : null}
                   <span className="chip">项目 {formatNumber(user.projectCount)}</span>
                   <span className="chip">任务 {formatNumber(user.aiJobCount)}</span>
                   <span className="chip">模型 {user.aiModel}</span>
-                  <span className="chip">倍率 {user.aiBillingMarkup}x</span>
-                  <span className="chip">最低 {formatNumber(user.aiBillingMinimum)} 灵石</span>
+                  {isCreditsMode ? <span className="chip">倍率 {user.aiBillingMarkup}x</span> : null}
+                  {isCreditsMode ? <span className="chip">最低 {formatNumber(user.aiBillingMinimum)} 灵石</span> : null}
                   <span className="chip">算力 {formatNumber(user.aiTokenTotal)}</span>
-                  <span className="chip">AI实扣灵石 {formatNumber(user.aiCreditActual)}</span>
-                  <span className="chip">消耗 {formatNumber(user.creditConsumed)}</span>
-                  <span className="chip">充值/赠送 {formatNumber(user.creditRecharged)}</span>
+                  {isCreditsMode ? <span className="chip">AI实扣灵石 {formatNumber(user.aiCreditActual)}</span> : null}
+                  {isCreditsMode ? <span className="chip">消耗 {formatNumber(user.creditConsumed)}</span> : null}
+                  {isCreditsMode ? <span className="chip">充值/赠送 {formatNumber(user.creditRecharged)}</span> : null}
                   <span className="chip">活跃 {formatTime(user.lastActiveAt)}</span>
                 </div>
 
+                {isCreditsMode ? (
                 <ApiForm className="forms" endpoint="/api/admin/credits" resetOnSuccess>
                   <input type="hidden" name="userId" value={user.id} />
                   <div className="split-panels">
@@ -268,7 +271,9 @@ export default async function AdminPage() {
                     手动充值灵石
                   </button>
                 </ApiForm>
+                ) : null}
 
+                {isCreditsMode ? (
                 <ApiForm className="forms" endpoint="/api/admin/user-ai-controls">
                   <input type="hidden" name="userId" value={user.id} />
                   <div className="admin-control-grid">
@@ -348,6 +353,7 @@ export default async function AdminPage() {
                     保存 AI 与灵石策略
                   </button>
                 </ApiForm>
+                ) : null}
               </div>
             ))
           )}

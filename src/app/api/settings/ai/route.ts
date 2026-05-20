@@ -16,11 +16,12 @@ export async function PUT(request: Request) {
     apiKey: String(body.apiKey ?? ""),
     model: String(body.model ?? ""),
     timeoutMs: Number(body.timeoutMs ?? 60000),
-    clearApiKey: body.clearApiKey === true
+    clearApiKey: body.clearApiKey === true || body.clearApiKey === "true"
   });
 
   return Response.json({
     settings: {
+      billingMode: settings.billingMode,
       providerName: settings.providerName,
       baseUrl: settings.baseUrl,
       model: settings.model,

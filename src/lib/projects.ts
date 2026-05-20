@@ -51,6 +51,7 @@ import {
   resolveAiTaskPricing,
   type AiTaskPricingOverrides
 } from "@/lib/ai-task-pricing";
+import { getBillingMode, isCreditsBillingMode } from "@/lib/billing-mode";
 import { splitNovelText } from "@/lib/chapters";
 import { loadPersistedStore, savePersistedStore } from "@/lib/store-persistence";
 
@@ -980,11 +981,13 @@ export async function registerUser(input: { email: string; password: string; nam
   };
 
   store.users.push(user);
-  addCreditTransaction(store, user, {
-    type: "grant",
-    amount: INITIAL_TRIAL_CREDITS,
-    reason: "新账号注册送灵石"
-  });
+  if (isCreditsBillingMode()) {
+    addCreditTransaction(store, user, {
+      type: "grant",
+      amount: INITIAL_TRIAL_CREDITS,
+      reason: "新账号注册送灵石"
+    });
+  }
   if (store.projects.every((item) => !item.ownerUserId)) {
     claimLegacyWorkspace(store, user.id);
   }
@@ -1036,13 +1039,15 @@ export async function loginUser(input: { email: string; password: string }) {
   }
 
   user.plan = user.plan ?? "trial";
-  if (user.creditsBalance == null) {
+  if (isCreditsBillingMode() && user.creditsBalance == null) {
     user.creditsBalance = 0;
     addCreditTransaction(store, user, {
       type: "grant",
       amount: INITIAL_TRIAL_CREDITS,
       reason: "初始赠送灵石"
     });
+  } else if (user.creditsBalance == null) {
+    user.creditsBalance = 0;
   }
   user.updatedAt = timestamp;
   await writeStore(store);
@@ -1652,11 +1657,23 @@ function settleAiJobCredits(
     usedFallback?: boolean;
   }
 ) {
+  const billingMode = getBillingMode();
+
+  if (billingMode === "subscription") {
+    return {
+      mode: billingMode,
+      estimatedCredits: 0,
+      actualCredits: 0,
+      adjustmentCredits: 0
+    };
+  }
+
   const user = job.userId ? store.users.find((item) => item.id === job.userId) : null;
   const estimatedCredits = Math.max(0, getConsumedCreditsForJob(store, job.id) - getRefundedCreditsForJob(store, job.id));
 
   if (!user || estimatedCredits <= 0) {
     return {
+      mode: billingMode,
       estimatedCredits,
       actualCredits: 0,
       adjustmentCredits: 0
@@ -1687,6 +1704,7 @@ function settleAiJobCredits(
   }
 
   return {
+    mode: billingMode,
     estimatedCredits,
     actualCredits,
     adjustmentCredits
@@ -1782,6 +1800,10 @@ function consumeCreditsForAiJob(
   user: StoredUser,
   job: Pick<StoredAiJob, "id" | "type" | "input">
 ) {
+  if (!isCreditsBillingMode()) {
+    return 0;
+  }
+
   const cost = estimateAiJobCredits(job.type, job.input, user);
 
   if (getUserCreditBalance(user) < cost) {
@@ -1803,6 +1825,10 @@ function consumeCreditsForAiJob(
 }
 
 function refundAiJobCredits(store: AppStore, job: StoredAiJob, reason: string) {
+  if (!isCreditsBillingMode()) {
+    return;
+  }
+
   const user = job.userId ? store.users.find((item) => item.id === job.userId) : null;
 
   if (!user) {
@@ -2002,6 +2028,7 @@ function buildAccountOverview(
   const creditTransactionTotal = getCreditTransactionCount(store, user.id);
   return {
     user: toAuthUser(user),
+    billingMode: getBillingMode(),
     planName: limits.name,
     usage,
     limits,
@@ -4264,6 +4291,7 @@ export async function getPublicAiSettings() {
   const key = settings.apiKey.trim();
 
   return {
+    billingMode: getBillingMode(),
     providerName: settings.providerName,
     baseUrl: settings.baseUrl,
     model: settings.model,
@@ -4286,20 +4314,28 @@ export async function updateAiSettings(input: {
   const currentUser = await requireCurrentUser(store);
   const current = getPrimaryAiSettings(store, currentUser.id);
   const timestamp = now();
+  const billingMode = getBillingMode();
+  const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
+  const model = input.model.trim();
+  const providerName = input.providerName.trim();
+  const nextApiKey = input.clearApiKey ? "" : input.apiKey?.trim() || current?.apiKey || "";
 
   const nextSettings: StoredAiSettings = {
     userId: currentUser.id,
-    providerName: input.providerName.trim() || "DeepSeek",
-    baseUrl: input.baseUrl.trim().replace(/\/+$/, ""),
-    apiKey: input.clearApiKey ? "" : input.apiKey?.trim() || current?.apiKey || "",
-    model: input.model.trim(),
+    providerName: billingMode === "credits" ? "DeepSeek" : providerName || "Custom",
+    baseUrl: billingMode === "credits" ? "https://api.deepseek.com" : baseUrl,
+    apiKey: billingMode === "credits" ? current?.apiKey || "" : nextApiKey,
+    model,
     timeoutMs: Number.isFinite(input.timeoutMs) && input.timeoutMs > 0 ? input.timeoutMs : 60000,
     updatedAt: timestamp
   };
   setPrimaryAiSettings(store, nextSettings);
 
   await writeStore(store);
-  return nextSettings;
+  return {
+    ...nextSettings,
+    billingMode
+  };
 }
 
 export async function createTemplateFromProject(projectId: string) {

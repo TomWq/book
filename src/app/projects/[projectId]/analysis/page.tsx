@@ -4,6 +4,7 @@ import { AnalysisJobRunner } from "@/components/analysis-job-runner";
 import { ApiButton } from "@/components/api-form";
 import { AnalysisRangeForm } from "@/components/analysis-range-form";
 import { Panel } from "@/components/panel";
+import { getBillingMode } from "@/lib/billing-mode";
 import { calculateAiJobProgress, getProject, getProjectAnalysis } from "@/lib/projects";
 
 export default async function ProjectAnalysisPage({
@@ -12,6 +13,7 @@ export default async function ProjectAnalysisPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
+  const billingMode = getBillingMode();
   const [project, analysis] = await Promise.all([
     getProject(projectId),
     getProjectAnalysis(projectId)
@@ -289,6 +291,7 @@ export default async function ProjectAnalysisPage({
               chaptersCount={chaptersCount}
               hasStoryAnalysis={hasStoryAnalysis}
               analysisRunning={analysisRunning}
+              showCreditEstimate={billingMode === "credits"}
             />
           </Panel>
         </aside>
