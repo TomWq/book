@@ -21,6 +21,10 @@ export function getAppRuntime(): AppRuntime {
     return "cloud";
   }
 
+  if (process.env.NODE_ENV === "production") {
+    return "cloud";
+  }
+
   return "desktop";
 }
 
