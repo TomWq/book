@@ -96,6 +96,7 @@ async function getPostgresClient() {
         const { default: postgresClientFactory } = await import("postgres");
         const client = postgresClientFactory(url, {
           max: Number(process.env.DATABASE_POOL_SIZE ?? 3),
+          connect_timeout: Number(process.env.DATABASE_CONNECT_TIMEOUT_SECONDS ?? 5),
           idle_timeout: 20,
           onnotice: () => {}
         });
