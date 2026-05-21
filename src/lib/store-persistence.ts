@@ -2088,10 +2088,13 @@ export async function loadPersistedStore<T>(storePath: string, fallback: T) {
 export async function savePersistedStore<T>(storePath: string, store: T) {
   const postgresClient = await getPostgresClient();
   const payload = JSON.stringify(store, null, 2);
+  const shouldSyncStoreRecords = process.env.STORE_RECORD_SYNC_MODE?.trim() === "always";
 
   if (postgresClient) {
     await upsertAppStateInPostgres(postgresClient, payload);
-    await syncPostgresStoreRecords(postgresClient, store);
+    if (shouldSyncStoreRecords) {
+      await syncPostgresStoreRecords(postgresClient, store);
+    }
     return;
   }
 
