@@ -15,7 +15,7 @@ export default async function LoginPage({
 
   const user = await getCurrentUser();
   const params = await searchParams;
-  const nextPath = params.next?.startsWith("/") ? params.next : "/";
+  const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
 
   return (
     <section className="auth-page">

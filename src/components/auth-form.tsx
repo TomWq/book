@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 type AuthMode = "login" | "register";
 
@@ -15,40 +14,43 @@ export function AuthForm({
   nextPath: string;
   initialError?: string;
 }) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState(initialError ?? "");
   const isLogin = mode === "login";
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setIsPending(true);
     const formData = new FormData(event.currentTarget);
-    const response = await fetch(`/api/auth/${mode}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-nw-name": encodeURIComponent(String(formData.get("name") ?? "")),
-        "x-nw-email": encodeURIComponent(String(formData.get("email") ?? "")),
-        "x-nw-password": encodeURIComponent(String(formData.get("password") ?? ""))
-      },
-      body: JSON.stringify({
-        name: String(formData.get("name") ?? ""),
-        email: String(formData.get("email") ?? ""),
-        password: String(formData.get("password") ?? "")
-      })
-    });
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-nw-name": encodeURIComponent(String(formData.get("name") ?? "")),
+          "x-nw-email": encodeURIComponent(String(formData.get("email") ?? "")),
+          "x-nw-password": encodeURIComponent(String(formData.get("password") ?? ""))
+        },
+        body: JSON.stringify({
+          name: String(formData.get("name") ?? ""),
+          email: String(formData.get("email") ?? ""),
+          password: String(formData.get("password") ?? "")
+        })
+      });
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => null);
-      setError(body?.error ? String(body.error) : isLogin ? "登录失败" : "注册失败");
-      return;
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setError(body?.error ? String(body.error) : isLogin ? "登录失败" : "注册失败");
+        setIsPending(false);
+        return;
+      }
+
+      window.location.replace(nextPath);
+    } catch {
+      setError(isLogin ? "登录失败，请稍后重试" : "注册失败，请稍后重试");
+      setIsPending(false);
     }
-
-    startTransition(() => {
-      router.push(nextPath);
-      router.refresh();
-    });
   }
 
   return (
