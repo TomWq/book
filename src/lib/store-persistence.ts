@@ -117,6 +117,17 @@ export async function getPersistencePostgresClient() {
   return getPostgresClient();
 }
 
+export async function ensurePersistencePostgresSchema() {
+  const client = await getPostgresClient();
+
+  if (!client) {
+    return null;
+  }
+
+  await ensurePostgresSchema(client);
+  return client;
+}
+
 async function ensurePostgresSchema(sql: PostgresClient) {
   await sql`
     CREATE TABLE IF NOT EXISTS "AppState" (

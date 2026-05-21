@@ -58,6 +58,7 @@ import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode, isCreditsBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
 import { splitNovelText } from "@/lib/chapters";
 import {
+  ensurePersistencePostgresSchema,
   getPersistencePostgresClient,
   loadPersistedStore,
   savePersistedStore
@@ -889,9 +890,15 @@ function postJsonWithSocksProxy(input: {
 }
 
 function readRemoteLicenseErrorMessage(body: unknown) {
-  return body && typeof body === "object" && "error" in body
-    ? String((body as { error: unknown }).error)
-    : "授权中心验证失败";
+  if (body && typeof body === "object" && "error" in body) {
+    return String((body as { error: unknown }).error);
+  }
+
+  if (typeof body === "string" && body.trim()) {
+    return body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 220);
+  }
+
+  return "授权中心验证失败";
 }
 
 async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
@@ -927,10 +934,19 @@ async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
           cache: "no-store",
           signal: controller.signal
         });
+        const raw = await response.text();
+        let body: unknown = null;
+
+        try {
+          body = raw ? JSON.parse(raw) : null;
+        } catch {
+          body = raw;
+        }
+
         result = {
           ok: response.ok,
           status: response.status,
-          body: await response.json().catch(() => null)
+          body
         };
       } finally {
         clearTimeout(timeout);
@@ -944,7 +960,7 @@ async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
   }
 
   if (!result.ok) {
-    throw new Error("授权中心 " + serverUrl + " 返回：" + readRemoteLicenseErrorMessage(result.body));
+    throw new Error("授权中心 " + serverUrl + " 返回 " + result.status + "：" + readRemoteLicenseErrorMessage(result.body));
   }
 
   return (result.body as { license?: LicenseActivationResult } | null)?.license as LicenseActivationResult;
@@ -993,6 +1009,203 @@ function isAdminUser(store: AppStore, user: StoredUser) {
   }
 
   return false;
+}
+
+function isAdminAuthUser(user: StoredUser) {
+  return user.role === "admin" || getAdminEmails().has(normalizeEmail(user.email));
+}
+
+function parseStoreRecordPayload(value: unknown) {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function storedUserFromPayload(payload: unknown) {
+  const item = parseStoreRecordPayload(payload);
+
+  if (!item?.id || !item.email) {
+    return null;
+  }
+
+  return {
+    id: String(item.id),
+    email: String(item.email),
+    name: String(item.name ?? ""),
+    passwordSalt: String(item.passwordSalt ?? ""),
+    passwordHash: String(item.passwordHash ?? ""),
+    role: item.role === "admin" ? "admin" : "user",
+    plan: item.plan === "creator" || item.plan === "studio" ? item.plan : "trial",
+    creditsBalance: Number(item.creditsBalance ?? 0),
+    licenseCustomerId: item.licenseCustomerId ? String(item.licenseCustomerId) : undefined,
+    licenseCodeHash: item.licenseCodeHash ? String(item.licenseCodeHash) : undefined,
+    licenseActivatedAt: item.licenseActivatedAt ? String(item.licenseActivatedAt) : undefined,
+    onboardingCompletedAt: item.onboardingCompletedAt ? String(item.onboardingCompletedAt) : undefined,
+    createdAt: String(item.createdAt ?? now()),
+    updatedAt: String(item.updatedAt ?? now())
+  } satisfies StoredUser;
+}
+
+async function readPostgresUserByEmail(email: string) {
+  const sql = await ensurePersistencePostgresSchema();
+
+  if (!sql) {
+    return null;
+  }
+
+  const rows = await sql`
+    SELECT "payload"
+    FROM "StoreRecord"
+    WHERE "entityType" = 'users'
+      AND lower("payload"->>'email') = ${normalizeEmail(email)}
+    LIMIT 1
+  ` as Array<{ payload?: unknown }>;
+
+  return storedUserFromPayload(rows[0]?.payload);
+}
+
+async function writePostgresRecord(entityType: string, item: Record<string, unknown>) {
+  const sql = await ensurePersistencePostgresSchema();
+
+  if (!sql) {
+    return false;
+  }
+
+  const id = `${entityType}:${String(item.id ?? randomUUID())}`;
+  const payload = JSON.stringify(item);
+
+  await sql`
+    INSERT INTO "StoreRecord" (
+      "id", "entityType", "userId", "ownerUserId", "projectId", "payload"
+    )
+    VALUES (
+      ${id},
+      ${entityType},
+      ${item.userId ? String(item.userId) : null},
+      ${item.ownerUserId ? String(item.ownerUserId) : null},
+      ${item.projectId ? String(item.projectId) : null},
+      ${payload}::jsonb
+    )
+    ON CONFLICT ("id") DO UPDATE SET
+      "entityType" = EXCLUDED."entityType",
+      "userId" = EXCLUDED."userId",
+      "ownerUserId" = EXCLUDED."ownerUserId",
+      "projectId" = EXCLUDED."projectId",
+      "payload" = EXCLUDED."payload",
+      "updatedAt" = now()
+  `;
+
+  return true;
+}
+
+async function deleteExpiredPostgresSessions(userId: string, timestamp: string) {
+  const sql = await ensurePersistencePostgresSchema();
+
+  if (!sql) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM "StoreRecord"
+    WHERE "entityType" = 'sessions'
+      AND "userId" = ${userId}
+      AND COALESCE("payload"->>'expiresAt', '') <= ${timestamp}
+  `;
+}
+
+async function registerUserViaPostgres(input: { email: string; password: string; name: string }) {
+  if (!process.env.DATABASE_URL?.trim().startsWith("postgres")) {
+    return null;
+  }
+
+  const email = normalizeEmail(input.email);
+  const name = input.name.trim();
+  const password = input.password.trim();
+
+  if (!email || !password || !name) {
+    throw new Error("请完整填写邮箱、用户名和密码");
+  }
+
+  const existing = await readPostgresUserByEmail(email);
+
+  if (existing) {
+    throw new Error("该邮箱已注册，请直接登录");
+  }
+
+  const timestamp = now();
+  const { salt, hash } = hashPassword(password);
+  const user: StoredUser = {
+    id: randomUUID(),
+    email,
+    name,
+    passwordSalt: salt,
+    passwordHash: hash,
+    role: isAdminAuthUser({ email, role: "user" } as StoredUser) ? "admin" : "user",
+    plan: "trial",
+    creditsBalance: isCreditsBillingMode() ? INITIAL_TRIAL_CREDITS : 0,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  const token = randomUUID();
+  const session: StoredSession = {
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  };
+
+  await writePostgresRecord("users", user as unknown as Record<string, unknown>);
+  await writePostgresRecord("sessions", session as unknown as Record<string, unknown>);
+  await setSessionCookie(token);
+  return toAuthUser(user);
+}
+
+async function loginUserViaPostgres(input: { email: string; password: string }) {
+  if (!process.env.DATABASE_URL?.trim().startsWith("postgres")) {
+    return null;
+  }
+
+  const email = normalizeEmail(input.email);
+  const password = input.password.trim();
+
+  if (!email || !password) {
+    throw new Error("请填写邮箱和密码");
+  }
+
+  const user = await readPostgresUserByEmail(email);
+
+  if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) {
+    throw new Error("邮箱或密码错误");
+  }
+
+  const timestamp = now();
+  const token = randomUUID();
+  const session: StoredSession = {
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  };
+
+  user.role = isAdminAuthUser(user) ? "admin" : user.role;
+  user.plan = user.plan ?? "trial";
+  user.creditsBalance = user.creditsBalance ?? 0;
+  user.updatedAt = timestamp;
+  await deleteExpiredPostgresSessions(user.id, timestamp);
+  await writePostgresRecord("users", user as unknown as Record<string, unknown>);
+  await writePostgresRecord("sessions", session as unknown as Record<string, unknown>);
+  await setSessionCookie(token);
+  return toAuthUser(user);
 }
 
 async function requireAdminUser(store?: AppStore) {
@@ -1642,6 +1855,12 @@ export async function registerUser(input: { email: string; password: string; nam
     throw new Error("当前为授权模式，请使用激活码进入");
   }
 
+  const postgresUser = await registerUserViaPostgres(input);
+
+  if (postgresUser) {
+    return postgresUser;
+  }
+
   const store = await readStore();
   const email = normalizeEmail(input.email);
   const name = input.name.trim();
@@ -1700,6 +1919,12 @@ export async function registerUser(input: { email: string; password: string; nam
 export async function loginUser(input: { email: string; password: string }) {
   if (isDesktopRuntime()) {
     throw new Error("当前为授权模式，请使用激活码进入");
+  }
+
+  const postgresUser = await loginUserViaPostgres(input);
+
+  if (postgresUser) {
+    return postgresUser;
   }
 
   const store = await readStore();
