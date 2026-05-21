@@ -76,9 +76,13 @@ LICENSE_SERVER_TIMEOUT_MS="30000"
 
 ```bash
 APP_RUNTIME="cloud"
-DATABASE_URL="postgresql://USER:PASSWORD@HOST/db?sslmode=require"
+APP_AUTH_PROVIDER="local"
+DATABASE_URL="file:/www/wwwroot/book/data/license-center.db"
+APP_STORE_PATH="/www/wwwroot/book/data/app-db.json"
 ADMIN_EMAILS="你的管理员邮箱"
 ```
+
+如果云端只用于管理员下发授权码和客户端激活校验，可以使用 `APP_AUTH_PROVIDER="local"` + SQLite，避免依赖 Supabase/PostgreSQL。完整部署步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 
 ## 核心流程
 

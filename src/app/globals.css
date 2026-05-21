@@ -4971,7 +4971,80 @@ form[aria-busy="true"] button[type="submit"] {
   gap: 14px;
 }
 
+.book-step-nav {
+  position: sticky;
+  top: 72px;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: none;
+  backdrop-filter: blur(12px) saturate(140%);
+  overflow: hidden;
+}
+
+.book-step-nav button {
+  min-width: 0;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.book-step-nav button:last-child {
+  border-right: 0;
+}
+
+.book-step-nav button:hover {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+.book-step-nav button.active {
+  background: #fff1e8;
+  border-right-color: rgba(255, 107, 26, 0.18);
+  color: #d94d00;
+}
+
+.book-step-nav span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #eef2f7;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.book-step-nav button.active span {
+  background: #ff6b1a;
+  color: #ffffff;
+}
+
+.book-step-nav strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .book-create-section {
+  scroll-margin-top: 132px;
   display: grid;
   gap: 12px;
   padding: 16px;
@@ -6421,6 +6494,25 @@ form[aria-busy="true"] button[type="submit"] {
   .book-create-preview,
   .book-create-side {
     position: static;
+  }
+
+  .book-step-nav {
+    top: 10px;
+    border-radius: 12px;
+  }
+
+  .book-step-nav button {
+    min-height: 46px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .book-step-nav span {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
   }
 
   .book-create-preview {

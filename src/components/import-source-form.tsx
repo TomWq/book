@@ -36,10 +36,10 @@ export function ImportSourceForm({ projectId }: { projectId: string }) {
     };
     const payloadSize = new Blob([JSON.stringify(payload)]).size;
 
-    if (payloadSize > VERCEL_FUNCTION_PAYLOAD_LIMIT_BYTES) {
-      setError("单次导入文本过大。线上建议先截取前 30 章，或把长篇拆成多个 TXT 分批导入。");
-      return;
-    }
+    // if (payloadSize > VERCEL_FUNCTION_PAYLOAD_LIMIT_BYTES) {
+    //   setError("单次导入文本过大。线上建议先截取前 30 章，或把长篇拆成多个 TXT 分批导入。");
+    //   return;
+    // }
 
     const response = await fetch(`/api/projects/${projectId}/source-texts`, {
       method: "POST",

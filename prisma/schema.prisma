@@ -384,6 +384,7 @@ model AiSetting {
 
 model User {
   id             String   @id
+  supabaseUserId String?
   email          String   @unique
   name           String
   passwordSalt   String

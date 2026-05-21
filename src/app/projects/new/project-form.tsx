@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChangeEvent, FormEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { novelTaxonomy, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
 const tagSections = [
@@ -11,10 +11,17 @@ const tagSections = [
   { key: "roles", label: "角色" }
 ] as const;
 
+const creationSteps = [
+  { id: "book-step-identity", index: "01", label: "作品身份" },
+  { id: "book-step-audience", index: "02", label: "读者与标签" },
+  { id: "book-step-story", index: "03", label: "故事起点" }
+] as const;
+
 const maxSelectedTagsPerGroup = 2;
 
 type TagSectionKey = (typeof tagSections)[number]["key"];
 type TitleNamingStyle = "fanqie" | "qidian";
+type CreationStepId = (typeof creationSteps)[number]["id"];
 
 function asText(value: FormDataEntryValue | null) {
   return String(value ?? "").trim();
@@ -28,6 +35,7 @@ export function ProjectForm() {
   const [error, setError] = useState("");
   const [assistError, setAssistError] = useState("");
   const [name, setName] = useState("");
+  const [titleConcept, setTitleConcept] = useState("");
   const [authorName, setAuthorName] = useState("");
   const [coverImageUrl, setCoverImageUrl] = useState("");
   const [titleNamingStyle, setTitleNamingStyle] = useState<TitleNamingStyle>("fanqie");
@@ -41,6 +49,7 @@ export function ProjectForm() {
   const [activeTagSection, setActiveTagSection] = useState<TagSectionKey>("mainCategories");
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [protagonistSuggestions, setProtagonistSuggestions] = useState<string[]>([]);
+  const [activeStep, setActiveStep] = useState<CreationStepId>("book-step-identity");
 
   const coverTitle = name || "书本名称";
   const coverAuthor = authorName.trim() || "作者名称";
@@ -118,6 +127,40 @@ export function ProjectForm() {
     });
   }
 
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") {
+      return;
+    }
+
+    const sections = creationSteps
+      .map((step) => document.getElementById(step.id))
+      .filter((element): element is HTMLElement => Boolean(element));
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+
+        if (visible?.target.id) {
+          setActiveStep(visible.target.id as CreationStepId);
+        }
+      },
+      {
+        rootMargin: "-120px 0px -62% 0px",
+        threshold: 0
+      }
+    );
+
+    sections.forEach((section) => observer.observe(section));
+
+    return () => observer.disconnect();
+  }, []);
+
+  function scrollToStep(stepId: CreationStepId) {
+    setActiveStep(stepId);
+    document.getElementById(stepId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   function getCurrentContext() {
     const formData = formRef.current ? new FormData(formRef.current) : new FormData();
 
@@ -126,6 +169,7 @@ export function ProjectForm() {
       genre,
       targetReader,
       titleNamingStyle,
+      titleConcept,
       tags: selectedTags,
       protagonistNames: [protagonist1, protagonist2].map((item) => item.trim()).filter(Boolean),
       coreSellingPoint: asText(formData.get("coreSellingPoint")),
@@ -148,7 +192,7 @@ export function ProjectForm() {
           ...getCurrentContext()
         })
       });
-      const payload = await response.json().catch(() => ({}));
+      const payload = await response.json().catch((e) => ({ error: String(e) }));
 
       if (!response.ok) {
         throw new Error(payload?.error || "AI 辅助生成失败");
@@ -282,13 +326,39 @@ export function ProjectForm() {
       </aside>
 
       <div className="book-create-main">
-        <div className="book-create-section">
+        <nav className="book-step-nav" aria-label="新书创建步骤">
+          {creationSteps.map((step) => (
+            <button
+              key={step.id}
+              type="button"
+              className={activeStep === step.id ? "active" : ""}
+              aria-current={activeStep === step.id ? "step" : undefined}
+              onClick={() => scrollToStep(step.id)}
+            >
+              <span>{step.index}</span>
+              <strong>{step.label}</strong>
+            </button>
+          ))}
+        </nav>
+
+        <div className="book-create-section" id="book-step-identity">
           <div className="section-head compact">
             <div>
               <div className="mini-label">第一步</div>
               <h3>作品身份</h3>
             </div>
             <span className="chip">创作项目</span>
+          </div>
+
+          <div className="field">
+            <div className="field-label">起名构思（可选）</div>
+            <textarea
+              value={titleConcept}
+              onChange={(event) => setTitleConcept(event.target.value)}
+              placeholder="可先不填；如果暂时想不出书名，就写题材、主角处境、核心冲突和爽点关键词，让 AI 据此起名"
+              maxLength={240}
+            />
+            <div className="field-hint">可选，留空也能直接让 AI 按当前题材起名。{titleConcept.length}/240</div>
           </div>
 
           <div className="field">
@@ -300,7 +370,7 @@ export function ProjectForm() {
                 onClick={() => runAssist("titles")}
                 disabled={Boolean(assistLoading)}
               >
-                {assistLoading === "titles" ? "生成中..." : "AI 起名"}
+                {assistLoading === "titles" ? "生成中..." : titleConcept.trim() ? "AI 按构思起名" : "AI 起名"}
               </button>
             </div>
             <div className="title-style-picker" aria-label="AI 起名风格">
@@ -378,7 +448,7 @@ export function ProjectForm() {
           </div>
         </div>
 
-        <div className="book-create-section">
+        <div className="book-create-section" id="book-step-audience">
           <div className="section-head compact">
             <div>
               <div className="mini-label">第二步</div>
@@ -529,7 +599,7 @@ export function ProjectForm() {
           ) : null}
         </div>
 
-        <div className="book-create-section">
+        <div className="book-create-section" id="book-step-story">
           <div className="section-head compact">
             <div>
               <div className="mini-label">第三步</div>

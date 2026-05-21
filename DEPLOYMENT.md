@@ -1,78 +1,114 @@
-# Vercel + Neon 部署说明
+# 轻量授权中心部署说明
+
+这个服务端只负责管理员登录、授权码生成、客户端激活校验和激活记录保存，不在服务器上跑 AI。
 
 推荐线上组合：
 
-1. Vercel 部署 Next.js 应用。
-2. Neon 或 Supabase 提供 PostgreSQL 数据库。
-3. AI 服务 Key 写入 Vercel 环境变量。
+1. 轻量云服务器运行 Next.js。
+2. SQLite 文件保存授权码和登录会话。
+3. Nginx 反向代理到 Node 服务。
+4. 定期备份 SQLite 数据库文件。
 
-## 1. 准备数据库
+## 1. 环境变量
 
-在 Neon 新建一个 PostgreSQL 项目，复制连接串，格式类似：
-
-```env
-DATABASE_URL="postgresql://USER:PASSWORD@HOST/db?sslmode=require"
-```
-
-不要在线上使用 `file:./dev.db` 或本地 SQLite 文件。Vercel 的运行环境不适合保存本地数据库文件。
-
-## 2. Vercel 环境变量
-
-在 Vercel 项目设置里添加这些变量：
+服务器 `.env` 建议：
 
 ```env
-DATABASE_URL="postgresql://USER:PASSWORD@HOST/db?sslmode=require"
-DATABASE_POOL_SIZE="3"
+APP_RUNTIME="cloud"
+APP_AUTH_PROVIDER="local"
+APP_BILLING_MODE="subscription"
+
+DATABASE_URL="file:/www/wwwroot/book/data/license-center.db"
+APP_STORE_PATH="/www/wwwroot/book/data/app-db.json"
 STORE_RECORD_READ_MODE="auto"
-AI_PROVIDER_NAME="DeepSeek"
-AI_BASE_URL="https://api.deepseek.com"
-AI_API_KEY="你的 AI Key"
-AI_MODEL="deepseek-v4-flash"
-AI_TIMEOUT_MS="60000"
-JOB_WORKER_TOKEN="一串足够长的随机密钥"
+
 ADMIN_EMAILS="你的管理员邮箱"
+JOB_WORKER_TOKEN="一串足够长的随机密钥"
+
+AI_PROVIDER_NAME=""
+AI_BASE_URL=""
+AI_API_KEY=""
+AI_MODEL=""
+AI_TIMEOUT_MS="60000"
+
+NEXT_PUBLIC_SUPABASE_URL=""
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=""
+SUPABASE_SERVICE_ROLE_KEY=""
 ```
 
-如果不想让平台默认使用服务端 AI Key，也可以留空 `AI_API_KEY`，用户登录后在「AI 设置」里填写自己的 Key。
+说明：
 
-## 3. Vercel 构建设置
+1. `APP_RUNTIME="cloud"`：让服务器作为授权中心运行。
+2. `APP_AUTH_PROVIDER="local"`：使用本机邮箱密码登录，不依赖 Supabase。
+3. `DATABASE_URL`：SQLite 文件路径，必须放在服务器持久化目录里。
+4. `APP_STORE_PATH`：主状态文件，建议也放在同一个持久化目录里。
+5. `ADMIN_EMAILS`：这里填写的邮箱注册后自动拥有管理员权限。
 
-默认设置即可：
+## 2. 首次启动
+
+```bash
+npm install
+npm run build
+npm run start
+```
+
+访问：
 
 ```text
-Framework Preset: Next.js
-Install Command: npm install
-Build Command: npm run build
-Output Directory: .next
+http://服务器IP:3000/register
 ```
 
-项目的 `postinstall` 会自动执行 `prisma generate`。
+用 `ADMIN_EMAILS` 里配置的邮箱注册，然后进入：
 
-## 4. 部署后检查
+```text
+http://服务器IP:3000/admin
+```
 
-部署完成后访问：
+## 3. PM2 常驻运行
+
+```bash
+npm install -g pm2
+pm2 start npm --name book-license-center -- start
+pm2 save
+pm2 startup
+```
+
+## 4. 客户端激活地址
+
+客户端的 `LICENSE_SERVER_URL` 填你的授权中心域名：
+
+```env
+LICENSE_SERVER_URL="https://你的域名"
+```
+
+客户端会请求：
+
+```text
+POST /api/license/activate
+```
+
+这个接口是公开接口，不需要管理员登录。
+
+## 5. 备份
+
+SQLite 数据都在 `DATABASE_URL` 指向的文件里，例如：
+
+```text
+/www/wwwroot/book/data/license-center.db
+```
+
+建议每天备份这个文件。迁移服务器时，只要带走 `.env` 和这个数据库文件即可。
+
+## 6. 部署后检查
 
 ```text
 https://你的域名/api/health
 ```
 
-再注册一个账号，跑一遍：
+然后检查：
 
-1. 创建拆书项目。
-2. 导入文本并分章。
-3. 生成章节分析。
-4. 保存模板。
-5. 从模板生成新书大纲。
-
-## 5. 后台任务
-
-页面内可以触发 AI 任务。如果要批量处理待执行任务，可以请求：
-
-```bash
-curl -X POST "https://你的域名/api/jobs/worker" \
-  -H "content-type: application/json" \
-  -H "x-worker-token: $JOB_WORKER_TOKEN" \
-  -d '{"limit":10}'
-```
-
-Vercel 不适合长期常驻 worker。如果需要定时跑任务，后续可以接入 Vercel Cron、GitHub Actions 或 Render Cron Job 调这个接口。
+1. 注册管理员账号。
+2. 登录 `/admin`。
+3. 生成一个授权码。
+4. 在客户端输入授权码完成激活。
+5. 回到 `/admin` 查看激活记录和设备绑定。

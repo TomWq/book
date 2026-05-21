@@ -18,11 +18,13 @@ export async function POST(request: Request) {
     rawAction === "protagonists" || rawAction === "description" || rawAction === "titles"
       ? rawAction
       : "titles";
+  const titleConcept = String(body.titleConcept ?? "");
 
   try {
     const result = await assistProjectCreation({
       action,
-      name: String(body.name ?? ""),
+      name: action === "titles" && titleConcept.trim() ? "" : String(body.name ?? ""),
+      titleConcept,
       genre: String(body.genre ?? ""),
       targetReader: String(body.targetReader ?? ""),
       tags: list(body.tags),

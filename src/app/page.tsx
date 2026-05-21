@@ -226,7 +226,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <div className="dashboard-workbench">
+      <div className="">
         <div className="dashboard-main">
           <Panel title="最近项目" description="拆书项目与创作项目统一管理">
             <div className="list">
@@ -279,7 +279,7 @@ export default async function HomePage() {
           </Panel>
         </div>
 
-        <aside className="dashboard-side">
+        {/* <aside className="dashboard-side">
           <Panel title="待处理任务" description="只显示待处理、处理中或失败后需要关注的任务">
             <div className="timeline">
               {workQueue.length === 0 ? (
@@ -332,7 +332,7 @@ export default async function HomePage() {
               ) : null}
             </div>
           </Panel>
-        </aside>
+        </aside> */}
       </div>
     </>
   );

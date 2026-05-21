@@ -57,6 +57,9 @@ import {
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode, isCreditsBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
 import { splitNovelText } from "@/lib/chapters";
+import { hasSupabaseAuthConfig } from "@/lib/supabase/config";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseServerClient, getSupabaseAuthUser } from "@/lib/supabase/server";
 import {
   ensurePersistencePostgresSchema,
   getPersistencePostgresClient,
@@ -397,6 +400,7 @@ export type StoredEditReport = {
 
 export type StoredUser = {
   id: string;
+  supabaseUserId?: string;
   email: string;
   name: string;
   passwordSalt: string;
@@ -990,6 +994,29 @@ function toAuthUser(user: StoredUser): AuthUserView {
   };
 }
 
+function userDisplayName(email: string, name?: string | null) {
+  const trimmedName = String(name ?? "").trim();
+  if (trimmedName) {
+    return trimmedName;
+  }
+
+  const localPart = normalizeEmail(email).split("@")[0] || "用户";
+  return localPart || "用户";
+}
+
+function buildPlaceholderPassword() {
+  const { salt, hash } = hashPassword(randomUUID());
+  return { salt, hash };
+}
+
+function authUserId(user: { id: string }) {
+  return String(user.id || "");
+}
+
+function authUserEmail(user: { email?: string | null }) {
+  return normalizeEmail(String(user.email ?? ""));
+}
+
 function getAdminEmails() {
   return new Set(
     String(process.env.ADMIN_EMAILS ?? "")
@@ -1036,6 +1063,7 @@ function storedUserFromPayload(payload: unknown) {
 
   return {
     id: String(item.id),
+    supabaseUserId: item.supabaseUserId ? String(item.supabaseUserId) : undefined,
     email: String(item.email),
     name: String(item.name ?? ""),
     passwordSalt: String(item.passwordSalt ?? ""),
@@ -1050,6 +1078,94 @@ function storedUserFromPayload(payload: unknown) {
     createdAt: String(item.createdAt ?? now()),
     updatedAt: String(item.updatedAt ?? now())
   } satisfies StoredUser;
+}
+
+function syncUserProfileFromSupabase(
+  store: AppStore,
+  authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }
+) {
+  const authId = authUserId(authUser);
+  const email = authUserEmail(authUser);
+  const displayName = userDisplayName(email, authUser.user_metadata?.name as string | undefined);
+  const timestamp = now();
+  const placeholderPassword = buildPlaceholderPassword();
+  const existingByAuthId = store.users.find((item) => item.supabaseUserId === authId);
+  const existingByEmail = store.users.find((item) => normalizeEmail(item.email) === email);
+  const user = existingByAuthId ?? existingByEmail;
+
+  if (user) {
+    let changed = false;
+
+    if (user.supabaseUserId !== authId) {
+      user.supabaseUserId = authId;
+      changed = true;
+    }
+
+    if (user.email !== email) {
+      user.email = email;
+      changed = true;
+    }
+
+    if (displayName && user.name !== displayName) {
+      user.name = displayName;
+      changed = true;
+    }
+
+    if (!user.role) {
+      user.role = getAdminEmails().has(email) ? "admin" : "user";
+      changed = true;
+    } else if (user.role !== "admin" && getAdminEmails().has(email)) {
+      user.role = "admin";
+      changed = true;
+    }
+
+    if (!user.plan) {
+      user.plan = "trial";
+      changed = true;
+    }
+
+    if (user.creditsBalance == null) {
+      user.creditsBalance = 0;
+      changed = true;
+    }
+
+    if (!user.passwordSalt) {
+      user.passwordSalt = placeholderPassword.salt;
+      changed = true;
+    }
+
+    if (!user.passwordHash) {
+      user.passwordHash = placeholderPassword.hash;
+      changed = true;
+    }
+
+    if (changed) {
+      user.updatedAt = timestamp;
+    }
+
+    return { user, changed };
+  }
+
+  const nextUser: StoredUser = {
+    id: randomUUID(),
+    supabaseUserId: authId,
+    email,
+    name: displayName,
+    passwordSalt: placeholderPassword.salt,
+    passwordHash: placeholderPassword.hash,
+    role: getAdminEmails().has(email) ? "admin" : "user",
+    plan: "trial",
+    creditsBalance: isCreditsBillingMode() ? INITIAL_TRIAL_CREDITS : 0,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  store.users.push(nextUser);
+  return { user: nextUser, changed: true };
+}
+
+async function getSupabaseCurrentUser() {
+  return await getSupabaseAuthUser({ writable: false });
 }
 
 async function readPostgresUserByEmail(email: string) {
@@ -1117,6 +1233,148 @@ async function deleteExpiredPostgresSessions(userId: string, timestamp: string) 
       AND "userId" = ${userId}
       AND COALESCE("payload"->>'expiresAt', '') <= ${timestamp}
   `;
+}
+
+async function registerUserViaSupabase(input: { email: string; password: string; name: string }) {
+  if (!hasSupabaseAuthConfig()) {
+    return null;
+  }
+
+  const email = normalizeEmail(input.email);
+  const name = input.name.trim();
+  const password = input.password.trim();
+
+  if (!email || !password || !name) {
+    throw new Error("请完整填写邮箱、用户名和密码");
+  }
+
+  const serverClient = createSupabaseServerClient({ writable: true });
+
+  if (!serverClient) {
+    return null;
+  }
+
+  const adminClient = createSupabaseAdminClient();
+  let authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null = null;
+
+  if (adminClient) {
+    const created = await adminClient.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name
+      }
+    });
+
+    if (created.error) {
+      throw new Error(created.error.message);
+    }
+
+    authUser = created.data.user ?? null;
+    const signIn = await serverClient.auth.signInWithPassword({ email, password });
+
+    if (signIn.error) {
+      throw new Error(signIn.error.message);
+    }
+
+    authUser = signIn.data.user ?? authUser;
+  } else {
+    const signUp = await serverClient.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          name
+        }
+      }
+    });
+
+    if (signUp.error) {
+      throw new Error(signUp.error.message);
+    }
+
+    authUser = signUp.data.user ?? null;
+
+    if (!signUp.data.session) {
+      throw new Error("注册成功但没有获得会话，请检查 Supabase 是否关闭了邮箱确认，或为当前环境配置 SUPABASE_SERVICE_ROLE_KEY。");
+    }
+  }
+
+  if (!authUser) {
+    throw new Error("注册失败");
+  }
+
+  const store = await readStore();
+  const syncedUser = syncUserProfileFromSupabase(store, authUser);
+  const user = syncedUser.user;
+  user.name = userDisplayName(email, name);
+  user.plan = user.plan ?? "trial";
+  user.creditsBalance = user.creditsBalance ?? (isCreditsBillingMode() ? INITIAL_TRIAL_CREDITS : 0);
+  let shouldPersist = syncedUser.changed;
+
+  if (store.projects.every((item) => !item.ownerUserId)) {
+    claimLegacyWorkspace(store, user.id);
+    shouldPersist = true;
+  }
+
+  user.updatedAt = now();
+  if (shouldPersist) {
+    await writeStore(store);
+  }
+  return toAuthUser(user);
+}
+
+async function loginUserViaSupabase(input: { email: string; password: string }) {
+  if (!hasSupabaseAuthConfig()) {
+    return null;
+  }
+
+  const email = normalizeEmail(input.email);
+  const password = input.password.trim();
+
+  if (!email || !password) {
+    throw new Error("请填写邮箱和密码");
+  }
+
+  const client = createSupabaseServerClient({ writable: true });
+
+  if (!client) {
+    return null;
+  }
+
+  const { data, error } = await client.auth.signInWithPassword({
+    email,
+    password
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const authUser = data.user;
+
+  if (!authUser) {
+    throw new Error("登录失败");
+  }
+
+  const store = await readStore();
+  const syncedUser = syncUserProfileFromSupabase(store, authUser);
+  const user = syncedUser.user;
+  user.plan = user.plan ?? "trial";
+  user.creditsBalance = user.creditsBalance ?? 0;
+  let shouldPersist = syncedUser.changed;
+
+  if (store.projects.every((item) => !item.ownerUserId)) {
+    claimLegacyWorkspace(store, user.id);
+    shouldPersist = true;
+  }
+
+  user.updatedAt = now();
+  if (shouldPersist) {
+    await writeStore(store);
+  }
+  return toAuthUser(user);
 }
 
 async function registerUserViaPostgres(input: { email: string; password: string; name: string }) {
@@ -1239,6 +1497,20 @@ async function getActiveSession(store: AppStore) {
 }
 
 async function getCurrentUserFromStore(store: AppStore) {
+  if (!isDesktopRuntime()) {
+    const authUser = await getSupabaseCurrentUser();
+
+    if (authUser) {
+      const syncedUser = syncUserProfileFromSupabase(store, authUser);
+
+      if (syncedUser.changed) {
+        await writeStore(store);
+      }
+
+      return syncedUser.user;
+    }
+  }
+
   const contextUserId = userContextStorage.getStore();
 
   if (contextUserId) {
@@ -1460,28 +1732,12 @@ function claimLegacyWorkspace(store: AppStore, userId: string) {
 }
 
 export async function getCurrentUser() {
-  const token = await getSessionTokenFromCookies();
-
-  if (!token) {
-    return null;
-  }
-
   const store = await readStore();
   const user = await getCurrentUserFromStore(store);
-
   return user ? toAuthUser(user) : null;
 }
 
 export async function getCurrentUserAccess() {
-  const token = await getSessionTokenFromCookies();
-
-  if (!token) {
-    return {
-      user: null,
-      isAdmin: false
-    };
-  }
-
   const store = await readStore();
   const user = await getCurrentUserFromStore(store);
 
@@ -1492,12 +1748,6 @@ export async function getCurrentUserAccess() {
 }
 
 export async function isCurrentUserAdmin() {
-  const token = await getSessionTokenFromCookies();
-
-  if (!token) {
-    return false;
-  }
-
   const store = await readStore();
   const user = await getCurrentUserFromStore(store);
   return Boolean(user && isAdminUser(store, user));
@@ -1855,6 +2105,12 @@ export async function registerUser(input: { email: string; password: string; nam
     throw new Error("当前为授权模式，请使用激活码进入");
   }
 
+  const supabaseUser = await registerUserViaSupabase(input);
+
+  if (supabaseUser) {
+    return supabaseUser;
+  }
+
   const postgresUser = await registerUserViaPostgres(input);
 
   if (postgresUser) {
@@ -1921,6 +2177,12 @@ export async function loginUser(input: { email: string; password: string }) {
     throw new Error("当前为授权模式，请使用激活码进入");
   }
 
+  const supabaseUser = await loginUserViaSupabase(input);
+
+  if (supabaseUser) {
+    return supabaseUser;
+  }
+
   const postgresUser = await loginUserViaPostgres(input);
 
   if (postgresUser) {
@@ -1975,6 +2237,15 @@ export async function loginUser(input: { email: string; password: string }) {
 }
 
 export async function logoutUser() {
+  if (!isDesktopRuntime() && hasSupabaseAuthConfig()) {
+    const client = createSupabaseServerClient({ writable: true });
+
+    if (client) {
+      await client.auth.signOut();
+      return;
+    }
+  }
+
   const store = await readStore();
   const token = await getSessionTokenFromCookies();
 

@@ -537,6 +537,7 @@ function ensureSqliteSchema() {
 
     CREATE TABLE IF NOT EXISTS "User" (
       "id" TEXT NOT NULL PRIMARY KEY,
+      "supabaseUserId" TEXT,
       "email" TEXT NOT NULL UNIQUE,
       "name" TEXT NOT NULL,
       "passwordSalt" TEXT NOT NULL,
@@ -612,6 +613,7 @@ function ensureSqliteSchema() {
   [
     'ALTER TABLE "Project" ADD COLUMN "ownerUserId" TEXT',
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "supabaseUserId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" REAL',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER',
     'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
@@ -871,15 +873,16 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseActivatedAt", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "supabaseUserId", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseActivatedAt", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseActivatedAt, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @supabaseUserId, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseActivatedAt, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
     users.forEach((user) => {
       insertUser.run({
         id: text(user.id),
+        supabaseUserId: maybeString(user.supabaseUserId),
         email: text(user.email),
         name: text(user.name),
         passwordSalt: text(user.passwordSalt),
@@ -1960,6 +1963,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
       })),
       users: rows(db, "User").map((item) => ({
         id: text(item.id),
+        supabaseUserId: maybeString(item.supabaseUserId),
         email: text(item.email),
         name: text(item.name),
         passwordSalt: text(item.passwordSalt),
