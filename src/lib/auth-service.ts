@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   hashPassword,
+  isAdminAuthUser,
   normalizeEmail,
   toAuthUser,
   verifyPassword
@@ -61,7 +62,7 @@ export async function registerUserWithAuthService(
     name,
     passwordSalt: salt,
     passwordHash: hash,
-    role: "user",
+    role: isAdminAuthUser({ email, role: "user" } as StoredUser) ? "admin" : "user",
     plan: "trial",
     creditsBalance: 0,
     createdAt: timestamp,
@@ -119,6 +120,7 @@ export async function loginUserWithAuthService(input: { email: string; password:
 
   claimLegacyWorkspaceIfNeeded(store, user.id, hooks);
 
+  user.role = isAdminAuthUser(user) ? "admin" : user.role;
   user.plan = user.plan ?? "trial";
   if (user.creditsBalance == null) {
     user.creditsBalance = 0;

@@ -46,7 +46,9 @@ export function AuthForm({
         return;
       }
 
-      window.location.replace(nextPath);
+      const body = await response.json().catch(() => null);
+      const targetPath = body?.user?.role === "admin" ? "/admin" : nextPath;
+      window.location.replace(targetPath);
     } catch {
       setError(isLogin ? "登录失败，请稍后重试" : "注册失败，请稍后重试");
       setIsPending(false);

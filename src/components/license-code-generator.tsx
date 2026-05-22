@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { CopyButton } from "@/components/copy-button";
 
 async function readError(response: Response) {
   const body = await response.json().catch(() => null);
@@ -81,7 +82,7 @@ export function LicenseCodeGenerator() {
         <div className="list-item license-generated-box">
           <div className="row">
             <strong>本次生成的授权码</strong>
-            <span className="pill success">列表可继续复制</span>
+            <CopyButton value={codes.join("\n")} label="复制全部" />
           </div>
           <textarea readOnly value={codes.join("\n")} rows={Math.min(8, codes.length + 1)} />
         </div>

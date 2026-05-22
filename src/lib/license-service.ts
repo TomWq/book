@@ -143,6 +143,91 @@ function getConfiguredActivationCodeHashes() {
     .filter(Boolean);
 }
 
+const ROUTINE_LICENSE_CHECK_CLIENT = "本地客户端状态校验";
+const ROUTINE_LICENSE_LOG_WINDOW_MS = 10 * 60 * 1000;
+
+function isRoutineLicenseCheck(clientName?: string) {
+  return normalizeLicenseText(clientName) === ROUTINE_LICENSE_CHECK_CLIENT;
+}
+
+function sameLicenseLogScope(
+  log: StoredLicenseActivationLog,
+  input: {
+    licenseCodeId?: string;
+    codeHash: string;
+    machineHash: string;
+    result: StoredLicenseActivationLog["result"];
+    reason: string;
+    clientName?: string;
+  }
+) {
+  return (
+    log.licenseCodeId === input.licenseCodeId &&
+    log.codeHash === input.codeHash &&
+    (log.machineHash ?? "") === input.machineHash &&
+    log.result === input.result &&
+    log.reason === input.reason &&
+    normalizeLicenseText(log.clientName) === normalizeLicenseText(input.clientName)
+  );
+}
+
+function shouldAppendLicenseLog(
+  logs: StoredLicenseActivationLog[],
+  input: {
+    licenseCodeId?: string;
+    codeHash: string;
+    machineHash: string;
+    result: StoredLicenseActivationLog["result"];
+    reason: string;
+    clientName?: string;
+    createdAt: string;
+  }
+) {
+  if (!isRoutineLicenseCheck(input.clientName)) {
+    return true;
+  }
+
+  const latestSameLog = logs.find((log) => sameLicenseLogScope(log, input));
+  const latestTime = latestSameLog?.createdAt ? Date.parse(latestSameLog.createdAt) : NaN;
+  const currentTime = Date.parse(input.createdAt);
+
+  if (!Number.isFinite(latestTime) || !Number.isFinite(currentTime)) {
+    return true;
+  }
+
+  return currentTime - latestTime > ROUTINE_LICENSE_LOG_WINDOW_MS;
+}
+
+function compactRoutineLicenseLogs(logs: StoredLicenseActivationLog[]) {
+  const seen = new Set<string>();
+  const compacted: StoredLicenseActivationLog[] = [];
+
+  for (const log of logs) {
+    if (!isRoutineLicenseCheck(log.clientName)) {
+      compacted.push(log);
+      continue;
+    }
+
+    const key = [
+      log.licenseCodeId ?? "",
+      log.codeHash,
+      log.machineHash ?? "",
+      log.result,
+      log.reason,
+      normalizeLicenseText(log.clientName)
+    ].join("|");
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    compacted.push(log);
+  }
+
+  return compacted;
+}
+
 export function isValidActivationCode(code: string) {
   const normalized = normalizeActivationCode(code);
   const codeHash = hashActivationCode(normalized);
@@ -621,7 +706,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
   const license = store.licenseCodes.find((item) => item.codeHash === codeHash);
 
   function log(result: StoredLicenseActivationLog["result"], reason: string) {
-    store.licenseActivationLogs.unshift({
+    const entry = {
       id: randomUUID(),
       licenseCodeId: license?.id,
       codeHash,
@@ -630,7 +715,13 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
       reason,
       clientName,
       createdAt: timestamp
-    });
+    };
+
+    if (!shouldAppendLicenseLog(store.licenseActivationLogs, entry)) {
+      return;
+    }
+
+    store.licenseActivationLogs.unshift(entry);
     store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
   }
 
@@ -705,7 +796,7 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
   );
 
   function log(result: StoredLicenseActivationLog["result"], reason: string) {
-    store.licenseActivationLogs.unshift({
+    const entry = {
       id: randomUUID(),
       licenseCodeId: license?.id,
       codeHash: license?.codeHash ?? codeHash,
@@ -714,7 +805,13 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
       reason,
       clientName,
       createdAt: timestamp
-    });
+    };
+
+    if (!shouldAppendLicenseLog(store.licenseActivationLogs, entry)) {
+      return;
+    }
+
+    store.licenseActivationLogs.unshift(entry);
     store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
   }
 
@@ -782,7 +879,7 @@ export function buildAdminLicenseCenter(
     }
   });
 
-  const allLogs = store.licenseActivationLogs.filter((log) => log.reason !== "verified");
+  const allLogs = compactRoutineLicenseLogs(store.licenseActivationLogs.filter((log) => log.reason !== "verified"));
   const recentLogCount = allLogs.length;
   const recentLogs = allLogs.slice(recentLogOffset, recentLogOffset + recentLogLimit);
   const licenses = store.licenseCodes

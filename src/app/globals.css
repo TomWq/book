@@ -7162,6 +7162,34 @@ form[aria-busy="true"] button[type="submit"] {
   color: var(--text);
 }
 
+:root[data-theme="dark"] .auth-immersive .auth-card,
+:root[data-theme="dark"] .auth-immersive .license-card {
+  border: 1px solid var(--line);
+  background: #202731;
+  color: var(--text);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
+}
+
+:root[data-theme="dark"] .auth-card-head p,
+:root[data-theme="dark"] .license-card .auth-card-head p,
+:root[data-theme="dark"] .auth-immersive .auth-field span,
+:root[data-theme="dark"] .auth-immersive .license-card .auth-field span,
+:root[data-theme="dark"] .auth-switch,
+:root[data-theme="dark"] .auth-switch span,
+:root[data-theme="dark"] .auth-immersive .license-card .auth-switch,
+:root[data-theme="dark"] .auth-current-account span,
+:root[data-theme="dark"] .auth-current-account div {
+  color: var(--muted);
+}
+
+:root[data-theme="dark"] .auth-immersive .auth-card .chip,
+:root[data-theme="dark"] .auth-immersive .license-card .chip,
+:root[data-theme="dark"] .auth-current-account {
+  border-color: var(--line);
+  background: #1b2129;
+  color: var(--text);
+}
+
 :root[data-theme="dark"] input::placeholder,
 :root[data-theme="dark"] textarea::placeholder {
   color: rgba(154, 168, 187, 0.72);

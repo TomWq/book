@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
+import { headers } from "next/headers";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getCurrentUserAccess, getCurrentUserAiSetupStatus } from "@/lib/projects";
 import { LogoutButton } from "@/components/logout-button";
@@ -13,7 +14,15 @@ const navItems: SideNavItem[] = [
   { href: "/templates", label: "模板库" }
 ];
 
+const standaloneAuthPaths = new Set(["/activate", "/login", "/register"]);
+
 export async function AppShell({ children }: { children: ReactNode }) {
+  const pathname = (await headers()).get("x-nw-pathname") ?? "";
+
+  if (standaloneAuthPaths.has(pathname)) {
+    return <>{children}</>;
+  }
+
   const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
   const isAdminMode = isAdmin && !desktopRuntime;

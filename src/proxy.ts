@@ -10,6 +10,16 @@ type DesktopLicenseStatus = {
   message?: string;
 };
 
+function nextWithPath(request: NextRequest) {
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nw-pathname", request.nextUrl.pathname);
+  return NextResponse.next({
+    request: {
+      headers: requestHeaders
+    }
+  });
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -18,7 +28,7 @@ export async function proxy(request: NextRequest) {
     pathname === "/favicon.ico";
 
   if (isAsset) {
-    return NextResponse.next();
+    return nextWithPath(request);
   }
 
   if (isDesktopRuntime()) {
@@ -32,7 +42,7 @@ export async function proxy(request: NextRequest) {
       pathname === "/api/jobs/worker";
 
     if (isLicenseExemptPath) {
-      return NextResponse.next();
+      return nextWithPath(request);
     }
 
     const statusUrl = new URL("/api/license/status", request.url);
@@ -60,7 +70,7 @@ export async function proxy(request: NextRequest) {
         return NextResponse.redirect(new URL("/", request.url));
       }
 
-      return NextResponse.next();
+      return nextWithPath(request);
     }
 
     if (pathname.startsWith("/api")) {
@@ -97,7 +107,7 @@ export async function proxy(request: NextRequest) {
   const isAuthApi = pathname.startsWith("/api/auth");
 
   if (isAuthApi) {
-    return NextResponse.next();
+    return nextWithPath(request);
   }
 
   if (hasSession) {
@@ -105,15 +115,15 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL("/", request.url));
     }
 
-    return NextResponse.next();
+    return nextWithPath(request);
   }
 
   if (publicPaths.has(pathname)) {
-    return NextResponse.next();
+    return nextWithPath(request);
   }
 
   if (pathname === "/api/debug/persistence" || pathname === "/api/debug/echo") {
-    return NextResponse.next();
+    return nextWithPath(request);
   }
 
   if (pathname.startsWith("/api")) {
