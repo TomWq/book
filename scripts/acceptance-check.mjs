@@ -76,8 +76,12 @@ assertIncludes("src/lib/ai/writing.ts", [
   "editDraftTextWithAi",
   "人物不能知道自己不知道的信息"
 ]);
-assertIncludes("src/lib/projects.ts", [
+assertIncludes("src/lib/project-store.ts", [
   "APP_STORE_PATH",
+  "loadPersistedStore",
+  "savePersistedStore"
+]);
+assertIncludes("src/lib/projects.ts", [
   "processPendingAiJobsAsWorker",
   "processAiJobAsOwner",
   "applyLedgerToWritingState",
@@ -90,13 +94,11 @@ assertIncludes("src/lib/projects.ts", [
 ]);
 assertIncludes("package.json", ["acceptance:flow"]);
 assertIncludes("src/lib/store-persistence.ts", [
-  "StoreRecord",
-  "STORE_RECORD_ENTITY_KEYS",
-  "readStoreRecordsFromPostgres",
-  "STORE_RECORD_READ_MODE",
+  "resolveSqliteFilePath",
+  "syncCoreTables",
+  "readCoreStoreFromDb",
   "getPersistenceStatus"
 ]);
-assertIncludes("prisma/schema.prisma", ["model StoreRecord", "model AiJob", "model ReviewReport"]);
 assertIncludes("src/proxy.ts", ["/api/jobs/worker"]);
 
-console.log("验收守门检查通过：拆书、模板、大纲、创作、状态、二稿、后台 Worker 和数据库镜像关键契约均存在。");
+console.log("验收守门检查通过：拆书、模板、大纲、创作、状态、二稿、后台 Worker 和 SQLite 关键契约均存在。");

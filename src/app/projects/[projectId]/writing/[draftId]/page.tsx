@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DraftExportActions } from "@/components/draft-export-actions";
+import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
+import { formatReviewText } from "@/lib/review-display";
 
 export default async function ChapterDraftReaderPage({
   params
@@ -44,7 +46,6 @@ export default async function ChapterDraftReaderPage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">正文阅读</div>
             <h1>
               第 {draft.chapterNumber} 章 · {draft.title}
             </h1>
@@ -102,6 +103,15 @@ export default async function ChapterDraftReaderPage({
               ))}
             </article>
           </Panel>
+
+          <Panel title="正文编辑" description="可按审稿建议套用修改，也可以手动调整全文。">
+            <DraftRevisionEditor
+              projectId={projectId}
+              draftId={draft.id}
+              initialContent={draft.content}
+              reviewIssues={review?.issues ?? []}
+            />
+          </Panel>
         </main>
 
         <aside className="writing-side">
@@ -129,7 +139,7 @@ export default async function ChapterDraftReaderPage({
               {review ? (
                 <div className="task-block">
                   <div className="task-title">审稿结论</div>
-                  <div className="muted">{review.overall}</div>
+                  <div className="muted">{formatReviewText(review.overall)}</div>
                 </div>
               ) : null}
             </div>

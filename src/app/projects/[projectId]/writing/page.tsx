@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
+import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { Panel } from "@/components/panel";
 import { StreamDraftButton } from "@/components/stream-draft-button";
 import { getProjectAnalysis, getProjectWritingState } from "@/lib/projects";
+import { formatReviewText } from "@/lib/review-display";
 
 function formatReviewIssueType(type: string) {
   const normalized = type.trim().toLowerCase();
@@ -14,8 +16,17 @@ function formatReviewIssueType(type: string) {
     continuity: "承接前文不足",
     consistency: "设定一致性问题",
     character: "人物行为风险",
+    characters: "人物档案问题",
+    pronoun: "人物代词问题",
+    gender: "人物性别问题",
     "ai flavor": "AI 味偏重",
     ai_flavor: "AI 味偏重",
+    style: "表达风格问题",
+    prose: "行文表达问题",
+    language: "语言表达问题",
+    dialogue: "对话问题",
+    logic: "剧情逻辑问题",
+    emotion: "情绪表达问题",
     pacing: "节奏问题",
     payoff: "爽点释放不足",
     foreshadowing: "伏笔处理问题",
@@ -92,15 +103,6 @@ export default async function ProjectWritingPage({
   }
 
   const latestTaskCard = writingState.taskCards[0];
-  const latestDraft = writingState.drafts[0];
-  const latestLedger = writingState.ledgers[0];
-  const latestReview = writingState.reviews[0];
-  const currentDraftReview = latestDraft
-    ? writingState.reviews.find((review) => review.draftId === latestDraft.id) ?? null
-    : null;
-  const historicalReview = latestDraft
-    ? writingState.reviews.find((review) => review.draftId !== latestDraft.id) ?? null
-    : latestReview ?? null;
   const draftTaskCardIds = new Set(writingState.drafts.map((draft) => draft.taskCardId));
   const latestTaskCardDraft = latestTaskCard
     ? writingState.drafts.find((draft) => draft.taskCardId === latestTaskCard.id)
@@ -113,12 +115,20 @@ export default async function ProjectWritingPage({
     ...writingState.reviews.map((review) => review.chapterNumber)
   );
   const nextChapterNumber = maxChapterNumber + 1;
-  const activeChapterNumber =
-    latestTaskCard && !latestTaskCardDraft ? latestTaskCard.chapterNumber : nextChapterNumber;
-  const activeTaskCard =
-    writingState.taskCards.find(
-      (card) => card.chapterNumber === activeChapterNumber && !draftTaskCardIds.has(card.id)
-    ) ?? null;
+  const activeTaskCard = latestTaskCard && !latestTaskCardDraft ? latestTaskCard : null;
+  const taskCardChapterNumber = activeTaskCard?.chapterNumber ?? nextChapterNumber;
+  const activeDraft = activeTaskCard ? null : writingState.drafts[0] ?? null;
+  const activeDisplayChapterNumber = activeDraft?.chapterNumber ?? activeTaskCard?.chapterNumber ?? taskCardChapterNumber;
+  const activeLedger = activeDraft
+    ? writingState.ledgers.find((ledger) => ledger.draftId === activeDraft.id) ?? null
+    : null;
+  const activeReview = activeDraft
+    ? writingState.reviews.find((review) => review.draftId === activeDraft.id) ?? null
+    : null;
+  const latestReview = writingState.reviews[0];
+  const historicalReview = activeDraft
+    ? writingState.reviews.find((review) => review.draftId !== activeDraft.id) ?? null
+    : latestReview ?? null;
   const chapterDirectoryAll = Array.from(
     new Set([
       ...writingState.taskCards.map((card) => card.chapterNumber),
@@ -172,11 +182,11 @@ export default async function ProjectWritingPage({
           <div className="writing-action-strip">
             <div>
               <div className="mini-label">当前步骤</div>
-              <strong>{activeTaskCard ? `第 ${activeChapterNumber} 章任务卡已生成` : `准备生成第 ${activeChapterNumber} 章任务卡`}</strong>
+              <strong>{activeTaskCard ? `第 ${taskCardChapterNumber} 章任务卡已生成` : `准备生成第 ${taskCardChapterNumber} 章任务卡`}</strong>
             </div>
             <div className="hero-actions">
               <a className="button primary" href="#task-card-form">
-                {activeTaskCard ? "查看任务卡" : `生成第 ${activeChapterNumber} 章任务卡`}
+                {activeTaskCard ? "查看任务卡" : `生成第 ${taskCardChapterNumber} 章任务卡`}
               </a>
               <Link className="button" href={`/projects/${projectId}/state`}>
                 完善设定
@@ -253,12 +263,12 @@ export default async function ProjectWritingPage({
             <ApiForm
               className="forms writing-form"
               endpoint={`/api/projects/${projectId}/writing`}
-              body={{ action: "generate_task_card", chapterNumber: activeChapterNumber }}
+              body={{ action: "generate_task_card", chapterNumber: taskCardChapterNumber }}
               booleanFields={["useAnalysisContext"]}
               resetOnSuccess
             >
               <div className="quote-box">
-                当前准备生成第 {activeChapterNumber} 章任务卡。不确定怎么填时可以直接点生成；只在你想强制指定本章目标、爽点或章末钩子时再填写对应项。
+                当前准备生成第 {taskCardChapterNumber} 章任务卡。不确定怎么填时可以直接点生成；只在你想强制指定本章目标、爽点或章末钩子时再填写对应项。
               </div>
               <label className="option-row">
                 <input name="useAnalysisContext" type="checkbox" defaultChecked />
@@ -299,7 +309,7 @@ export default async function ProjectWritingPage({
               </div>
               <div className="hero-actions writing-submit-row">
                 <button className="button primary" type="submit">
-                  生成第 {activeChapterNumber} 章任务卡
+                  生成第 {taskCardChapterNumber} 章任务卡
                 </button>
               </div>
             </ApiForm>
@@ -355,55 +365,55 @@ export default async function ProjectWritingPage({
               </div>
             ) : (
               <div className="empty-state">
-                <strong>第 {activeChapterNumber} 章还没有任务卡</strong>
+                <strong>第 {taskCardChapterNumber} 章还没有任务卡</strong>
                 <span>
                   {maxChapterNumber > 0
                     ? "上一章已经生成正文后，就从这里继续生成下一章任务卡。生成后再写正文。"
                     : "先在上面生成第一章任务卡。"}
                 </span>
                 <a className="button primary" href="#task-card-form">
-                  生成第 {activeChapterNumber} 章任务卡
+                  生成第 {taskCardChapterNumber} 章任务卡
                 </a>
               </div>
             )}
           </Panel>
 
           <Panel title="正文草稿" description="正文支持流式生成，生成完成后会保存为草稿。">
-            {latestDraft ? (
+            {activeDraft ? (
               <div className="editor-grid">
                 <div className="field">
                   <div className="field-label">标题</div>
-                  <input value={latestDraft.title} readOnly />
+                  <input value={activeDraft.title} readOnly />
                 </div>
-                <div className="field">
-                  <div className="field-label">
-                    正文（{latestDraft.content.replace(/\s/g, "").length.toLocaleString("zh-CN")} 字）
-                  </div>
-                  <textarea className="saved-draft-textarea" value={latestDraft.content} readOnly />
-                </div>
+                <DraftRevisionEditor
+                  projectId={projectId}
+                  draftId={activeDraft.id}
+                  initialContent={activeDraft.content}
+                  reviewIssues={activeReview?.issues ?? []}
+                />
                 <div className="hero-actions">
-                  <Link className="button primary" href={`/projects/${projectId}/writing/${latestDraft.id}`}>
+                  <Link className="button primary" href={`/projects/${projectId}/writing/${activeDraft.id}`}>
                     全屏阅读
                   </Link>
                   <DraftExportActions
-                    content={latestDraft.content}
+                    content={activeDraft.content}
                     projectName={writingState.project.name}
-                    chapterNumber={latestDraft.chapterNumber}
-                    title={latestDraft.title}
+                    chapterNumber={activeDraft.chapterNumber}
+                    title={activeDraft.title}
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
-                    body={{ action: "create_ledger", draftId: latestDraft.id }}
+                    body={{ action: "create_ledger", draftId: activeDraft.id }}
                     label="生成章节台账"
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
-                    body={{ action: "review_draft", draftId: latestDraft.id }}
+                    body={{ action: "review_draft", draftId: activeDraft.id }}
                     label="一致性审稿"
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
-                    body={{ action: "delete_task_card", taskCardId: latestDraft.taskCardId }}
+                    body={{ action: "delete_task_card", taskCardId: activeDraft.taskCardId }}
                     label="删除本章并重新生成"
                     className="button danger"
                     confirmMessage="确定删除这章正文和对应任务卡吗？删除后会回到这一章重新生成任务卡和正文。"
@@ -411,45 +421,48 @@ export default async function ProjectWritingPage({
                 </div>
               </div>
             ) : (
-              <div className="section-card">任务卡确认后，可以在这里生成正文草稿。</div>
+              <div className="empty-state">
+                <strong>第 {activeDisplayChapterNumber} 章还没有保存正文</strong>
+                <span>如果上方正在流式生成，请等生成完成并保存后，这里会显示第 {activeDisplayChapterNumber} 章正文。</span>
+              </div>
             )}
           </Panel>
 
           <Panel title="台账与审稿" description="每章写完后沉淀成长期记忆。">
             <div className="list">
-              {latestLedger ? (
+              {activeLedger ? (
                 <div className="list-item">
                   <strong>
-                    第 {latestLedger.chapterNumber} 章台账 · {latestLedger.title}
+                    第 {activeLedger.chapterNumber} 章台账 · {activeLedger.title}
                   </strong>
-                  <div className="muted">事件：{latestLedger.events.join("；")}</div>
-                  <div className="muted">收益：{latestLedger.payoff}</div>
-                  <div className="quote-box">{latestLedger.cliffhanger}</div>
+                  <div className="muted">事件：{activeLedger.events.join("；")}</div>
+                  <div className="muted">收益：{activeLedger.payoff}</div>
+                  <div className="quote-box">{activeLedger.cliffhanger}</div>
                 </div>
               ) : (
                 <div className="empty-state">
-                  <strong>还没有生成章节台账</strong>
+                  <strong>第 {activeDisplayChapterNumber} 章还没有生成章节台账</strong>
                   <span>台账会记录本章事件、人物变化、伏笔和章末钩子，后续生成新章节时会作为长期记忆使用。</span>
-                  {latestDraft ? (
+                  {activeDraft ? (
                     <ApiButton
                       endpoint={`/api/projects/${projectId}/writing`}
-                      body={{ action: "create_ledger", draftId: latestDraft.id }}
+                      body={{ action: "create_ledger", draftId: activeDraft.id }}
                       label="生成章节台账"
                     />
                   ) : null}
                 </div>
               )}
 
-              {currentDraftReview ? (
+              {activeReview ? (
                 <div className="list-item">
                   <div className="row">
-                    <strong>第 {currentDraftReview.chapterNumber} 章审稿结果</strong>
+                    <strong>第 {activeReview.chapterNumber} 章审稿结果</strong>
                     <span className="chip">当前正文</span>
                   </div>
-                  <div className="muted">{currentDraftReview.overall}</div>
-                  {currentDraftReview.issues.length > 0 ? (
+                  <div className="muted">{formatReviewText(activeReview.overall)}</div>
+                  {activeReview.issues.length > 0 ? (
                     <div className="timeline">
-                      {currentDraftReview.issues.map((issue, index) => {
+                      {activeReview.issues.map((issue, index) => {
                         const severity = formatReviewSeverity(issue.severity);
 
                         return (
@@ -458,9 +471,9 @@ export default async function ProjectWritingPage({
                             <strong>{formatReviewIssueType(issue.type)}</strong>
                             <span className={severity.className}>{severity.label}</span>
                           </div>
-                          {issue.problem ? <div className="muted">问题：{issue.problem}</div> : null}
-                          <div className="muted">位置：{issue.location || "正文相关段落"}</div>
-                          <div className="quote-box">修改建议：{issue.suggestion}</div>
+                          {issue.problem ? <div className="muted">问题：{formatReviewText(issue.problem)}</div> : null}
+                          <div className="muted">位置：{formatReviewText(issue.location) || "正文相关段落"}</div>
+                          <div className="quote-box">修改建议：{formatReviewText(issue.suggestion)}</div>
                         </div>
                         );
                       })}
@@ -469,9 +482,9 @@ export default async function ProjectWritingPage({
                 </div>
               ) : (
                 <div className="empty-state">
-                  <strong>{latestDraft ? `第 ${latestDraft.chapterNumber} 章暂无审稿报告` : "暂无审稿报告"}</strong>
+                  <strong>第 {activeDisplayChapterNumber} 章暂无审稿报告</strong>
                   <span>
-                    {latestDraft
+                    {activeDraft
                       ? "当前正文还没有做一致性审稿。请点击上方「一致性审稿」，审完后这里才会显示本章结果。"
                       : "生成正文草稿后，可以立即做一致性审稿，检查设定、钩子和 AI 味问题。"}
                   </span>
@@ -533,7 +546,7 @@ export default async function ProjectWritingPage({
                   </div>
                 ))}
                 <a className="button primary" href="#task-card-form">
-                  继续生成第 {activeChapterNumber} 章
+                  继续生成第 {taskCardChapterNumber} 章
                 </a>
                 {chapterDirectoryAll.length > chapterDirectory.length ? (
                   <Link className="button" href={`/projects/${projectId}/writing/chapters`}>

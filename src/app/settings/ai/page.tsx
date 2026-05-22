@@ -24,7 +24,6 @@ export default async function AiSettingsPage() {
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">自带 AI Key</div>
             <h1>配置你自己的 AI 服务</h1>
             <p>保存兼容 OpenAI 的请求地址、API Key 和模型名，客户端会用这组配置完成拆书、创作和审稿。</p>
           </div>

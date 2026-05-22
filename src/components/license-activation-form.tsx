@@ -74,7 +74,7 @@ export function LicenseActivationForm({
 
   return (
     <>
-      {error ? <div className="pill danger auth-alert">{error}</div> : null}
+      {error ? <div className="auth-alert" role="alert">{error}</div> : null}
 
       <form className="auth-form" onSubmit={handleSubmit} aria-busy={isBusy}>
         <label className="auth-field">
@@ -94,7 +94,7 @@ export function LicenseActivationForm({
       </form>
 
       <div className="auth-switch">
-        <span>授权码由服务方提供，请妥善保存。</span>
+        <span>授权码一次性使用，已用过就不能再次激活。</span>
       </div>
     </>
   );

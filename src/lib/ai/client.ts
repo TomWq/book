@@ -121,18 +121,94 @@ function withTimeout(timeoutMs: number) {
   };
 }
 
-function parseJsonContent<T>(content: string): T {
-  try {
-    return JSON.parse(content) as T;
-  } catch {
-    const start = content.indexOf("{");
-    const end = content.lastIndexOf("}");
+function extractJsonCandidate(content: string) {
+  const trimmed = content.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim();
+  const source = fenced || trimmed;
+  const startObject = source.indexOf("{");
+  const endObject = source.lastIndexOf("}");
+  const startArray = source.indexOf("[");
+  const endArray = source.lastIndexOf("]");
 
-    if (start >= 0 && end > start) {
-      return JSON.parse(content.slice(start, end + 1)) as T;
+  if (startObject >= 0 && endObject > startObject) {
+    return source.slice(startObject, endObject + 1);
+  }
+
+  if (startArray >= 0 && endArray > startArray) {
+    return source.slice(startArray, endArray + 1);
+  }
+
+  return source;
+}
+
+function escapeControlCharactersInJsonStrings(value: string) {
+  let escaped = "";
+  let inString = false;
+  let isEscaped = false;
+
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+
+    if (inString && !isEscaped) {
+      if (char === "\n") {
+        escaped += "\\n";
+        continue;
+      }
+
+      if (char === "\r") {
+        escaped += "\\r";
+        continue;
+      }
+
+      if (char === "\t") {
+        escaped += "\\t";
+        continue;
+      }
+
+      if (code >= 0 && code < 0x20) {
+        escaped += `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
     }
 
-    throw new Error("AI 响应不是有效 JSON");
+    escaped += char;
+
+    if (char === "\"" && !isEscaped) {
+      inString = !inString;
+    }
+
+    isEscaped = char === "\\" && !isEscaped;
+
+    if (char !== "\\" && isEscaped) {
+      isEscaped = false;
+    }
+  }
+
+  return escaped;
+}
+
+function parseJsonCandidate<T>(candidate: string): T {
+  try {
+    return JSON.parse(candidate) as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+
+    if (/control character|bad escaped character|unterminated string/i.test(message)) {
+      return JSON.parse(escapeControlCharactersInJsonStrings(candidate)) as T;
+    }
+
+    throw error;
+  }
+}
+
+function parseJsonContent<T>(content: string): T {
+  const candidate = extractJsonCandidate(content);
+
+  try {
+    return parseJsonCandidate<T>(candidate);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "AI 响应不是有效 JSON";
+    throw new Error(`AI 响应不是有效 JSON：${message}`);
   }
 }
 
@@ -201,22 +277,27 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
   const timeout = withTimeout(config.timeoutMs);
 
   try {
+    const requestBody: Record<string, unknown> = {
+      model: config.model,
+      messages: request.messages,
+      temperature: request.temperature ?? 0.7,
+      max_tokens: request.maxTokens,
+      stream: true,
+      stream_options: { include_usage: true }
+    };
+
+    if (request.thinking) {
+      requestBody.thinking = { type: "enabled" };
+      requestBody.reasoning_effort = request.reasoningEffort ?? "medium";
+    }
+
     const response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`
       },
-      body: JSON.stringify({
-        model: config.model,
-        messages: request.messages,
-        thinking: { type: "enabled" },
-        reasoning_effort: "high",
-        temperature: request.temperature ?? 0.7,
-        max_tokens: request.maxTokens,
-        stream: true,
-        stream_options: { include_usage: true }
-      }),
+      body: JSON.stringify(requestBody),
       signal: timeout.signal
     });
 

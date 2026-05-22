@@ -27,9 +27,6 @@ export default async function ProjectAnalysisFormulaPage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className={`pill ${hasStoryAnalysis ? "success" : "warning"}`}>
-              {hasStoryAnalysis ? "公式可沉淀" : "等待整书分析"}
-            </div>
             <h1>爆款公式与模板沉淀</h1>
             <p>这里承接拆书分析和图谱，把原书的商业结构提炼成可复用模板，再迁移到新题材。</p>
           </div>

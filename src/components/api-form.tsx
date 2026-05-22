@@ -34,6 +34,7 @@ function useApiMutation() {
   const [isRoutePending, startTransition] = useTransition();
   const [isMutating, setIsMutating] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const isPending = isMutating || isRoutePending;
 
   async function mutate({
@@ -43,7 +44,8 @@ function useApiMutation() {
     redirectTo,
     redirectDataPath,
     redirectPrefix,
-    refresh = true
+    refresh = true,
+    successMessage
   }: {
     endpoint: string;
     method: Method;
@@ -52,8 +54,10 @@ function useApiMutation() {
     redirectDataPath?: string;
     redirectPrefix?: string;
     refresh?: boolean;
+    successMessage?: string;
   }) {
     setError("");
+    setSuccess("");
     setIsMutating(true);
 
     try {
@@ -81,6 +85,9 @@ function useApiMutation() {
         }
         if (refresh) {
           router.refresh();
+          window.setTimeout(() => {
+            router.refresh();
+          }, 350);
         }
       });
       return true;
@@ -92,7 +99,7 @@ function useApiMutation() {
     }
   }
 
-  return { mutate, error, isPending };
+  return { mutate, error, success, isPending };
 }
 
 export function ApiForm({
@@ -105,6 +112,7 @@ export function ApiForm({
   redirectDataPath,
   redirectPrefix,
   refresh = true,
+  successMessage,
   resetOnSuccess = false,
   className,
   children
@@ -118,11 +126,12 @@ export function ApiForm({
   redirectDataPath?: string;
   redirectPrefix?: string;
   refresh?: boolean;
+  successMessage?: string;
   resetOnSuccess?: boolean;
   className?: string;
   children: ReactNode;
 }) {
-  const { mutate, error, isPending } = useApiMutation();
+  const { mutate, error, success, isPending } = useApiMutation();
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -157,7 +166,8 @@ export function ApiForm({
       redirectTo,
       redirectDataPath,
       redirectPrefix,
-      refresh
+      refresh,
+      successMessage
     });
 
     if (ok && resetOnSuccess) {
@@ -169,6 +179,7 @@ export function ApiForm({
     <form className={className} onSubmit={handleSubmit} aria-busy={isPending}>
       {children}
       {isPending ? <div className="pill form-status">正在处理，请稍候...</div> : null}
+      {success ? <div className="pill success form-status">{success}</div> : null}
       {error ? <div className="pill danger form-error">{error}</div> : null}
     </form>
   );
@@ -185,7 +196,8 @@ export function ApiButton({
   redirectTo,
   redirectDataPath,
   redirectPrefix,
-  refresh = true
+  refresh = true,
+  successMessage
 }: {
   endpoint: string;
   method?: Method;
@@ -198,11 +210,12 @@ export function ApiButton({
   redirectDataPath?: string;
   redirectPrefix?: string;
   refresh?: boolean;
+  successMessage?: string;
 }) {
   const { mutate, error, isPending } = useApiMutation();
 
   return (
-    <div>
+    <>
       <button
         className={className}
         type="button"
@@ -219,13 +232,14 @@ export function ApiButton({
             redirectTo,
             redirectDataPath,
             redirectPrefix,
-            refresh
+            refresh,
+            successMessage
           });
         }}
       >
         {isPending ? "处理中..." : label}
       </button>
       {error ? <div className="pill danger form-error">{error}</div> : null}
-    </div>
+    </>
   );
 }

@@ -5,13 +5,36 @@ import { DraftExportActions } from "@/components/draft-export-actions";
 import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 4;
 
 function numberParam(value: string | string[] | undefined) {
   const raw = Array.isArray(value) ? value[0] : value;
   const parsed = Number(raw ?? 1);
 
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
+}
+
+function optionalNumberParam(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value;
+
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function pageForChapter(chapterNumber: number, drafts: Array<{ chapterNumber: number }>) {
+  if (!Number.isFinite(chapterNumber) || chapterNumber <= 0 || drafts.length === 0) {
+    return null;
+  }
+
+  const index = drafts.findIndex((draft) => draft.chapterNumber >= chapterNumber);
+  const safeIndex = index >= 0 ? index : drafts.length - 1;
+
+  return Math.floor(safeIndex / PAGE_SIZE) + 1;
 }
 
 function draftPreview(value: string) {
@@ -28,7 +51,7 @@ export default async function WritingChapterDirectoryPage({
   searchParams
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams?: Promise<{ page?: string | string[] }>;
+  searchParams?: Promise<{ page?: string | string[]; chapter?: string | string[] }>;
 }) {
   const { projectId } = await params;
   const query = searchParams ? await searchParams : {};
@@ -42,35 +65,21 @@ export default async function WritingChapterDirectoryPage({
     (a, b) => a.chapterNumber - b.chapterNumber || a.updatedAt.localeCompare(b.updatedAt)
   );
   const totalPages = Math.max(1, Math.ceil(drafts.length / PAGE_SIZE));
-  const currentPage = Math.min(totalPages, numberParam(query.page));
+  const requestedChapter = optionalNumberParam(query.chapter);
+  const jumpPage = requestedChapter ? pageForChapter(requestedChapter, drafts) : null;
+  const currentPage = Math.min(totalPages, jumpPage ?? numberParam(query.page));
   const start = (currentPage - 1) * PAGE_SIZE;
   const pageDrafts = drafts.slice(start, start + PAGE_SIZE);
-  const pageStart = drafts.length === 0 ? 0 : start + 1;
-  const pageEnd = Math.min(start + PAGE_SIZE, drafts.length);
+  const pageStart = pageDrafts[0]?.chapterNumber ?? 0;
+  const pageEnd = pageDrafts.at(-1)?.chapterNumber ?? 0;
+  const chapterInputValue = Array.isArray(query.chapter) ? query.chapter[0] : query.chapter;
 
   return (
     <div className="grid">
-      <section className="hero">
-        <div className="hero-top">
-          <div>
-            <div className="pill success">章节总目录</div>
-            <h1>{writingState.project.name}</h1>
-            <p>
-              已生成 {drafts.length.toLocaleString("zh-CN")} 章正文。目录每页显示 {PAGE_SIZE} 章，适合后续几百章时分页查找和阅读。
-            </p>
-          </div>
-          <div className="hero-actions">
-            <Link className="button" href={`/projects/${projectId}/writing`}>
-              返回创作台
-            </Link>
-            <Link className="button primary" href={`/projects/${projectId}/writing#task-card-form`}>
-              继续写下一章
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <Panel title="正文目录" description="点击任意章节进入阅读页。">
+      <Panel
+        title="正文目录"
+        description={`已生成 ${drafts.length.toLocaleString("zh-CN")} 章正文。目录每页显示 ${PAGE_SIZE} 章，可按章节号快速跳转。`}
+      >
         {drafts.length > 0 ? (
           <div className="writing-directory">
             <div className="writing-directory-toolbar">
@@ -80,20 +89,22 @@ export default async function WritingChapterDirectoryPage({
                   第 {pageStart}-{pageEnd} 章 / 共 {drafts.length.toLocaleString("zh-CN")} 章
                 </strong>
               </div>
-              <div className="chapter-pagination compact-pagination">
-                {currentPage > 1 ? (
-                  <Link className="button" href={`/projects/${projectId}/writing/chapters?page=${currentPage - 1}`}>
-                    上一页
-                  </Link>
-                ) : null}
-                <span className="chip">
-                  第 {currentPage} / {totalPages} 页
-                </span>
-                {currentPage < totalPages ? (
-                  <Link className="button" href={`/projects/${projectId}/writing/chapters?page=${currentPage + 1}`}>
-                    下一页
-                  </Link>
-                ) : null}
+              <div className="directory-toolbar-actions">
+                <form className="chapter-jump-form" action={`/projects/${projectId}/writing/chapters`} method="get">
+                  <label htmlFor="chapter-jump">跳到章节</label>
+                  <input
+                    id="chapter-jump"
+                    name="chapter"
+                    type="number"
+                    min={1}
+                    max={drafts.at(-1)?.chapterNumber ?? drafts.length}
+                    defaultValue={chapterInputValue ?? ""}
+                    placeholder="如 100"
+                  />
+                  <button className="button small-button" type="submit">
+                    跳转
+                  </button>
+                </form>
               </div>
             </div>
 

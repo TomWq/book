@@ -37,9 +37,6 @@ export default async function GenerateOutlinePage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className={`pill ${outlineReady ? "success" : "warning"}`}>
-              {outlineReady ? "已有生成结果" : "等待生成"}
-            </div>
             <h1>新题材大纲生成</h1>
             <p>
               基于模板，把题材、身份、金手指、爽点密度和篇幅变量迁移成一套新书方案。

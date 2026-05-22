@@ -10,6 +10,7 @@ import { getAdminLicenseCenter } from "@/lib/projects";
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 20;
+const RECENT_LOG_PAGE_SIZE = 10;
 
 function formatNumber(value: number) {
   return Math.round(value).toLocaleString("zh-CN");
@@ -26,14 +27,29 @@ function numberParam(value: string | string[] | undefined) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
 }
 
+function buildAdminHref(page: number, logsPage: number) {
+  const params = new URLSearchParams();
+
+  if (page > 1) {
+    params.set("page", String(page));
+  }
+
+  if (logsPage > 1) {
+    params.set("logsPage", String(logsPage));
+  }
+
+  const query = params.toString();
+  return query ? `/admin?${query}` : "/admin";
+}
+
 function licenseStatusName(status: string) {
   switch (status) {
     case "unused":
       return "未使用";
-    case "active":
-      return "已激活";
+    case "used":
+      return "已使用";
     case "disabled":
-      return "已禁用";
+      return "已作废";
     case "expired":
       return "已过期";
     default:
@@ -42,19 +58,21 @@ function licenseStatusName(status: string) {
 }
 
 function licenseStatusClass(status: string) {
-  return status === "active" ? "success" : status === "unused" ? "warning" : "danger";
+  return status === "unused" ? "warning" : status === "used" ? "success" : "danger";
 }
 
 function logReasonName(reason: string) {
   switch (reason) {
     case "activated":
       return "首次激活";
-    case "verified_same_machine":
-      return "同设备验证";
+    case "verified":
+      return "状态校验";
+    case "already_used":
+      return "已使用";
     case "not_found":
       return "授权码不存在";
     case "disabled":
-      return "授权码已禁用";
+      return "授权码已作废";
     case "expired":
       return "授权码已过期";
     case "already_bound_other_machine":
@@ -73,34 +91,47 @@ function compactMachine(value?: string) {
 export default async function AdminPage({
   searchParams
 }: {
-  searchParams?: Promise<{ page?: string | string[] }>;
+  searchParams?: Promise<{ page?: string | string[]; logsPage?: string | string[] }>;
 }) {
   if (isDesktopRuntime()) {
     redirect("/projects");
   }
 
+  const query = searchParams ? await searchParams : {};
+  const requestedPage = numberParam(query.page);
+  const requestedLogsPage = numberParam(query.logsPage);
+
   let licenseCenter;
 
   try {
-    licenseCenter = await getAdminLicenseCenter();
+    licenseCenter = await getAdminLicenseCenter({
+      recentLogLimit: RECENT_LOG_PAGE_SIZE,
+      recentLogOffset: (requestedLogsPage - 1) * RECENT_LOG_PAGE_SIZE
+    });
   } catch {
     notFound();
   }
 
-  const query = searchParams ? await searchParams : {};
   const totalPages = Math.max(1, Math.ceil(licenseCenter.licenses.length / PAGE_SIZE));
-  const currentPage = Math.min(totalPages, numberParam(query.page));
+  const logsTotalPages = Math.max(1, Math.ceil(licenseCenter.recentLogCount / RECENT_LOG_PAGE_SIZE));
+  const currentPage = Math.min(totalPages, requestedPage);
+  const currentLogsPage = Math.min(logsTotalPages, requestedLogsPage);
+
+  if (currentPage !== requestedPage || currentLogsPage !== requestedLogsPage) {
+    redirect(buildAdminHref(currentPage, currentLogsPage));
+  }
+
   const pageStart = (currentPage - 1) * PAGE_SIZE;
   const pageLicenses = licenseCenter.licenses.slice(pageStart, pageStart + PAGE_SIZE);
+  const pageRecentLogs = licenseCenter.recentLogs.slice(0, RECENT_LOG_PAGE_SIZE);
 
   return (
     <div className="grid license-admin-page">
       <section className="hero license-admin-hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">授权中心</div>
             <h1>授权码管理</h1>
-            <p>批量生成一次性授权码，查看激活状态、设备绑定、最近验证和异常激活记录。</p>
+            <p>批量生成一次性授权码，查看使用状态、设备信息、最近记录和异常激活记录。</p>
           </div>
           <div className="hero-actions">
             <span className="chip">每页 {PAGE_SIZE}</span>
@@ -119,7 +150,7 @@ export default async function AdminPage({
           </div>
           <div className="stat-card">
             <strong>{formatNumber(licenseCenter.active)}</strong>
-            <span>已激活</span>
+            <span>已使用</span>
           </div>
           <div className="stat-card">
             <strong>{formatNumber(licenseCenter.disabled + licenseCenter.expired)}</strong>
@@ -132,7 +163,7 @@ export default async function AdminPage({
         <LicenseCodeGenerator />
       </Panel>
 
-      <Panel title="授权码列表" description="按创建时间倒序显示，支持分页、禁用、恢复和重置设备绑定。">
+      <Panel title="授权码列表" description="按创建时间倒序显示，支持分页、作废和删除。">
         {pageLicenses.length === 0 ? (
           <div className="empty-state">
             <strong>暂无授权码</strong>
@@ -199,31 +230,13 @@ export default async function AdminPage({
                     )}
                   </div>
                   <div className="license-actions">
-                    {license.status === "disabled" ? (
-                      <ApiButton
-                        endpoint="/api/admin/licenses"
-                        method="PATCH"
-                        body={{ licenseId: license.id, action: "enable" }}
-                        label="恢复"
-                        className="button secondary"
-                      />
-                    ) : (
-                      <ApiButton
-                        endpoint="/api/admin/licenses"
-                        method="PATCH"
-                        body={{ licenseId: license.id, action: "disable" }}
-                        label="禁用"
-                        className="button danger"
-                        confirmMessage="确定禁用这个授权码吗？"
-                      />
-                    )}
                     <ApiButton
                       endpoint="/api/admin/licenses"
                       method="PATCH"
-                      body={{ licenseId: license.id, action: "reset" }}
-                      label="重置设备"
-                      className="button secondary"
-                      confirmMessage="确定重置这个授权码的设备绑定吗？客户需要重新激活。"
+                      body={{ licenseId: license.id, action: "disable" }}
+                      label="作废"
+                      className="button danger"
+                      confirmMessage="确定作废这个授权码吗？作废后不能再次使用。"
                     />
                     <ApiButton
                       endpoint="/api/admin/licenses"
@@ -242,7 +255,7 @@ export default async function AdminPage({
 
         <div className="pagination">
           {currentPage > 1 ? (
-            <Link className="button secondary" href={`/admin?page=${currentPage - 1}`}>
+            <Link className="button secondary" href={buildAdminHref(currentPage - 1, currentLogsPage)}>
               上一页
             </Link>
           ) : (
@@ -252,7 +265,7 @@ export default async function AdminPage({
             第 {currentPage.toLocaleString("zh-CN")} / {totalPages.toLocaleString("zh-CN")} 页
           </span>
           {currentPage < totalPages ? (
-            <Link className="button secondary" href={`/admin?page=${currentPage + 1}`}>
+            <Link className="button secondary" href={buildAdminHref(currentPage + 1, currentLogsPage)}>
               下一页
             </Link>
           ) : (
@@ -261,8 +274,8 @@ export default async function AdminPage({
         </div>
       </Panel>
 
-      <Panel title="最近激活记录" description="展示最近的授权验证、首次激活和失败原因，用于排查客户换机或误输授权码。">
-        {licenseCenter.recentLogs.length === 0 ? (
+      <Panel title="最近激活记录" description="展示最近的首次激活和失败原因，用于排查客户换机或误输授权码。">
+        {pageRecentLogs.length === 0 ? (
           <div className="empty-state">
             <strong>暂无激活记录</strong>
             <span>客户端完成激活或验证后会出现在这里。</span>
@@ -276,7 +289,7 @@ export default async function AdminPage({
               <span>来源</span>
               <span>时间</span>
             </div>
-            {licenseCenter.recentLogs.map((log) => (
+            {pageRecentLogs.map((log) => (
               <div key={log.id} className="usage-table-row">
                 <span className={`pill ${log.result === "success" ? "success" : "danger"}`}>
                   {log.result === "success" ? "成功" : "失败"}
@@ -289,6 +302,25 @@ export default async function AdminPage({
             ))}
           </div>
         )}
+        <div className="pagination">
+          {currentLogsPage > 1 ? (
+            <Link className="button secondary" href={buildAdminHref(currentPage, currentLogsPage - 1)}>
+              上一页
+            </Link>
+          ) : (
+            <span className="button secondary disabled">上一页</span>
+          )}
+          <span className="chip">
+            第 {currentLogsPage.toLocaleString("zh-CN")} / {logsTotalPages.toLocaleString("zh-CN")} 页
+          </span>
+          {currentLogsPage < logsTotalPages ? (
+            <Link className="button secondary" href={buildAdminHref(currentPage, currentLogsPage + 1)}>
+              下一页
+            </Link>
+          ) : (
+            <span className="button secondary disabled">下一页</span>
+          )}
+        </div>
       </Panel>
     </div>
   );

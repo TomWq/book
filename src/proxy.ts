@@ -1,46 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 import { isDesktopRuntime } from "@/lib/app-runtime";
-import { getSupabasePublishableKey, getSupabaseUrl, shouldUseSupabaseAuth } from "@/lib/supabase/config";
 
 const SESSION_COOKIE = "nw_session";
 
-async function getProxySupabaseAuth(request: NextRequest) {
-  if (!shouldUseSupabaseAuth()) {
-    return { user: null as { id: string } | null, cookiesToSet: [] as Array<{ name: string; value: string; options: any }> };
-  }
-
-  const url = getSupabaseUrl();
-  const key = getSupabasePublishableKey();
-
-  if (!url || !key) {
-    return { user: null as { id: string } | null, cookiesToSet: [] as Array<{ name: string; value: string; options: any }> };
-  }
-
-  const cookiesToSet: Array<{ name: string; value: string; options: any }> = [];
-  const client = createServerClient(url, key, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookies) {
-        cookiesToSet.length = 0;
-        cookiesToSet.push(...cookies);
-      }
-    }
-  });
-
-  const { data } = await client.auth.getUser();
-  return { user: data.user ?? null, cookiesToSet };
-}
-
-function applySupabaseCookies(response: NextResponse, cookiesToSet: Array<{ name: string; value: string; options: any }>) {
-  cookiesToSet.forEach(({ name, value, options }) => {
-    response.cookies.set(name, value, options);
-  });
-
-  return response;
-}
+type DesktopLicenseStatus = {
+  currentUser?: { id: string } | null;
+  activated?: boolean;
+  expired?: boolean;
+  message?: string;
+};
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -54,17 +22,40 @@ export async function proxy(request: NextRequest) {
   }
 
   if (isDesktopRuntime()) {
-    if (
+    const isLicenseExemptPath =
       pathname === "/activate" ||
       pathname === "/api/license/activate" ||
       pathname === "/api/license/restore" ||
+      pathname === "/api/license/status" ||
+      pathname === "/api/license/verify" ||
       pathname === "/api/health" ||
-      pathname === "/api/jobs/worker"
-    ) {
+      pathname === "/api/jobs/worker";
+
+    if (isLicenseExemptPath) {
       return NextResponse.next();
     }
 
-    if (hasSession) {
+    const statusUrl = new URL("/api/license/status", request.url);
+    let status: DesktopLicenseStatus | null = null;
+
+    try {
+      const response = await fetch(statusUrl, {
+        headers: {
+          cookie: request.headers.get("cookie") ?? ""
+        },
+        cache: "no-store"
+      });
+
+      if (response.ok) {
+        status = (await response.json().catch(() => null)) as DesktopLicenseStatus | null;
+      }
+    } catch {
+      status = null;
+    }
+
+    const currentUser = status?.currentUser ?? null;
+
+    if (currentUser) {
       if (pathname === "/login" || pathname === "/register") {
         return NextResponse.redirect(new URL("/", request.url));
       }
@@ -73,13 +64,21 @@ export async function proxy(request: NextRequest) {
     }
 
     if (pathname.startsWith("/api")) {
-      return NextResponse.json({ error: "请先输入激活码" }, { status: 401 });
+      return NextResponse.json(
+        {
+          error: status?.message || "请先输入激活码"
+        },
+        { status: 401 }
+      );
     }
 
     const url = request.nextUrl.clone();
     url.pathname = "/activate";
     if (pathname !== "/") {
       url.searchParams.set("next", pathname);
+    }
+    if (status?.message) {
+      url.searchParams.set("error", status.message);
     }
     return NextResponse.redirect(url);
   }
@@ -92,7 +91,8 @@ export async function proxy(request: NextRequest) {
     "/api/health",
     "/api/jobs/worker",
     "/api/license/activate",
-    "/api/license/restore"
+    "/api/license/restore",
+    "/api/license/verify"
   ]);
   const isAuthApi = pathname.startsWith("/api/auth");
 
@@ -100,26 +100,16 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const { user, cookiesToSet } = await getProxySupabaseAuth(request);
-
-  if (user) {
-    if (pathname === "/login" || pathname === "/register") {
-      return applySupabaseCookies(NextResponse.redirect(new URL("/", request.url)), cookiesToSet);
-    }
-
-    return applySupabaseCookies(NextResponse.next(), cookiesToSet);
-  }
-
   if (hasSession) {
     if (pathname === "/login" || pathname === "/register") {
-      return applySupabaseCookies(NextResponse.redirect(new URL("/", request.url)), cookiesToSet);
+      return NextResponse.redirect(new URL("/", request.url));
     }
 
-    return applySupabaseCookies(NextResponse.next(), cookiesToSet);
+    return NextResponse.next();
   }
 
   if (publicPaths.has(pathname)) {
-    return applySupabaseCookies(NextResponse.next(), cookiesToSet);
+    return NextResponse.next();
   }
 
   if (pathname === "/api/debug/persistence" || pathname === "/api/debug/echo") {
@@ -127,13 +117,13 @@ export async function proxy(request: NextRequest) {
   }
 
   if (pathname.startsWith("/api")) {
-    return applySupabaseCookies(NextResponse.json({ error: "请先登录" }, { status: 401 }), cookiesToSet);
+    return NextResponse.json({ error: "请先登录" }, { status: 401 });
   }
 
   const url = request.nextUrl.clone();
   url.pathname = "/login";
   url.searchParams.set("next", pathname);
-  return applySupabaseCookies(NextResponse.redirect(url), cookiesToSet);
+  return NextResponse.redirect(url);
 }
 
 export const config = {

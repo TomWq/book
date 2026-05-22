@@ -48,18 +48,18 @@
 
 推荐：
 
-1. PostgreSQL
-2. Prisma 或 Drizzle
+1. SQLite
+2. `better-sqlite3`
 
-优先建议 PostgreSQL，因为本产品会大量存储结构化 JSON、长文本、状态快照和任务记录。
+当前部署以 SQLite 文件作为唯一服务端持久化目标，适合轻量云服务器和单人工作台版本；数据库文件需要放在持久化目录并定期备份。
 
 当前实现要求：
 
-1. 生产/正式测试环境设置 `DATABASE_URL=postgresql://...` 后，应用状态优先写入 PostgreSQL 的 `AppState` 表。
-2. 同时写入 `StoreRecord` 域记录镜像表，把用户、项目、章节、模板、任务、写作状态等记录拆成可按用户和项目索引的 JSONB 记录，便于下一步从 AppState 桥接迁移到正式 Repository。
-3. 当 `AppState` 不存在时，服务端可以从 `StoreRecord` 反向恢复应用状态；设置 `STORE_RECORD_READ_MODE=prefer` 时可优先从域记录镜像恢复，用于迁移演练。
-4. 本地开发可以继续使用 JSON 文件；如设置 `DATABASE_URL=file:...`，SQLite 只作为本地兼容桥和调试镜像。
-5. 后续拆分独立 API/Worker 时，以 PostgreSQL 为唯一持久化目标，不再把 SQLite bridge 作为最终数据库方案。
+1. 生产/正式测试环境设置 `DATABASE_URL=file:/持久化目录/license-center.db`。
+2. 项目、章节、模板、写作状态、任务、授权码和会话写入 SQLite 结构化表。
+3. `AppState` 仅作为旧 JSON 状态迁移时的兼容快照，不再作为主要读取路径。
+4. 未设置 `DATABASE_URL` 的本地开发可以继续使用 JSON 文件。
+5. 后续拆分独立 API/Worker 时，仍以当前 SQLite 表结构为基准推进仓储层拆分。
 
 ### 2.4 异步任务
 
@@ -132,9 +132,9 @@ Next.js Web App
   v
 API Layer
   |
-  | Prisma / Drizzle
+  | better-sqlite3
   v
-PostgreSQL
+SQLite
   ^
   |
 Worker / Job Runner
@@ -912,7 +912,7 @@ AI 返回不符合结构时：
 第一轮开发建议按这个顺序：
 
 1. 初始化 Next.js + TypeScript 项目。
-2. 接入 PostgreSQL 和 ORM。
+2. 接入 SQLite 和 ORM。
 3. 建立核心 schema：projects、source_texts、chapters、ai_jobs。
 4. 实现文本导入和自动分章。
 5. 实现章节列表与编辑。

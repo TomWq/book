@@ -55,6 +55,11 @@ export default async function AccountSettingsPage() {
                 ? `客户 ID：${overview.user.licenseCustomerId}，激活时间：${formatTime(overview.user.licenseActivatedAt)}`
                 : "当前账号没有绑定远程授权客户 ID。"}
             </p>
+            {overview.user.licenseExpiresAt ? (
+              <p>到期时间：{formatTime(overview.user.licenseExpiresAt)}</p>
+            ) : overview.user.licenseCustomerId ? (
+              <p>授权类型：永久激活</p>
+            ) : null}
           </div>
 
           <div className="account-usage-grid">

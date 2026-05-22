@@ -17,10 +17,10 @@
 APP_RUNTIME="cloud"
 APP_AUTH_PROVIDER="local"
 APP_BILLING_MODE="subscription"
+AUTH_COOKIE_SECURE="false"
 
 DATABASE_URL="file:/www/wwwroot/book/data/license-center.db"
 APP_STORE_PATH="/www/wwwroot/book/data/app-db.json"
-STORE_RECORD_READ_MODE="auto"
 
 ADMIN_EMAILS="你的管理员邮箱"
 JOB_WORKER_TOKEN="一串足够长的随机密钥"
@@ -30,19 +30,16 @@ AI_BASE_URL=""
 AI_API_KEY=""
 AI_MODEL=""
 AI_TIMEOUT_MS="60000"
-
-NEXT_PUBLIC_SUPABASE_URL=""
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=""
-SUPABASE_SERVICE_ROLE_KEY=""
 ```
 
 说明：
 
 1. `APP_RUNTIME="cloud"`：让服务器作为授权中心运行。
-2. `APP_AUTH_PROVIDER="local"`：使用本机邮箱密码登录，不依赖 Supabase。
-3. `DATABASE_URL`：SQLite 文件路径，必须放在服务器持久化目录里。
-4. `APP_STORE_PATH`：主状态文件，建议也放在同一个持久化目录里。
-5. `ADMIN_EMAILS`：这里填写的邮箱注册后自动拥有管理员权限。
+2. `APP_AUTH_PROVIDER="local"`：使用本机邮箱密码登录。
+3. `AUTH_COOKIE_SECURE="false"`：临时使用 `http://IP` 访问时需要关闭；配置 HTTPS 域名后建议改为 `true`。
+4. `DATABASE_URL`：SQLite 文件路径，必须放在服务器持久化目录里。
+5. `APP_STORE_PATH`：主状态文件，建议也放在同一个持久化目录里。
+6. `ADMIN_EMAILS`：这里填写的邮箱注册后自动拥有管理员权限。
 
 ## 2. 首次启动
 
@@ -72,6 +69,28 @@ pm2 start npm --name book-license-center -- start
 pm2 save
 pm2 startup
 ```
+
+## 3.1 一键部署
+
+本地先复制一次配置：
+
+```bash
+cp deploy.config.example.json deploy.config.json
+```
+
+然后把里面的服务器地址、路径和服务名填好，以后每次改完直接执行：
+
+```bash
+npm run deploy:server
+```
+
+这个脚本会自动：
+
+1. 同步代码到服务器。
+2. 在服务器执行 `npm ci` 和 `npm run build`。
+3. 重启 `myapp.service`，如果没有这个 systemd 服务就回退到 `pm2`。
+
+前提是服务器已经能从本机连上 SSH 22 端口。
 
 ## 4. 客户端激活地址
 

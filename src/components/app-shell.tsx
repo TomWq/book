@@ -3,7 +3,9 @@ import { ReactNode } from "react";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getCurrentUserAccess, getCurrentUserAiSetupStatus } from "@/lib/projects";
 import { LogoutButton } from "@/components/logout-button";
+import { LicenseCountdown } from "@/components/license-countdown";
 import { SideNav, type SideNavItem } from "@/components/side-nav";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const navItems: SideNavItem[] = [
   { href: "/", label: "首页" },
@@ -76,6 +78,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
                   </Link>
                 </>
               )}
+              <ThemeToggle />
             </span>
           </div>
         </header>
@@ -89,6 +92,9 @@ export async function AppShell({ children }: { children: ReactNode }) {
               <span>
                 {isAdminMode ? "查看授权码、客户激活状态和 AI 用量。" : "按项目推进拆书、模板迁移和长篇创作。"}
               </span>
+              {desktopRuntime && !isAdminMode && user.licenseExpiresAt ? (
+                <LicenseCountdown expiresAt={user.licenseExpiresAt} className="pill warning license-countdown" />
+              ) : null}
             </div>
             <div className="topbar-meta">
               <span className="row" style={{ alignItems: "center" }}>
@@ -98,9 +104,10 @@ export async function AppShell({ children }: { children: ReactNode }) {
                     AI 设置
                   </Link>
                 ) : null}
+                <ThemeToggle />
                 {!isAdminMode && !desktopRuntime ? (
                   <Link href="/settings/account" className="button">
-                    用量
+                    账号
                   </Link>
                 ) : null}
                 {/* <Link href="/legal" className="button">

@@ -82,7 +82,8 @@ APP_STORE_PATH="/www/wwwroot/book/data/app-db.json"
 ADMIN_EMAILS="你的管理员邮箱"
 ```
 
-如果云端只用于管理员下发授权码和客户端激活校验，可以使用 `APP_AUTH_PROVIDER="local"` + SQLite，避免依赖 Supabase/PostgreSQL。完整部署步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
+如果云端只用于管理员下发授权码和客户端激活校验，使用本地账号体系 + SQLite 即可。完整部署步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
+如果你已经配好 SSH，可以直接用 `npm run deploy:server` 一键把改动发到服务器。
 
 ## 核心流程
 
@@ -405,8 +406,8 @@ Chapter 1
 
 1. 前端：Next.js / React。
 2. 后端：Next.js API Routes 或独立 Node.js API。
-3. 数据库：PostgreSQL。
-4. ORM：Prisma 或 Drizzle。
+3. 数据库：SQLite。
+4. 数据访问：当前使用 `better-sqlite3` 维护本地结构化表。
 5. 任务队列：MVP 可先用数据库任务表，后续升级为 BullMQ / Redis。
 6. 文件存储：MVP 可先存数据库，后续升级到 S3 / R2。
 7. AI 调用：统一封装在后端，不能把模型 API Key 放到前端。

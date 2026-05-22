@@ -1,0 +1,8 @@
+{
+  "host": "62.234.205.107",
+  "user": "root",
+  "path": "/root/book",
+  "port": 22,
+  "service": "myapp.service",
+  "pm2Name": "book-license-center"
+}

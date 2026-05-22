@@ -8,7 +8,6 @@ export default function NewProjectPage() {
       <section className="hero book-create-hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">创建入口</div>
             <h1>新建作品，不只是新建一个空项目</h1>
             <p>这里专门创建要写的新书。先把书名、读者、题材标签、主角和简介定下来，后续创作圣经、任务卡和长篇状态才有可读取的基础。</p>
           </div>

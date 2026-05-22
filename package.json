@@ -7,21 +7,16 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "deploy:server": "node scripts/deploy-server.mjs",
     "acceptance": "node scripts/acceptance-check.mjs",
     "acceptance:flow": "node scripts/main-flow-check.mjs",
     "worker": "node scripts/run-worker.mjs",
     "activation:reset": "node scripts/reset-local-activation.mjs"
   },
   "dependencies": {
-    "@antv/g6": "^5.1.1",
-    "@prisma/adapter-better-sqlite3": "^7.8.0",
-    "@prisma/client": "^7.8.0",
-    "@supabase/ssr": "^0.10.3",
-    "@supabase/supabase-js": "^2.106.1",
     "@xyflow/react": "^12.10.2",
     "better-sqlite3": "^12.10.0",
     "next": "^16.2.6",
-    "postgres": "3.4.7",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "socks-proxy-agent": "^10.0.0"
@@ -31,7 +26,6 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "prisma": "^7.8.0",
     "typescript": "^5.0.0"
   }
 }

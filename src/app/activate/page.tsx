@@ -4,6 +4,28 @@ import { LicenseActivationForm } from "@/components/license-activation-form";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getSubscriptionActivationStatus } from "@/lib/projects";
 
+function normalizeActivationError(value?: string) {
+  const message = String(value ?? "").trim();
+
+  if (!message) {
+    return "";
+  }
+
+  if (message.includes("请先登录")) {
+    return "";
+  }
+
+  if (message.includes("返回 401") || message.includes("返回 403")) {
+    return "";
+  }
+
+  if (message.includes("授权中心") && message.includes("登录")) {
+    return "";
+  }
+
+  return message;
+}
+
 export default async function ActivatePage({
   searchParams
 }: {
@@ -15,6 +37,8 @@ export default async function ActivatePage({
 
   const params = await searchParams;
   const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
+  const rawError = params.error ?? "";
+  const normalizedError = normalizeActivationError(rawError);
   const status = await getSubscriptionActivationStatus();
 
   if (status.currentUser) {
@@ -24,6 +48,17 @@ export default async function ActivatePage({
   if (status.activated) {
     redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
   }
+
+  if (rawError && !normalizedError) {
+    const cleanUrl = new URL("/activate", "http://localhost");
+    if (nextPath !== "/projects") {
+      cleanUrl.searchParams.set("next", nextPath);
+    }
+
+    redirect(`${cleanUrl.pathname}${cleanUrl.search}`);
+  }
+
+  const initialError = normalizedError || status.message || "";
 
   return (
     <section className="auth-page license-auth-page">
@@ -51,15 +86,15 @@ export default async function ActivatePage({
           <div className="auth-card-head">
             <div>
               <h2>授权码激活</h2>
-              <p>输入交付给你的授权码，验证后进入写作工作台。</p>
+              <p>输入交付给你的一次性授权码，验证后进入写作工作台。</p>
             </div>
             <div className="chip">授权码</div>
           </div>
 
-          <LicenseActivationForm nextPath={nextPath} initialError={params.error} />
+          <LicenseActivationForm nextPath={nextPath} initialError={initialError} />
         </div>
 
-        <footer className="auth-immersive-footer">© 2026 AI 网文写作助手</footer>
+        <footer className="auth-immersive-footer"></footer>
       </div>
     </section>
   );

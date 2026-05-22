@@ -6,9 +6,11 @@ import { DraftExportActions } from "@/components/draft-export-actions";
 
 type StreamState =
   | { status: "idle"; content: string; error?: string }
-  | { status: "running"; content: string; error?: string }
+  | { status: "running"; content: string; phase: "generating" | "saving"; error?: string }
   | { status: "done"; content: string; error?: string }
   | { status: "error"; content: string; error: string };
+
+const streamDraftSavingMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_SAVING]]";
 
 export function StreamDraftButton({
   projectId,
@@ -34,6 +36,11 @@ export function StreamDraftButton({
   const isRunning = state.status === "running";
   const isOneShotRunning = oneShotState.status === "running";
   const liveCharacterCount = state.content.replace(/\s/g, "").length;
+  const isSavingStreamDraft = state.status === "running" && state.phase === "saving";
+  const runningButtonLabel = isSavingStreamDraft ? "正在保存草稿..." : "正在流式生成...";
+  const runningStatusText = isSavingStreamDraft
+    ? "正文已生成，正在保存草稿并更新章节台账，请稍候。"
+    : "正在生成正文，实时内容会持续出现在下方。";
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -48,7 +55,7 @@ export function StreamDraftButton({
     };
   }, [isPreviewOpen]);
 
-  function normalizedTargetWordCount() {
+function normalizedTargetWordCount() {
     const parsed = Number(targetWordCount);
 
     if (!Number.isFinite(parsed)) {
@@ -58,10 +65,37 @@ export function StreamDraftButton({
     return Math.min(8000, Math.max(800, Math.floor(parsed)));
   }
 
+  function splitFailureMarker(value: string) {
+    const marker = "[生成失败]";
+    const index = value.indexOf(marker);
+
+    if (index < 0) {
+      return { content: value, error: "" };
+    }
+
+    return {
+      content: value.slice(0, index).trimEnd(),
+      error: value.slice(index + marker.length).trim() || "流式生成失败"
+    };
+  }
+
+  function parseStreamText(value: string) {
+    const visible = splitFailureMarker(value);
+    const phase: "generating" | "saving" = visible.content.includes(streamDraftSavingMarker)
+      ? "saving"
+      : "generating";
+    const content = visible.content
+      .replaceAll(`\n\n${streamDraftSavingMarker}\n\n`, "\n\n")
+      .replaceAll(streamDraftSavingMarker, "")
+      .replace(/\n{3,}/g, "\n\n");
+
+    return { ...visible, content, phase };
+  }
+
   async function generateDraft() {
     const normalizedTarget = normalizedTargetWordCount();
     setTargetWordCount(normalizedTarget);
-    setState({ status: "running", content: "" });
+    setState({ status: "running", phase: "generating", content: "" });
     let content = "";
 
     try {
@@ -92,16 +126,19 @@ export function StreamDraftButton({
         }
 
         content += decoder.decode(value, { stream: true });
-        setState({ status: "running", content });
+        const visible = parseStreamText(content);
+        setState({ status: "running", phase: visible.phase, content: visible.content });
       }
 
       content += decoder.decode();
+      const visible = parseStreamText(content);
 
-      if (content.includes("[生成失败]")) {
-        throw new Error(content.split("[生成失败]").at(-1)?.trim() || "流式生成失败");
+      if (visible.error) {
+        content = visible.content;
+        throw new Error(visible.error);
       }
 
-      setState({ status: "done", content });
+      setState({ status: "done", content: visible.content });
       router.refresh();
     } catch (error) {
       setState({
@@ -150,7 +187,7 @@ export function StreamDraftButton({
       <div className="field">
         <div className="field-label-row">
           <div className="field-label">目标字数</div>
-          <div className="field-hint">800-8000 字，实际会有小幅浮动</div>
+          <div className="field-hint">800-8000 字，保存时保留实时生成内容</div>
         </div>
         <input
           type="number"
@@ -169,7 +206,7 @@ export function StreamDraftButton({
           onClick={generateDraft}
           disabled={isRunning || isOneShotRunning}
         >
-          {isRunning ? "正在流式生成..." : "流式生成正文草稿"}
+          {isRunning ? runningButtonLabel : "流式生成正文草稿"}
         </button>
         <button
           className="button"
@@ -190,7 +227,7 @@ export function StreamDraftButton({
         <div className="field stream-draft-field">
           <div className="field-label-row">
             <div className="field-label">
-              {state.status === "done" ? "流式生成完成，已保存草稿" : "实时正文"}
+              {state.status === "done" ? "流式生成完成，已保存草稿" : isSavingStreamDraft ? "正文已生成，正在保存" : "实时正文"}
             </div>
             <div className="hero-actions">
               <span className="field-hint">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
@@ -211,6 +248,8 @@ export function StreamDraftButton({
               </button>
             </div>
           </div>
+          {state.status === "running" ? <div className="pill form-status">{runningStatusText}</div> : null}
+          {state.status === "done" ? <div className="pill success">草稿已保存，台账已更新，可以继续审稿。</div> : null}
           <textarea className="stream-draft-textarea" value={state.content} readOnly />
           {state.status === "error" ? <div className="pill danger">{state.error}</div> : null}
         </div>

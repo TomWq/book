@@ -67,9 +67,6 @@ export default async function ProjectAnalysisPage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className={`pill ${hasStoryAnalysis ? "success" : "warning"}`}>
-              {hasStoryAnalysis ? "AI 精拆已生成" : analysisRunning ? "分析中" : "等待有效分析"}
-            </div>
             <h1>整书分析</h1>
             <p>从章节拆解里提炼开局、主循环、爽点节奏、可迁移结构和不可照搬内容。</p>
           </div>

@@ -3,13 +3,76 @@ import { redirect } from "next/navigation";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import {
   getCurrentUserAccess,
-  getDashboardStats,
   formatProjectStatus,
+  getProjectWritingState,
   getProjects,
-  getRecentAiJobs,
-  getTemplates
+  getTemplates,
+  type ProjectWithCounts
 } from "@/lib/projects";
 import { Panel } from "@/components/panel";
+import { ProjectCover } from "@/components/project-cover";
+
+function countTextCharacters(value: string) {
+  return value.replace(/\s/g, "").length;
+}
+
+function isSameLocalDay(value: string, date: Date) {
+  const target = new Date(value);
+
+  return (
+    target.getFullYear() === date.getFullYear() &&
+    target.getMonth() === date.getMonth() &&
+    target.getDate() === date.getDate()
+  );
+}
+
+function ProjectListItem({
+  project,
+  mode,
+  writtenCharacters
+}: {
+  project: ProjectWithCounts;
+  mode: "analysis" | "writing";
+  writtenCharacters?: number;
+}) {
+  return (
+    <Link key={project.id} href={`/projects/${project.id}`} className="list-item home-project-item">
+      <ProjectCover
+        title={project.name}
+        coverImageUrl={project.coverImageUrl}
+        fallbackLabel={mode === "writing" ? "书" : "拆"}
+        size="sm"
+      />
+      <div className="home-project-copy">
+        <div className="row">
+          <strong>{project.name}</strong>
+          <span className={`pill ${project.status === "ready" ? "success" : "warning"}`}>
+            {formatProjectStatus(project.status)}
+          </span>
+        </div>
+        <div className="muted clamped-text three-lines">{project.description || "尚未添加项目说明。"}</div>
+        <div className="meta-row">
+          <span className="chip project-genre-chip">{project.genre || "未填写题材"}</span>
+          {mode === "writing" ? (
+            <>
+              <span className="chip">已写 {project._count.chapterDrafts} 章</span>
+              <span className="chip">累计 {(writtenCharacters ?? 0).toLocaleString("zh-CN")} 字</span>
+              <span className="chip">任务卡 {project._count.writingTaskCards}</span>
+              <span className="chip">审稿 {project._count.reviewReports}</span>
+            </>
+          ) : (
+            <>
+              <span className="chip">导入 {project._count.chapters} 章</span>
+              <span className="chip">拆解 {project._count.chapterAnalyses} 章</span>
+              <span className="chip">整书分析 {project._count.storyAnalyses}</span>
+            </>
+          )}
+          <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
+        </div>
+      </div>
+    </Link>
+  );
+}
 
 export default async function HomePage() {
   const { user, isAdmin } = await getCurrentUserAccess();
@@ -83,7 +146,6 @@ export default async function HomePage() {
           </div>
 
           <div className="public-hero-content">
-            {/* <div className="pill success">AI 网文写作助手</div> */}
             <h1>从拆懂爆款开始，写一本不跑偏的长篇。</h1>
             <p>
               拆章节节奏、爽点和主循环，沉淀可迁移模板，再用任务卡、章节台账和项目状态管理持续推进连载。
@@ -163,97 +225,139 @@ export default async function HomePage() {
     );
   }
 
-  const [stats, projects, templates, workQueue] = await Promise.all([
-    getDashboardStats(),
+  const [projects, templates] = await Promise.all([
     getProjects(),
-    getTemplates(),
-    getRecentAiJobs()
+    getTemplates()
   ]);
-  const hasProject = projects.length > 0;
-  const hasTemplate = templates.length > 0;
-  const writingProject = projects.find((project) => project.type === "writing");
+  const writingProjects = projects.filter((project) => project.type === "writing");
+  const analysisProjects = projects.filter((project) => project.type === "analysis");
+  const writingProject = writingProjects[0];
+  const analysisProject = analysisProjects[0];
+  const today = new Date();
+  const writingStates = await Promise.all(writingProjects.map((project) => getProjectWritingState(project.id)));
+  const allDrafts = writingStates.flatMap((state) => state?.drafts ?? []);
+  const writtenCharactersByProject = new Map<string, number>();
+
+  writingStates.forEach((state) => {
+    if (!state) {
+      return;
+    }
+
+    writtenCharactersByProject.set(
+      state.project.id,
+      state.drafts.reduce((total, draft) => total + countTextCharacters(draft.content), 0)
+    );
+  });
+
+  const todayDrafts = allDrafts.filter((draft) => isSameLocalDay(draft.createdAt, today));
+  const todayCharacters = todayDrafts.reduce((total, draft) => total + countTextCharacters(draft.content), 0);
+  const totalCharacters = allDrafts.reduce((total, draft) => total + countTextCharacters(draft.content), 0);
+  const writingStats = [
+    { label: "今日字数", value: todayCharacters.toLocaleString("zh-CN") },
+    { label: "累计字数", value: totalCharacters.toLocaleString("zh-CN") },
+    { label: "今日章节", value: todayDrafts.length },
+    { label: "已写正文", value: writingProjects.reduce((total, project) => total + project._count.chapterDrafts, 0) },
+    { label: "任务卡", value: writingProjects.reduce((total, project) => total + project._count.writingTaskCards, 0) },
+    { label: "审稿报告", value: writingProjects.reduce((total, project) => total + project._count.reviewReports, 0) }
+  ];
+  const analysisStats = [
+    { label: "拆书项目", value: analysisProjects.length },
+    { label: "已导入章节", value: analysisProjects.reduce((total, project) => total + project._count.chapters, 0) },
+    { label: "章节拆解", value: analysisProjects.reduce((total, project) => total + project._count.chapterAnalyses, 0) },
+    { label: "模板", value: templates.length }
+  ];
 
   return (
     <>
-      <section className="hero">
-        <div className="hero-top">
-          <div>
-            <div className="pill success">工作台</div>
-            <h1>今天先做哪一步？</h1>
-            <p>
-              从导入拆书、模板迁移到长篇创作管理，所有入口都在这里。优先处理未完成的项目和任务。
-            </p>
-          </div>
-          <div className="hero-actions">
-            <Link href="/projects/new/analysis" className="button">
-              新建拆书项目
-            </Link>
-            <Link href="/templates" className="button">
-              查看模板库
-            </Link>
-            <Link href="/projects/new" className="button primary">
-              新建创作项目
-            </Link>
-          </div>
-        </div>
-
-        <div className="grid stats">
-          {stats.map((item) => (
-            <div key={item.label} className="stat-card">
-              <strong>{item.value}</strong>
-              <span>{item.label}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid stats">
-          <Link href="/projects/new/analysis" className="stat-card">
-            <strong>开始拆书</strong>
-            <span>上传文本，自动分章并提炼结构</span>
-          </Link>
-          <Link href={hasProject ? "/projects" : "/projects/new/analysis"} className="stat-card">
-            <strong>{hasProject ? "继续项目" : "创建项目"}</strong>
-            <span>{hasProject ? "查看最近拆解和写作进度" : "建立第一个拆书或创作项目"}</span>
-          </Link>
-          <Link href={hasTemplate ? "/templates" : "/projects"} className="stat-card">
-            <strong>{hasTemplate ? "迁移模板" : "沉淀模板"}</strong>
-            <span>{hasTemplate ? "选择模板生成新题材大纲" : "完成整书分析后保存公式"}</span>
-          </Link>
-          <Link href={writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new"} className="stat-card">
-            <strong>{writingProject ? "继续创作" : "创建长篇"}</strong>
-            <span>任务卡、正文、台账和审稿闭环</span>
-          </Link>
-        </div>
+      <section className="page-intro">
+        <h1>今天先走哪条线？</h1>
+        <p>创作和拆书分开看：写书看正文、任务卡和审稿；拆书看导入、拆解和模板沉淀。</p>
       </section>
 
-      <div className="">
-        <div className="dashboard-main">
-          <Panel title="最近项目" description="拆书项目与创作项目统一管理">
+      <div className="grid two-col">
+        <div className="grid">
+          <Panel
+            title="创作工作区"
+            description="只看长篇创作进度：正文、任务卡、台账和审稿。"
+            action={
+              <Link href={writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new"} className="button primary">
+                {writingProject ? "继续创作" : "新建创作项目"}
+              </Link>
+            }
+          >
+            <div className="grid stats" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+              {writingStats.map((item) => (
+                <div key={item.label} className="stat-card">
+                  <strong>{item.value}</strong>
+                  <span>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel title="创作项目" description="显示正文连载和创作闭环状态。">
             <div className="list">
-              {projects.length === 0 ? (
-                <div className="section-card">暂无项目，先新建一个项目开始。</div>
-              ) : (
-                projects.slice(0, 4).map((project) => (
-                  <Link key={project.id} href={`/projects/${project.id}`} className="list-item">
-                    <div className="row">
-                      <strong>{project.name}</strong>
-                      <span className={`pill ${project.status === "ready" ? "success" : "warning"}`}>
-                        {formatProjectStatus(project.status)}
-                      </span>
-                    </div>
-                    <div className="kpi">{project.genre || "未填写题材"}</div>
-                    <div className="muted">{project.description || "尚未添加项目说明。"}</div>
-                    <div className="meta-row">
-                      <span className="chip">{project._count.chapters} 章</span>
-                      <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
-                    </div>
+              {writingProjects.length === 0 ? (
+                <div className="empty-state">
+                  <strong>还没有创作项目</strong>
+                  <span>新建作品后，这里会显示正文、任务卡和审稿进度。</span>
+                  <Link href="/projects/new" className="button primary">
+                    新建创作项目
                   </Link>
+                </div>
+              ) : (
+                writingProjects.slice(0, 4).map((project) => (
+                  <ProjectListItem
+                    key={project.id}
+                    project={project}
+                    mode="writing"
+                    writtenCharacters={writtenCharactersByProject.get(project.id) ?? 0}
+                  />
+                ))
+              )}
+            </div>
+          </Panel>
+        </div>
+
+        <div className="grid">
+          <Panel
+            title="拆书工作区"
+            description="只看结构分析进度：导入、分章、拆解和模板。"
+            action={
+              <Link href={analysisProject ? `/projects/${analysisProject.id}/chapters` : "/projects/new/analysis"} className="button">
+                {analysisProject ? "继续拆书" : "新建拆书项目"}
+              </Link>
+            }
+          >
+            <div className="grid stats" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              {analysisStats.map((item) => (
+                <div key={item.label} className="stat-card">
+                  <strong>{item.value}</strong>
+                  <span>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel title="拆书项目" description="显示导入、章节拆解和公式沉淀状态。">
+            <div className="list">
+              {analysisProjects.length === 0 ? (
+                <div className="empty-state">
+                  <strong>还没有拆书项目</strong>
+                  <span>导入样本文本后，这里会显示分章和拆解进度。</span>
+                  <Link href="/projects/new/analysis" className="button">
+                    新建拆书项目
+                  </Link>
+                </div>
+              ) : (
+                analysisProjects.slice(0, 4).map((project) => (
+                  <ProjectListItem key={project.id} project={project} mode="analysis" />
                 ))
               )}
             </div>
           </Panel>
 
-          <Panel title="模板库预览" description="把成功结构变成可迁移资产">
+          <Panel title="模板库预览" description="拆书沉淀出的公式，可以继续迁移到新题材。">
             <div className="list">
               {templates.length === 0 ? (
                 <div className="section-card">模板库还空着，先在分析页保存一个模板。</div>
@@ -278,61 +382,6 @@ export default async function HomePage() {
             </div>
           </Panel>
         </div>
-
-        {/* <aside className="dashboard-side">
-          <Panel title="待处理任务" description="只显示待处理、处理中或失败后需要关注的任务">
-            <div className="timeline">
-              {workQueue.length === 0 ? (
-                <div className="section-card">暂无待处理任务。导入文本、分析章节或生成正文时才会出现在这里。</div>
-              ) : (
-                workQueue.map((item) => (
-                  <div key={item.title} className="timeline-item">
-                    <div className="row">
-                      <strong>{item.title}</strong>
-                      <span className="pill warning">{item.status}</span>
-                    </div>
-                    <div className="meta-row">
-                      <span className="chip">进度 {item.progress}</span>
-                    </div>
-                    <div className="usage-bar" aria-hidden="true">
-                      <span style={{ width: `${item.progressPercent ?? 0}%` }} />
-                    </div>
-                    <div className="muted">{item.detail}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </Panel>
-
-          <Panel title="下一步建议" description="按当前项目进度给出最短路径。">
-            <div className="list">
-              {!hasProject ? (
-                <Link href="/projects/new/analysis" className="list-item">
-                  <strong>创建第一个项目</strong>
-                  <div className="muted">拆书项目用于提公式，创作项目用于管理长篇状态。</div>
-                </Link>
-              ) : null}
-              {hasProject && !hasTemplate ? (
-                <Link href="/projects" className="list-item">
-                  <strong>完成一次整书分析</strong>
-                  <div className="muted">分析完成后保存模板，才能进入新题材迁移。</div>
-                </Link>
-              ) : null}
-              {hasTemplate ? (
-                <Link href="/templates" className="list-item">
-                  <strong>从模板生成大纲</strong>
-                  <div className="muted">选择一个模板，填入题材变量，生成前 10 章和前 100 章节奏。</div>
-                </Link>
-              ) : null}
-              {writingProject ? (
-                <Link href={`/projects/${writingProject.id}/writing`} className="list-item">
-                  <strong>继续长篇创作</strong>
-                  <div className="muted">先生成任务卡，再生成正文、台账和一致性审稿。</div>
-                </Link>
-              ) : null}
-            </div>
-          </Panel>
-        </aside> */}
       </div>
     </>
   );

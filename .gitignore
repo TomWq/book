@@ -22,6 +22,7 @@ bun-debug.log*
 .env
 .env.*
 !.env.example
+deploy.config.json
 
 # local database / runtime data
 dev.db

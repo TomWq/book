@@ -1,45 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import type DatabaseConstructor from "better-sqlite3";
-import type postgres from "postgres";
 
 const require = createRequire(import.meta.url);
 const loadSqlite = () => require("better-sqlite3") as typeof DatabaseConstructor;
 
 const DEFAULT_STATE_ID = "default";
-const STORE_RECORD_ENTITY_KEYS = [
-  "users",
-  "sessions",
-  "projects",
-  "sourceTexts",
-  "chapters",
-  "chapterAnalyses",
-  "storyAnalyses",
-  "templates",
-  "outlines",
-  "writingBibles",
-  "characterProfiles",
-  "foreshadowings",
-  "plotStates",
-  "writingTaskCards",
-  "chapterDrafts",
-  "chapterLedgers",
-  "reviewReports",
-  "editReports",
-  "aiJobs",
-  "creditTransactions",
-  "licenseCodes",
-  "licenseActivationLogs",
-  "aiSettings"
-];
-
-type PostgresClient = ReturnType<typeof postgres>;
-
-const globalForPersistence = globalThis as typeof globalThis & {
-  __appStatePostgres?: PostgresClient;
-  __appStatePostgresLoader?: Promise<PostgresClient>;
-};
 
 function isProductionRuntime() {
   return process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
@@ -73,130 +41,6 @@ function resolveSqliteFilePath() {
   return path.resolve(/*turbopackIgnore: true*/ process.cwd(), rawPath);
 }
 
-function resolvePostgresUrl() {
-  const url = process.env.DATABASE_URL?.trim();
-
-  if (!url || !/^postgres(?:ql)?:\/\//.test(url)) {
-    return null;
-  }
-
-  return url;
-}
-
-async function getPostgresClient() {
-  const url = resolvePostgresUrl();
-
-  if (!url) {
-    return null;
-  }
-
-  if (!globalForPersistence.__appStatePostgres) {
-    if (!globalForPersistence.__appStatePostgresLoader) {
-      globalForPersistence.__appStatePostgresLoader = (async () => {
-        const { default: postgresClientFactory } = await import("postgres");
-        const client = postgresClientFactory(url, {
-          max: Number(process.env.DATABASE_POOL_SIZE ?? 3),
-          connect_timeout: Number(process.env.DATABASE_CONNECT_TIMEOUT_SECONDS ?? 5),
-          idle_timeout: 20,
-          onnotice: () => {}
-        });
-
-        await ensurePostgresSchema(client);
-        globalForPersistence.__appStatePostgres = client;
-        return client;
-      })();
-    }
-
-    return globalForPersistence.__appStatePostgresLoader;
-  }
-
-  return globalForPersistence.__appStatePostgres;
-}
-
-export async function getPersistencePostgresClient() {
-  return getPostgresClient();
-}
-
-export async function ensurePersistencePostgresSchema() {
-  const client = await getPostgresClient();
-
-  if (!client) {
-    return null;
-  }
-
-  await ensurePostgresSchema(client);
-  return client;
-}
-
-async function ensurePostgresSchema(sql: PostgresClient) {
-  await sql`
-    CREATE TABLE IF NOT EXISTS "AppState" (
-      "id" TEXT NOT NULL PRIMARY KEY,
-      "payload" TEXT NOT NULL,
-      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
-      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS "StoreRecord" (
-      "id" TEXT NOT NULL PRIMARY KEY,
-      "entityType" TEXT NOT NULL,
-      "userId" TEXT,
-      "ownerUserId" TEXT,
-      "projectId" TEXT,
-      "payload" JSONB NOT NULL,
-      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
-      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `;
-
-  await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_entityType_idx" ON "StoreRecord" ("entityType")`;
-  await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_userId_idx" ON "StoreRecord" ("userId")`;
-  await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_ownerUserId_idx" ON "StoreRecord" ("ownerUserId")`;
-  await sql`CREATE INDEX IF NOT EXISTS "StoreRecord_projectId_idx" ON "StoreRecord" ("projectId")`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS "LicenseCode" (
-      "id" TEXT NOT NULL PRIMARY KEY,
-      "codeHash" TEXT NOT NULL UNIQUE,
-      "plainCode" TEXT,
-      "codePreview" TEXT NOT NULL,
-      "customerName" TEXT,
-      "customerContact" TEXT,
-      "status" TEXT NOT NULL DEFAULT 'unused',
-      "maxActivations" INTEGER NOT NULL DEFAULT 1,
-      "activationCount" INTEGER NOT NULL DEFAULT 0,
-      "machineHash" TEXT,
-      "activatedAt" TIMESTAMPTZ,
-      "lastVerifiedAt" TIMESTAMPTZ,
-      "expiresAt" TIMESTAMPTZ,
-      "disabledAt" TIMESTAMPTZ,
-      "notes" TEXT,
-      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
-      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `;
-
-  await sql`ALTER TABLE "LicenseCode" ADD COLUMN IF NOT EXISTS "plainCode" TEXT`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS "LicenseActivationLog" (
-      "id" TEXT NOT NULL PRIMARY KEY,
-      "licenseCodeId" TEXT,
-      "codeHash" TEXT NOT NULL,
-      "machineHash" TEXT,
-      "result" TEXT NOT NULL,
-      "reason" TEXT NOT NULL,
-      "clientName" TEXT,
-      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `;
-
-  await sql`CREATE INDEX IF NOT EXISTS "LicenseActivationLog_licenseCodeId_idx" ON "LicenseActivationLog" ("licenseCodeId")`;
-  await sql`CREATE INDEX IF NOT EXISTS "LicenseActivationLog_codeHash_idx" ON "LicenseActivationLog" ("codeHash")`;
-}
-
 function ensureSqliteSchema() {
   const sqlitePath = resolveSqliteFilePath();
 
@@ -204,6 +48,7 @@ function ensureSqliteSchema() {
     return;
   }
 
+  mkdirSync(path.dirname(sqlitePath), { recursive: true });
   const Database = loadSqlite();
   const db = new Database(sqlitePath);
 
@@ -224,6 +69,7 @@ function ensureSqliteSchema() {
       "type" TEXT NOT NULL,
       "description" TEXT NOT NULL,
       "genre" TEXT NOT NULL,
+      "coverImageUrl" TEXT,
       "status" TEXT NOT NULL,
       "createdAt" DATETIME NOT NULL,
       "updatedAt" DATETIME NOT NULL
@@ -425,6 +271,18 @@ function ensureSqliteSchema() {
       CONSTRAINT "PlotState_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS "CustomRelationGraph" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "projectId" TEXT NOT NULL,
+      "title" TEXT NOT NULL,
+      "description" TEXT NOT NULL,
+      "nodes" JSON,
+      "edges" JSON,
+      "createdAt" DATETIME NOT NULL,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "CustomRelationGraph_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS "WritingTaskCard" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "projectId" TEXT NOT NULL,
@@ -537,7 +395,6 @@ function ensureSqliteSchema() {
 
     CREATE TABLE IF NOT EXISTS "User" (
       "id" TEXT NOT NULL PRIMARY KEY,
-      "supabaseUserId" TEXT,
       "email" TEXT NOT NULL UNIQUE,
       "name" TEXT NOT NULL,
       "passwordSalt" TEXT NOT NULL,
@@ -550,7 +407,9 @@ function ensureSqliteSchema() {
       "aiTaskPricingOverrides" JSON,
       "licenseCustomerId" TEXT,
       "licenseCodeHash" TEXT,
+      "licenseMachineHash" TEXT,
       "licenseActivatedAt" DATETIME,
+      "licenseExpiresAt" DATETIME,
       "onboardingCompletedAt" DATETIME,
       "createdAt" DATETIME NOT NULL,
       "updatedAt" DATETIME NOT NULL
@@ -612,14 +471,16 @@ function ensureSqliteSchema() {
 
   [
     'ALTER TABLE "Project" ADD COLUMN "ownerUserId" TEXT',
+    'ALTER TABLE "Project" ADD COLUMN "coverImageUrl" TEXT',
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
-    'ALTER TABLE "User" ADD COLUMN "supabaseUserId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" REAL',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER',
     'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
     'ALTER TABLE "User" ADD COLUMN "licenseCustomerId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseCodeHash" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "licenseMachineHash" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseActivatedAt" DATETIME',
+    'ALTER TABLE "User" ADD COLUMN "licenseExpiresAt" DATETIME',
     'ALTER TABLE "LicenseCode" ADD COLUMN "plainCode" TEXT',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
@@ -676,112 +537,6 @@ function asEntityRecordArray(store: unknown, key: string) {
   return [];
 }
 
-function asObject(store: unknown, key: string) {
-  if (!store || typeof store !== "object") {
-    return null;
-  }
-
-  const value = (store as Record<string, unknown>)[key];
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function recordIdentity(entityType: string, item: Record<string, unknown>, index: number) {
-  return text(item.id) || text(item.userId) || `${entityType}:${index}`;
-}
-
-function recordUserId(item: Record<string, unknown>) {
-  return nullableText(item.userId) ?? nullableText(item.ownerUserId);
-}
-
-async function syncPostgresStoreRecords(sql: PostgresClient, store: unknown) {
-  await ensurePostgresSchema(sql);
-  await sql.begin(async (transaction) => {
-    await transaction`DELETE FROM "StoreRecord"`;
-
-    for (const entityType of STORE_RECORD_ENTITY_KEYS) {
-      const items = asEntityRecordArray(store, entityType);
-
-      for (const [index, item] of items.entries()) {
-        const id = `${entityType}:${recordIdentity(entityType, item, index)}`;
-        const payload = JSON.stringify(item);
-
-        await transaction`
-          INSERT INTO "StoreRecord" (
-            "id", "entityType", "userId", "ownerUserId", "projectId", "payload"
-          )
-          VALUES (
-            ${id},
-            ${entityType},
-            ${recordUserId(item)},
-            ${nullableText(item.ownerUserId)},
-            ${nullableText(item.projectId) ?? nullableText(item.sourceProjectId)},
-            ${payload}::jsonb
-          )
-          ON CONFLICT ("id") DO UPDATE SET
-            "entityType" = EXCLUDED."entityType",
-            "userId" = EXCLUDED."userId",
-            "ownerUserId" = EXCLUDED."ownerUserId",
-            "projectId" = EXCLUDED."projectId",
-            "payload" = EXCLUDED."payload",
-            "updatedAt" = now()
-        `;
-      }
-    }
-  });
-}
-
-function parseStoreRecordPayload(value: unknown) {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function buildStoreFromEntityRecords<T>(
-  fallback: T,
-  records: Array<{ entityType?: string; payload?: unknown }>
-) {
-  if (records.length === 0) {
-    return null;
-  }
-
-  const nextStore: Record<string, unknown> = { ...(fallback as Record<string, unknown>) };
-
-  for (const key of STORE_RECORD_ENTITY_KEYS) {
-    const payloads = records
-      .filter((record) => record.entityType === key)
-      .map((record) => parseStoreRecordPayload(record.payload))
-      .filter((payload): payload is Record<string, unknown> => Boolean(payload));
-
-    if (key === "aiSettings") {
-      nextStore.aiSettings = payloads.length <= 1 ? payloads[0] : payloads;
-    } else {
-      nextStore[key] = payloads;
-    }
-  }
-
-  return nextStore as T;
-}
-
-async function readStoreRecordsFromPostgres<T>(
-  sql: PostgresClient,
-  fallback: T
-) {
-  await ensurePostgresSchema(sql);
-  const records = await sql`
-    SELECT "entityType", "payload"
-    FROM "StoreRecord"
-    ORDER BY "entityType", "createdAt", "id"
-  ` as Array<{ entityType?: string; payload?: unknown }>;
-
-  return buildStoreFromEntityRecords(fallback, records);
-}
-
 function text(value: unknown) {
   return value == null ? "" : String(value);
 }
@@ -833,6 +588,7 @@ function syncCoreTables(store: unknown) {
   const characterProfiles = asRecordArray(store, "characterProfiles");
   const foreshadowings = asRecordArray(store, "foreshadowings");
   const plotStates = asRecordArray(store, "plotStates");
+  const customRelationGraphs = asRecordArray(store, "customRelationGraphs");
   const writingTaskCards = asRecordArray(store, "writingTaskCards");
   const chapterDrafts = asRecordArray(store, "chapterDrafts");
   const chapterLedgers = asRecordArray(store, "chapterLedgers");
@@ -851,6 +607,7 @@ function syncCoreTables(store: unknown) {
     db.prepare('DELETE FROM "ChapterLedger"').run();
     db.prepare('DELETE FROM "ChapterDraft"').run();
     db.prepare('DELETE FROM "WritingTaskCard"').run();
+    db.prepare('DELETE FROM "CustomRelationGraph"').run();
     db.prepare('DELETE FROM "PlotState"').run();
     db.prepare('DELETE FROM "Foreshadowing"').run();
     db.prepare('DELETE FROM "CharacterProfile"').run();
@@ -873,16 +630,15 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "supabaseUserId", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseActivatedAt", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @supabaseUserId, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseActivatedAt, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
     users.forEach((user) => {
       insertUser.run({
         id: text(user.id),
-        supabaseUserId: maybeString(user.supabaseUserId),
         email: text(user.email),
         name: text(user.name),
         passwordSalt: text(user.passwordSalt),
@@ -896,7 +652,9 @@ function syncCoreTables(store: unknown) {
           user.aiTaskPricingOverrides == null ? null : JSON.stringify(user.aiTaskPricingOverrides),
         licenseCustomerId: nullableText(user.licenseCustomerId),
         licenseCodeHash: nullableText(user.licenseCodeHash),
+        licenseMachineHash: nullableText(user.licenseMachineHash),
         licenseActivatedAt: user.licenseActivatedAt ? dateText(user.licenseActivatedAt) : null,
+        licenseExpiresAt: user.licenseExpiresAt ? dateText(user.licenseExpiresAt) : null,
         onboardingCompletedAt: user.onboardingCompletedAt ? dateText(user.onboardingCompletedAt) : null,
         createdAt: dateText(user.createdAt),
         updatedAt: dateText(user.updatedAt)
@@ -924,9 +682,9 @@ function syncCoreTables(store: unknown) {
 
     const insertProject = db.prepare(`
       INSERT INTO "Project" (
-        "id", "ownerUserId", "name", "type", "description", "genre", "status", "createdAt", "updatedAt"
+        "id", "ownerUserId", "name", "type", "description", "genre", "coverImageUrl", "status", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @ownerUserId, @name, @type, @description, @genre, @status, @createdAt, @updatedAt
+        @id, @ownerUserId, @name, @type, @description, @genre, @coverImageUrl, @status, @createdAt, @updatedAt
       )
     `);
 
@@ -938,6 +696,7 @@ function syncCoreTables(store: unknown) {
         type: text(project.type),
         description: text(project.description),
         genre: text(project.genre),
+        coverImageUrl: nullableText(project.coverImageUrl),
         status: text(project.status),
         createdAt: dateText(project.createdAt),
         updatedAt: dateText(project.updatedAt)
@@ -1222,6 +981,27 @@ function syncCoreTables(store: unknown) {
         mapAndForces: text(item.mapAndForces),
         resourceState: text(item.resourceState),
         relationshipChanges: jsonText(item.relationshipChanges),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      });
+    });
+
+    const insertCustomRelationGraph = db.prepare(`
+      INSERT INTO "CustomRelationGraph" (
+        "id", "projectId", "title", "description", "nodes", "edges", "createdAt", "updatedAt"
+      ) VALUES (
+        @id, @projectId, @title, @description, @nodes, @edges, @createdAt, @updatedAt
+      )
+    `);
+
+    customRelationGraphs.forEach((item) => {
+      insertCustomRelationGraph.run({
+        id: text(item.id),
+        projectId: text(item.projectId),
+        title: text(item.title),
+        description: text(item.description),
+        nodes: jsonText(item.nodes),
+        edges: jsonText(item.edges),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
       });
@@ -1550,44 +1330,6 @@ function upsertAppStateInSqlite(payload: string) {
   }
 }
 
-async function readAppStateFromPostgres<T>(
-  sql: PostgresClient,
-  fallback: T
-) {
-  await ensurePostgresSchema(sql);
-  const rows = await sql`
-    SELECT "payload"
-    FROM "AppState"
-    WHERE "id" = ${DEFAULT_STATE_ID}
-    LIMIT 1
-  ` as Array<{ payload?: string }>;
-  const payload = rows[0]?.payload;
-
-  if (!payload) {
-    return null;
-  }
-
-  try {
-    return { ...fallback, ...(JSON.parse(payload) as Partial<T>) } as T;
-  } catch {
-    return fallback;
-  }
-}
-
-async function upsertAppStateInPostgres(
-  sql: PostgresClient,
-  payload: string
-) {
-  await ensurePostgresSchema(sql);
-  await sql`
-    INSERT INTO "AppState" ("id", "payload")
-    VALUES (${DEFAULT_STATE_ID}, ${payload})
-    ON CONFLICT ("id") DO UPDATE SET
-      "payload" = EXCLUDED."payload",
-      "updatedAt" = now()
-  `;
-}
-
 async function ensureDataDir(storePath: string) {
   await mkdir(path.dirname(storePath), { recursive: true }).catch(() => {
     // Fallback path handling is intentionally best-effort.
@@ -1687,6 +1429,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
         type: text(item.type),
         description: text(item.description),
         genre: text(item.genre),
+        coverImageUrl: maybeString(item.coverImageUrl),
         status: text(item.status),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
@@ -1864,6 +1607,16 @@ function readCoreStoreFromDb<T>(fallback: T) {
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
       })),
+      customRelationGraphs: rows(db, "CustomRelationGraph").map((item) => ({
+        id: text(item.id),
+        projectId: text(item.projectId),
+        title: text(item.title),
+        description: text(item.description),
+        nodes: parseJsonArray(item.nodes),
+        edges: parseJsonArray(item.edges),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      })),
       writingTaskCards: rows(db, "WritingTaskCard").map((item) => ({
         id: text(item.id),
         projectId: text(item.projectId),
@@ -1963,7 +1716,6 @@ function readCoreStoreFromDb<T>(fallback: T) {
       })),
       users: rows(db, "User").map((item) => ({
         id: text(item.id),
-        supabaseUserId: maybeString(item.supabaseUserId),
         email: text(item.email),
         name: text(item.name),
         passwordSalt: text(item.passwordSalt),
@@ -1979,7 +1731,9 @@ function readCoreStoreFromDb<T>(fallback: T) {
             : parseJsonObject(item.aiTaskPricingOverrides),
         licenseCustomerId: maybeString(item.licenseCustomerId),
         licenseCodeHash: maybeString(item.licenseCodeHash),
+        licenseMachineHash: maybeString(item.licenseMachineHash),
         licenseActivatedAt: maybeString(item.licenseActivatedAt),
+        licenseExpiresAt: maybeString(item.licenseExpiresAt),
         onboardingCompletedAt: maybeString(item.onboardingCompletedAt),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
@@ -2039,47 +1793,16 @@ function readCoreStoreFromDb<T>(fallback: T) {
 }
 
 export async function loadPersistedStore<T>(storePath: string, fallback: T) {
-  const postgresClient = await getPostgresClient();
-  const storeRecordReadMode = process.env.STORE_RECORD_READ_MODE?.trim() || "auto";
-
-  if (postgresClient) {
-    if (storeRecordReadMode === "prefer") {
-      const recordSnapshot = await readStoreRecordsFromPostgres(postgresClient, fallback);
-
-      if (recordSnapshot) {
-        await upsertAppStateInPostgres(postgresClient, JSON.stringify(recordSnapshot, null, 2));
-        return recordSnapshot;
-      }
-    }
-
-    const existing = await readAppStateFromPostgres(postgresClient, fallback);
-
-    if (existing) {
-      return existing;
-    }
-
-    if (storeRecordReadMode !== "appstate-only") {
-      const recordSnapshot = await readStoreRecordsFromPostgres(postgresClient, fallback);
-
-      if (recordSnapshot) {
-        await upsertAppStateInPostgres(postgresClient, JSON.stringify(recordSnapshot, null, 2));
-        await syncPostgresStoreRecords(postgresClient, recordSnapshot);
-        return recordSnapshot;
-      }
-    }
-
-    const fileSnapshot = await readStoreFile(storePath, fallback);
-    await upsertAppStateInPostgres(postgresClient, JSON.stringify(fileSnapshot, null, 2));
-    await syncPostgresStoreRecords(postgresClient, fileSnapshot);
-    return fileSnapshot;
-  }
-
   if (!hasDatabaseUrl()) {
     if (isProductionRuntime()) {
-      throw new Error("生产环境缺少 DATABASE_URL，无法使用本地文件存储。请在 Vercel 环境变量中配置 PostgreSQL 连接串。");
+      throw new Error("生产环境缺少 DATABASE_URL，无法使用本地文件存储。请配置 file: 开头的 SQLite 数据库路径。");
     }
 
     return readStoreFile(storePath, fallback);
+  }
+
+  if (!resolveSqliteFilePath()) {
+    throw new Error("当前版本只支持 file: 开头的 SQLite DATABASE_URL，请移除旧的远程数据库连接串。");
   }
 
   const coreStore = readCoreStoreFromDb(fallback);
@@ -2101,21 +1824,11 @@ export async function loadPersistedStore<T>(storePath: string, fallback: T) {
 }
 
 export async function savePersistedStore<T>(storePath: string, store: T) {
-  const postgresClient = await getPostgresClient();
   const payload = JSON.stringify(store, null, 2);
-  const shouldSyncStoreRecords = process.env.STORE_RECORD_SYNC_MODE?.trim() === "always";
-
-  if (postgresClient) {
-    await upsertAppStateInPostgres(postgresClient, payload);
-    if (shouldSyncStoreRecords) {
-      await syncPostgresStoreRecords(postgresClient, store);
-    }
-    return;
-  }
 
   if (!hasDatabaseUrl()) {
     if (isProductionRuntime()) {
-      throw new Error("生产环境缺少 DATABASE_URL，无法保存数据。请在 Vercel 环境变量中配置 PostgreSQL 连接串。");
+      throw new Error("生产环境缺少 DATABASE_URL，无法保存数据。请配置 file: 开头的 SQLite 数据库路径。");
     }
 
     await ensureDataDir(storePath);
@@ -2123,39 +1836,15 @@ export async function savePersistedStore<T>(storePath: string, store: T) {
     return;
   }
 
+  if (!resolveSqliteFilePath()) {
+    throw new Error("当前版本只支持 file: 开头的 SQLite DATABASE_URL，请移除旧的远程数据库连接串。");
+  }
+
   syncCoreTables(store);
 }
 
 export async function getPersistenceStatus() {
   const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
-  const readMode = process.env.STORE_RECORD_READ_MODE?.trim() || "auto";
-  const postgresClient = await getPostgresClient();
-
-  if (postgresClient) {
-    const appStateRows = await postgresClient`
-      SELECT COUNT(*)::int as count
-      FROM "AppState"
-    ` as Array<{ count: number }>;
-    const storeRecordRows = await postgresClient`
-      SELECT "entityType", COUNT(*)::int as count
-      FROM "StoreRecord"
-      GROUP BY "entityType"
-      ORDER BY "entityType"
-    ` as Array<{ entityType: string; count: number }>;
-
-    return {
-      mode: "postgres" as const,
-      databaseUrlConfigured: Boolean(databaseUrl),
-      readMode,
-      appStateCount: Number(appStateRows[0]?.count ?? 0),
-      storeRecordCount: storeRecordRows.reduce((total, row) => total + Number(row.count ?? 0), 0),
-      storeRecordEntities: storeRecordRows.map((row) => ({
-        entityType: row.entityType,
-        count: Number(row.count ?? 0)
-      }))
-    };
-  }
-
   const sqlitePath = resolveSqliteFilePath();
 
   if (sqlitePath) {
@@ -2171,7 +1860,6 @@ export async function getPersistenceStatus() {
       return {
         mode: "sqlite" as const,
         databaseUrlConfigured: true,
-        readMode,
         sqlitePath,
         appStateCount: Number(appStateRow?.count ?? 0),
         storeRecordCount: 0,
@@ -2185,7 +1873,6 @@ export async function getPersistenceStatus() {
   return {
     mode: "file" as const,
     databaseUrlConfigured: Boolean(databaseUrl),
-    readMode,
     appStateCount: 0,
     storeRecordCount: 0,
     storeRecordEntities: []

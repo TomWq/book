@@ -21,6 +21,7 @@ const maxSelectedTagsPerGroup = 2;
 
 type TagSectionKey = (typeof tagSections)[number]["key"];
 type TitleNamingStyle = "fanqie" | "qidian";
+type DescriptionWritingStyle = "fanqie" | "qidian";
 type CreationStepId = (typeof creationSteps)[number]["id"];
 
 function asText(value: FormDataEntryValue | null) {
@@ -39,6 +40,7 @@ export function ProjectForm() {
   const [authorName, setAuthorName] = useState("");
   const [coverImageUrl, setCoverImageUrl] = useState("");
   const [titleNamingStyle, setTitleNamingStyle] = useState<TitleNamingStyle>("fanqie");
+  const [descriptionWritingStyle, setDescriptionWritingStyle] = useState<DescriptionWritingStyle>("fanqie");
   const [description, setDescription] = useState("");
   const [protagonist1, setProtagonist1] = useState("");
   const [protagonist2, setProtagonist2] = useState("");
@@ -99,32 +101,27 @@ export function ProjectForm() {
     });
   }
 
-  function handleCoverUpload(event: ChangeEvent<HTMLInputElement>) {
+  async function fileToDataUrl(file: File) {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("封面读取失败"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleCoverUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
     if (!file) {
       return;
     }
 
-    const nextUrl = URL.createObjectURL(file);
-
-    setCoverImageUrl((currentUrl) => {
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-      }
-
-      return nextUrl;
-    });
+    setCoverImageUrl(await fileToDataUrl(file));
   }
 
   function clearCoverImage() {
-    setCoverImageUrl((currentUrl) => {
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-      }
-
-      return "";
-    });
+    setCoverImageUrl("");
   }
 
   useEffect(() => {
@@ -169,7 +166,9 @@ export function ProjectForm() {
       genre,
       targetReader,
       titleNamingStyle,
+      descriptionWritingStyle,
       titleConcept,
+      avoidTitles: titleSuggestions,
       tags: selectedTags,
       protagonistNames: [protagonist1, protagonist2].map((item) => item.trim()).filter(Boolean),
       coreSellingPoint: asText(formData.get("coreSellingPoint")),
@@ -263,6 +262,7 @@ export function ProjectForm() {
           type: "writing",
           genre,
           description: asText(formData.get("description")),
+          coverImageUrl,
           targetReader,
           tags: selectedTags,
           protagonistNames,
@@ -317,8 +317,8 @@ export function ProjectForm() {
           ) : null}
         </div>
         <div className="book-cover-note">
-          <strong>封面后续可补</strong>
-          <span>可上传自定义封面覆盖默认预览；未上传时会用书名和作者名生成临时封面。</span>
+          <strong>封面会同步保存</strong>
+          <span>上传后会写入项目封面；未上传时会用书名和作者名生成临时封面。</span>
         </div>
         <div className="tag-row">
           {selectedTagText ? <span className="chip">{selectedTagText}</span> : <span className="chip">未选择标签</span>}
@@ -691,6 +691,37 @@ export function ProjectForm() {
                     ? "AI 润色扩写"
                     : "AI 生成简介"}
               </button>
+            </div>
+            <div className="title-style-picker" aria-label="AI 简介风格">
+              <label>
+                <input
+                  type="radio"
+                  name="descriptionWritingStyle"
+                  value="fanqie"
+                  checked={descriptionWritingStyle === "fanqie"}
+                  onChange={() => setDescriptionWritingStyle("fanqie")}
+                />
+                <span>
+                  <strong>番茄简介</strong>
+                  <small>卖点前置，冲突直给，爽点更明确</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="descriptionWritingStyle"
+                  value="qidian"
+                  checked={descriptionWritingStyle === "qidian"}
+                  onChange={() => setDescriptionWritingStyle("qidian")}
+                />
+                <span>
+                  <strong>起点简介</strong>
+                  <small>设定感，悬念感，语气更稳</small>
+                </span>
+              </label>
+            </div>
+            <div className="assist-context-hint">
+              AI 简介会按{descriptionWritingStyle === "qidian" ? "起点简介" : "番茄简介"}生成，并参考上方题材、标签、主角、卖点和开局钩子。
             </div>
             <textarea
               name="description"

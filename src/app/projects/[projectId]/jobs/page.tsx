@@ -14,17 +14,10 @@ type JobTokenUsage = {
   reasoningTokens?: number;
 };
 
-type JobBilling = {
-  estimatedCredits?: number;
-  actualCredits?: number;
-  adjustmentCredits?: number;
-};
-
 type JobOutputView = {
   usedAi?: boolean;
   usedFallback?: boolean;
   tokenUsage?: JobTokenUsage;
-  billing?: JobBilling;
   chapterAnalysisCount?: number;
   totalChapters?: number;
   chapterNumber?: number;
@@ -113,7 +106,6 @@ function buildUsageStats(jobs: ProjectJobView[]) {
   const rows = jobs.map((job) => {
     const output = readJobOutput(job);
     const tokenUsage = output?.tokenUsage;
-    const billing = output?.billing;
     const unitCount = getJobUnitCount(job, output);
 
     return {
@@ -127,9 +119,7 @@ function buildUsageStats(jobs: ProjectJobView[]) {
       completionTokens: numberValue(tokenUsage?.completionTokens),
       cacheHitTokens: numberValue(tokenUsage?.promptCacheHitTokens),
       cacheMissTokens: numberValue(tokenUsage?.promptCacheMissTokens),
-      reasoningTokens: numberValue(tokenUsage?.reasoningTokens),
-      actualCredits: numberValue(billing?.actualCredits),
-      estimatedCredits: numberValue(billing?.estimatedCredits)
+      reasoningTokens: numberValue(tokenUsage?.reasoningTokens)
     };
   });
   const total = rows.reduce(
@@ -143,9 +133,7 @@ function buildUsageStats(jobs: ProjectJobView[]) {
       completionTokens: sum.completionTokens + row.completionTokens,
       cacheHitTokens: sum.cacheHitTokens + row.cacheHitTokens,
       cacheMissTokens: sum.cacheMissTokens + row.cacheMissTokens,
-      reasoningTokens: sum.reasoningTokens + row.reasoningTokens,
-      actualCredits: sum.actualCredits + row.actualCredits,
-      estimatedCredits: sum.estimatedCredits + row.estimatedCredits
+      reasoningTokens: sum.reasoningTokens + row.reasoningTokens
     }),
     {
       jobs: 0,
@@ -157,9 +145,7 @@ function buildUsageStats(jobs: ProjectJobView[]) {
       completionTokens: 0,
       cacheHitTokens: 0,
       cacheMissTokens: 0,
-      reasoningTokens: 0,
-      actualCredits: 0,
-      estimatedCredits: 0
+      reasoningTokens: 0
     }
   );
   const byType = Array.from(
@@ -172,7 +158,6 @@ function buildUsageStats(jobs: ProjectJobView[]) {
         promptTokens: 0,
         completionTokens: 0,
         reasoningTokens: 0,
-        actualCredits: 0,
         fallbackJobs: 0
       };
       current.jobs += 1;
@@ -181,11 +166,10 @@ function buildUsageStats(jobs: ProjectJobView[]) {
       current.promptTokens += row.promptTokens;
       current.completionTokens += row.completionTokens;
       current.reasoningTokens += row.reasoningTokens;
-      current.actualCredits += row.actualCredits;
       current.fallbackJobs += row.usedFallback ? 1 : 0;
       map.set(row.type, current);
       return map;
-    }, new Map<string, { type: string; jobs: number; units: number; totalTokens: number; promptTokens: number; completionTokens: number; reasoningTokens: number; actualCredits: number; fallbackJobs: number }>())
+    }, new Map<string, { type: string; jobs: number; units: number; totalTokens: number; promptTokens: number; completionTokens: number; reasoningTokens: number; fallbackJobs: number }>())
       .values()
   ).sort((a, b) => b.totalTokens - a.totalTokens);
 
@@ -327,7 +311,6 @@ export default async function ProjectJobsPage({
               <span>单位</span>
               <span>算力</span>
               <span>均值</span>
-              <span>费用</span>
             </div>
             {usageStats.byType.map((item) => (
               <div key={item.type} className="usage-table-row">
@@ -338,7 +321,6 @@ export default async function ProjectJobsPage({
                 <span>
                   {item.units > 0 ? formatNumber(item.totalTokens / item.units) : "0"} / {getUnitLabel(item.type)}
                 </span>
-                <span>自理</span>
               </div>
             ))}
           </div>

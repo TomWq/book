@@ -33,6 +33,7 @@ export async function POST(request: Request) {
     type: readProjectType(body.type),
     genre: String(body.genre ?? ""),
     description: String(body.description ?? ""),
+    coverImageUrl: String(body.coverImageUrl ?? ""),
     initialState: {
       targetReader: String(body.targetReader ?? ""),
       tags: list(body.tags),

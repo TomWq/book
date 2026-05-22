@@ -57,6 +57,16 @@ export function LicenseCodeGenerator() {
             <input name="quantity" type="number" min="1" max="50" step="1" defaultValue="1" />
           </div>
           <div className="field">
+            <div className="field-label">体验时长（分钟）</div>
+            <input
+              name="durationMinutes"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="留空为永久"
+            />
+          </div>
+          <div className="field">
             <div className="field-label">可激活设备数</div>
             <input name="maxActivations" type="number" min="1" max="10" step="1" defaultValue="1" />
           </div>

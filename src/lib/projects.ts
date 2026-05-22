@@ -1,15 +1,8 @@
-import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
-import { request as httpsRequest } from "node:https";
-import { SocksProxyAgent } from "socks-proxy-agent";
-import { cookies } from "next/headers";
-import { cache } from "react";
 import {
   analyzeChapter,
-  buildStoryAnalysis,
-  type EntityRelation,
-  type PleasurePoint
+  buildStoryAnalysis
 } from "@/lib/analysis";
 import {
   combineAiTokenUsages,
@@ -31,7 +24,6 @@ import {
 } from "@/lib/ai/project-creation";
 import { novelTaxonomy, type TargetReader } from "@/lib/novel-taxonomy";
 import {
-  assertChapterDraftComplete,
   assertEditedTextComplete,
   countDraftCharacters,
   editDraftTextWithAi,
@@ -40,6 +32,7 @@ import {
   generateWritingTaskCardWithAi,
   minimumDraftCharacters,
   reviewChapterDraftWithAi,
+  prepareChapterDraftContentForSave,
   sanitizeChapterDraftDiction,
   type ChapterDraftContext,
   type ChapterStateUpdateContext,
@@ -54,615 +47,178 @@ import {
   resolveAiTaskPricing,
   type AiTaskPricingOverrides
 } from "@/lib/ai-task-pricing";
-import { isDesktopRuntime } from "@/lib/app-runtime";
-import { getBillingMode, isCreditsBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
-import { splitNovelText } from "@/lib/chapters";
-import { hasSupabaseAuthConfig } from "@/lib/supabase/config";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient, getSupabaseAuthUser } from "@/lib/supabase/server";
 import {
-  ensurePersistencePostgresSchema,
-  getPersistencePostgresClient,
-  loadPersistedStore,
-  savePersistedStore
-} from "@/lib/store-persistence";
+  getActiveAiModel,
+  getPrimaryAiSettings,
+  getUserAiSettings,
+  hasConfiguredAiSettings,
+  listUserAiProfiles,
+  mergeAiSettings,
+  normalizeStoredAiSettings,
+  setPrimaryAiSettings,
+  setUserAiProfiles
+} from "@/lib/ai-settings-store";
+import {
+  hashPassword,
+  isAdminUser,
+  toAuthUser,
+} from "@/lib/auth-utils";
+import {
+  clearSessionCookie,
+  getActiveSession,
+  sessionExpiresAt,
+  setSessionCookie
+} from "@/lib/auth-session";
+import {
+  loginUserWithAuthService,
+  logoutUserWithAuthService,
+  registerUserWithAuthService,
+  type AuthServiceHooks
+} from "@/lib/auth-service";
+import { isDesktopRuntime } from "@/lib/app-runtime";
+import { getBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
+import {
+  activationEmail,
+  activateLicenseViaRemoteCenter,
+  activateLicenseWithCenter,
+  buildAdminLicenseCenter,
+  createActivationCode,
+  getDesktopLicenseCandidate,
+  hashActivationCode,
+  normalizeActivationCode,
+  normalizeLicenseText,
+  normalizeMachineHash,
+  previewActivationCode,
+  refreshDesktopLicenseStateFromRemoteCenter,
+  resolveDesktopLicenseState,
+  syncLegacyConfiguredCodes,
+  syncLocalLicenseSnapshot,
+  type DesktopLicenseState,
+  type LicenseActivationInput
+} from "@/lib/license-service";
+import { splitNovelText } from "@/lib/chapters";
+import { readStore, writeStore } from "@/lib/project-store";
+import type {
+  PleasurePoint,
+  EntityRelation,
+  PlanKey,
+  StoredProject,
+  InitialProjectStateInput,
+  StoredSourceText,
+  StoredChapter,
+  StoredAiJob,
+  ChapterAnalysisScope,
+  StoredChapterAnalysis,
+  StoredStoryAnalysis,
+  StoredAiSettings,
+  StoredTemplate,
+  StoredOutline,
+  StoredWritingBible,
+  StoredCharacterProfile,
+  StoredForeshadowing,
+  StoredPlotState,
+  CustomRelationGraphNodeType,
+  CustomRelationGraphTone,
+  StoredCustomRelationGraphNode,
+  StoredCustomRelationGraphEdge,
+  StoredCustomRelationGraph,
+  StoredWritingTaskCard,
+  StoredChapterDraft,
+  StoredChapterLedger,
+  ReviewIssue,
+  StoredReviewReport,
+  StoredEditReport,
+  StoredUser,
+  StoredCreditTransaction,
+  StoredLicenseCode,
+  StoredLicenseActivationLog,
+  StoredSession,
+  AppStore,
+  ProjectWithCounts,
+  DashboardStat,
+  AdminUserSummary,
+  AdminAiUsageTypeSummary,
+  AdminAiUsageSummary,
+  AdminDashboardSummary,
+  AdminLicenseSummary,
+  AdminLicenseCenterSummary
+} from "@/lib/project-types";
+export type {
+  PleasurePoint,
+  EntityRelation,
+  PlanKey,
+  StoredProject,
+  InitialProjectStateInput,
+  StoredSourceText,
+  StoredChapter,
+  StoredAiJob,
+  ChapterAnalysisScope,
+  StoredChapterAnalysis,
+  StoredStoryAnalysis,
+  StoredAiSettings,
+  StoredTemplate,
+  StoredOutline,
+  StoredWritingBible,
+  StoredCharacterProfile,
+  StoredForeshadowing,
+  StoredPlotState,
+  CustomRelationGraphNodeType,
+  CustomRelationGraphTone,
+  StoredCustomRelationGraphNode,
+  StoredCustomRelationGraphEdge,
+  StoredCustomRelationGraph,
+  StoredWritingTaskCard,
+  StoredChapterDraft,
+  StoredChapterLedger,
+  ReviewIssue,
+  StoredReviewReport,
+  StoredEditReport,
+  StoredUser,
+  StoredCreditTransaction,
+  StoredLicenseCode,
+  StoredLicenseActivationLog,
+  StoredSession,
+  AppStore,
+  ProjectWithCounts,
+  DashboardStat,
+  AdminUserSummary,
+  AdminAiUsageTypeSummary,
+  AdminAiUsageSummary,
+  AdminDashboardSummary,
+  AdminLicenseSummary,
+  AdminLicenseCenterSummary
+} from "@/lib/project-types";
+export {
+  activateLicenseWithCenter,
+  verifyLicenseWithCenter
+} from "@/lib/license-service";
 
-export type StoredProject = {
-  id: string;
-  ownerUserId?: string;
-  name: string;
-  type: "analysis" | "writing";
-  description: string;
-  genre: string;
-  status: "draft" | "processing" | "ready" | "writing";
-  createdAt: string;
-  updatedAt: string;
-};
+function normalizeCoverImageUrl(value?: string) {
+  const coverImageUrl = String(value ?? "").trim();
 
-export type InitialProjectStateInput = {
-  targetReader?: string;
-  tags?: string[];
-  protagonistNames?: string[];
-  coreSellingPoint?: string;
-  openingHook?: string;
-  goldenFinger?: string;
-  writingGoal?: string;
-  outlineId?: string;
-  outlineLogline?: string;
-  worldSetting?: string;
-  outlineChapters?: string[];
-  first100Pacing?: string;
-  foreshadowingPlan?: string[];
-  pleasureDistribution?: string;
-};
+  if (!coverImageUrl) {
+    return "";
+  }
 
-export type StoredSourceText = {
-  id: string;
-  projectId: string;
-  title: string;
-  content: string;
-  sourceType: "paste" | "txt";
-  charCount: number;
-  createdAt: string;
-  updatedAt: string;
-};
+  if (coverImageUrl.startsWith("blob:")) {
+    throw new Error("封面链接无效，请重新上传");
+  }
 
-export type StoredChapter = {
-  id: string;
-  projectId: string;
-  sourceTextId: string;
-  chapterNumber: number;
-  title: string;
-  content: string;
-  charCount: number;
-  orderIndex: number;
-  createdAt: string;
-  updatedAt: string;
-};
+  if (
+    coverImageUrl.startsWith("data:image/") ||
+    coverImageUrl.startsWith("http://") ||
+    coverImageUrl.startsWith("https://") ||
+    coverImageUrl.startsWith("/")
+  ) {
+    return coverImageUrl;
+  }
 
-export type StoredAiJob = {
-  id: string;
-  userId?: string;
-  projectId?: string;
-  type: string;
-  status: "pending" | "running" | "succeeded" | "failed" | "canceled";
-  input?: unknown;
-  output?: unknown;
-  error?: string;
-  attempts: number;
-  model?: string;
-  retryOfJobId?: string;
-  createdAt: string;
-  updatedAt: string;
-  startedAt?: string;
-  finishedAt?: string;
-};
+  throw new Error("封面地址格式不正确");
+}
 
-export type ChapterAnalysisScope = {
-  mode?: "all" | "first" | "range" | "single";
-  startChapter?: number;
-  endChapter?: number;
-  limit?: number;
-};
-
-export type StoredChapterAnalysis = {
-  id: string;
-  projectId: string;
-  chapterId: string;
-  summary: string;
-  mainEvent: string;
-  conflict: string;
-  pressurePoint: string;
-  payoff: string;
-  cliffhanger: string;
-  readerHook: string;
-  newInformation: string[];
-  newCharacters: string[];
-  stateChanges: string[];
-  entityRelations: EntityRelation[];
-  pleasurePoints: PleasurePoint[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredStoryAnalysis = {
-  id: string;
-  projectId: string;
-  genre: string;
-  protagonistModel: string;
-  openingModel: string;
-  goldenFingerMechanism: string;
-  villainFunction: string;
-  supportingRoles: string;
-  mapProgression: string;
-  usablePatterns: string[];
-  avoidCopying: string[];
-  openingHook: string;
-  mainLoop: string;
-  pacing: string;
-  topPleasureTypes: string[];
-  formula: string;
-  migrationAdvice: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredAiSettings = {
-  id?: string;
-  userId?: string;
-  profileName?: string;
-  providerName: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  models?: string[];
-  active?: boolean;
-  timeoutMs: number;
-  updatedAt?: string;
-};
-
-export type StoredTemplate = {
-  id: string;
-  ownerUserId?: string;
-  sourceProjectId?: string;
-  sourceStoryAnalysisId?: string;
-  name: string;
-  genre: string;
-  description: string;
-  openingHook: string;
-  mainLoop: string;
-  chapterPacing: string;
-  formula: string;
-  migrationAdvice: string;
-  protagonistModel: string;
-  goldenFinger: string;
-  usablePatterns: string[];
-  avoidCopying: string[];
-  tags: string[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredOutline = {
-  id: string;
-  templateId: string;
-  variables: OutlineVariables;
-  titleOptions: string[];
-  logline: string;
-  intro: string;
-  templateInheritance: string[];
-  variableMapping: string[];
-  coreSellingPoints: string[];
-  worldSetting: string;
-  protagonist: string;
-  characters: string[];
-  first10Chapters: string[];
-  first100Pacing: string;
-  foreshadowingPlan: string[];
-  pleasureDistribution: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredWritingBible = {
-  id: string;
-  projectId: string;
-  workType: string;
-  targetReader: string;
-  corePleasure: string;
-  protagonistDesire: string;
-  worldRules: string;
-  goldenFingerRules: string;
-  powerSystem: string;
-  narrativeTaboos: string;
-  immutableSettings: string;
-  styleGuide: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredCharacterProfile = {
-  id: string;
-  projectId: string;
-  name: string;
-  identity: string;
-  currentGoal: string;
-  longTermGoal: string;
-  secret: string;
-  relationshipToProtagonist: string;
-  attitude: string;
-  abilityBoundary: string;
-  voice: string;
-  knownInformation: string;
-  unknownInformation: string;
-  lastAppearance: string;
-  currentState: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredForeshadowing = {
-  id: string;
-  projectId: string;
-  name: string;
-  plantedChapter: string;
-  relatedCharacters: string[];
-  relatedLocation: string;
-  status: "open" | "partial" | "closed";
-  expectedRevealChapter: string;
-  revealMethod: string;
-  hiddenInformation: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredPlotState = {
-  id: string;
-  projectId: string;
-  currentVolume: string;
-  currentMap: string;
-  mainGoal: string;
-  shortTermGoal: string;
-  currentStage: string;
-  currentEnemy: string;
-  unresolvedQuestions: string[];
-  openThreads: string[];
-  resolvedThreads: string[];
-  nextMilestones: string[];
-  nextStageGoal: string;
-  powerSystemState: string;
-  mapAndForces: string;
-  resourceState: string;
-  relationshipChanges: string[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredWritingTaskCard = {
-  id: string;
-  projectId: string;
-  chapterNumber: number;
-  title: string;
-  chapterGoal: string;
-  continuity: string;
-  mainPlotProgress: string;
-  requiredCharacters: string[];
-  pleasurePoint: string;
-  foreshadowingTasks: string[];
-  rulesNotToBreak: string[];
-  endingHook: string;
-  status: "draft" | "approved";
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredChapterDraft = {
-  id: string;
-  projectId: string;
-  taskCardId: string;
-  chapterNumber: number;
-  title: string;
-  content: string;
-  status: "draft" | "reviewed";
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredChapterLedger = {
-  id: string;
-  projectId: string;
-  draftId: string;
-  chapterNumber: number;
-  title: string;
-  events: string[];
-  newCharacters: string[];
-  newClues: string[];
-  payoff: string;
-  cliffhanger: string;
-  stateChanges: string[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ReviewIssue = {
-  type: string;
-  location: string;
-  severity: "low" | "medium" | "high";
-  problem?: string;
-  suggestion: string;
-};
-
-export type StoredReviewReport = {
-  id: string;
-  projectId: string;
-  draftId: string;
-  chapterNumber: number;
-  overall: string;
-  issues: ReviewIssue[];
-  shouldUpdateState: boolean;
-  stateUpdateSuggestions: string[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredEditReport = {
-  id: string;
-  projectId: string;
-  draftId?: string;
-  mode: string;
-  originalText: string;
-  aiFlavorSentences: string[];
-  diagnosis: string[];
-  revisedText: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredUser = {
-  id: string;
-  supabaseUserId?: string;
-  email: string;
-  name: string;
-  passwordSalt: string;
-  passwordHash: string;
-  role: "user" | "admin";
-  plan?: "trial" | "creator" | "studio";
-  creditsBalance?: number;
-  aiBillingMarkup?: number;
-  aiBillingMinimum?: number;
-  aiTaskPricingOverrides?: AiTaskPricingOverrides;
-  licenseCustomerId?: string;
-  licenseCodeHash?: string;
-  licenseActivatedAt?: string;
-  onboardingCompletedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredCreditTransaction = {
-  id: string;
-  userId: string;
-  type: "recharge" | "consume" | "refund" | "grant" | "adjust";
-  amount: number;
-  balanceAfter: number;
-  reason: string;
-  relatedJobId?: string;
-  orderId?: string;
-  createdAt: string;
-};
-
-export type StoredLicenseCode = {
-  id: string;
-  codeHash: string;
-  plainCode?: string;
-  codePreview: string;
-  customerName?: string;
-  customerContact?: string;
-  status: "unused" | "active" | "disabled" | "expired";
-  maxActivations: number;
-  activationCount: number;
-  machineHash?: string;
-  activatedAt?: string;
-  lastVerifiedAt?: string;
-  expiresAt?: string;
-  disabledAt?: string;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StoredLicenseActivationLog = {
-  id: string;
-  licenseCodeId?: string;
-  codeHash: string;
-  machineHash?: string;
-  result: "success" | "failed";
-  reason: string;
-  clientName?: string;
-  createdAt: string;
-};
-
-export type StoredSession = {
-  id: string;
-  userId: string;
-  token: string;
-  createdAt: string;
-  expiresAt: string;
-  lastSeenAt: string;
-};
-
-type AppStore = {
-  users: StoredUser[];
-  sessions: StoredSession[];
-  projects: StoredProject[];
-  sourceTexts: StoredSourceText[];
-  chapters: StoredChapter[];
-  chapterAnalyses: StoredChapterAnalysis[];
-  storyAnalyses: StoredStoryAnalysis[];
-  aiJobs: StoredAiJob[];
-  templates: StoredTemplate[];
-  outlines: StoredOutline[];
-  writingBibles: StoredWritingBible[];
-  characterProfiles: StoredCharacterProfile[];
-  foreshadowings: StoredForeshadowing[];
-  plotStates: StoredPlotState[];
-  writingTaskCards: StoredWritingTaskCard[];
-  chapterDrafts: StoredChapterDraft[];
-  chapterLedgers: StoredChapterLedger[];
-  reviewReports: StoredReviewReport[];
-  editReports: StoredEditReport[];
-  creditTransactions: StoredCreditTransaction[];
-  licenseCodes: StoredLicenseCode[];
-  licenseActivationLogs: StoredLicenseActivationLog[];
-  aiSettings?: StoredAiSettings | StoredAiSettings[];
-};
-
-export type ProjectWithCounts = StoredProject & {
-  _count: {
-    chapters: number;
-    chapterAnalyses: number;
-    storyAnalyses: number;
-    sourceTexts: number;
-    writingTaskCards: number;
-    chapterDrafts: number;
-    chapterLedgers: number;
-    reviewReports: number;
-    aiJobs: number;
-  };
-};
-
-export type DashboardStat = {
-  label: string;
-  value: string;
-};
-
-export type AdminUserSummary = {
-  id: string;
-  name: string;
-  email: string;
-  role: "user" | "admin";
-  plan: PlanKey;
-  licenseCustomerId?: string;
-  licenseActivatedAt?: string;
-  creditsBalance: number;
-  aiModel: string;
-  aiBillingMarkup: number;
-  aiBillingMinimum: number;
-  aiTaskPricing: Array<{
-    type: string;
-    label: string;
-    unitLabel: string;
-    baseCredits: number;
-    unitCredits: number;
-    multiplier: number;
-    isCustom: boolean;
-  }>;
-  projectCount: number;
-  aiJobCount: number;
-  aiTokenTotal: number;
-  aiCreditActual: number;
-  creditConsumed: number;
-  creditRecharged: number;
-  lastActiveAt: string;
-};
-
-export type AdminAiUsageTypeSummary = {
-  type: string;
-  jobs: number;
-  units: number;
-  totalTokens: number;
-  promptTokens: number;
-  completionTokens: number;
-  reasoningTokens: number;
-  actualCredits: number;
-  estimatedCredits: number;
-  fallbackJobs: number;
-};
-
-export type AdminAiUsageSummary = {
-  jobs: number;
-  aiJobs: number;
-  fallbackJobs: number;
-  units: number;
-  totalTokens: number;
-  promptTokens: number;
-  completionTokens: number;
-  cacheHitTokens: number;
-  cacheMissTokens: number;
-  reasoningTokens: number;
-  actualCredits: number;
-  estimatedCredits: number;
-  byType: AdminAiUsageTypeSummary[];
-};
-
-export type AdminDashboardSummary = {
-  totalUsers: number;
-  adminUsers: number;
-  totalCreditsBalance: number;
-  totalConsumed: number;
-  totalRecharged: number;
-  totalAiJobs: number;
-  aiUsage: AdminAiUsageSummary;
-  users: AdminUserSummary[];
-};
-
-export type AdminLicenseSummary = {
-  id: string;
-  plainCode?: string;
-  codePreview: string;
-  customerName: string;
-  customerContact: string;
-  status: StoredLicenseCode["status"];
-  maxActivations: number;
-  activationCount: number;
-  machineHash?: string;
-  activatedAt?: string;
-  lastVerifiedAt?: string;
-  expiresAt?: string;
-  disabledAt?: string;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-  recentLogs: StoredLicenseActivationLog[];
-};
-
-export type AdminLicenseCenterSummary = {
-  total: number;
-  unused: number;
-  active: number;
-  disabled: number;
-  expired: number;
-  recentLogs: StoredLicenseActivationLog[];
-  licenses: AdminLicenseSummary[];
-};
-
-const initialStore: AppStore = {
-  users: [],
-  sessions: [],
-  projects: [],
-  sourceTexts: [],
-  chapters: [],
-  chapterAnalyses: [],
-  storyAnalyses: [],
-  aiJobs: [],
-  templates: [],
-  outlines: [],
-  writingBibles: [],
-  characterProfiles: [],
-  foreshadowings: [],
-  plotStates: [],
-  writingTaskCards: [],
-  chapterDrafts: [],
-  chapterLedgers: [],
-  reviewReports: [],
-  editReports: [],
-  creditTransactions: [],
-  licenseCodes: [],
-  licenseActivationLogs: [],
-  aiSettings: undefined
-};
-
-const dataDir = path.join(process.cwd(), "data");
-const storePath = process.env.APP_STORE_PATH
-  ? path.resolve(process.env.APP_STORE_PATH)
-  : path.join(dataDir, "app-db.json");
-
-const SESSION_COOKIE = "nw_session";
-const SESSION_TTL_DAYS = 30;
 const MAX_ANALYSIS_CHAPTERS = 30;
 const userContextStorage = new AsyncLocalStorage<string>();
 
-type AuthUserView = {
-  id: string;
-  email: string;
-  name: string;
-  role: "user" | "admin";
-  plan: "trial" | "creator" | "studio";
-  licenseCustomerId?: string;
-  licenseActivatedAt?: string;
-};
-
-export type PlanKey = "trial" | "creator" | "studio";
 
 export const PLAN_LIMITS: Record<
   PlanKey,
@@ -697,775 +253,6 @@ export const PLAN_LIMITS: Record<
   }
 };
 
-const INITIAL_TRIAL_CREDITS = 300;
-
-const CREDIT_PACKAGES = [
-  { id: "starter", name: "入门包", credits: 10000, bonusCredits: 1000, priceCents: 990 },
-  { id: "creator", name: "作者包", credits: 50000, bonusCredits: 8000, priceCents: 3990 },
-  { id: "studio", name: "工作室包", credits: 200000, bonusCredits: 40000, priceCents: 19900 }
-] as const;
-
-function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
-  const hash = pbkdf2Sync(password, salt, 120000, 64, "sha256").toString("hex");
-  return { salt, hash };
-}
-
-function verifyPassword(password: string, salt: string, expectedHash: string) {
-  const actual = pbkdf2Sync(password, salt, 120000, 64, "sha256").toString("hex");
-  const actualBuffer = Buffer.from(actual, "hex");
-  const expectedBuffer = Buffer.from(expectedHash, "hex");
-
-  if (actualBuffer.length !== expectedBuffer.length) {
-    return false;
-  }
-
-  return timingSafeEqual(actualBuffer, expectedBuffer);
-}
-
-function normalizeActivationCode(value: string) {
-  return value.trim().replace(/\s+/g, "").toUpperCase();
-}
-
-function hashActivationCode(value: string) {
-  return createHash("sha256").update(normalizeActivationCode(value)).digest("hex");
-}
-
-function normalizeMachineHash(value?: string) {
-  return String(value ?? "").trim().slice(0, 160);
-}
-
-function normalizeLicenseText(value?: string) {
-  return String(value ?? "").trim().slice(0, 240);
-}
-
-function createActivationCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(16);
-  const chars = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]);
-  return `NW-${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}-${chars.slice(8, 12).join("")}-${chars.slice(12, 16).join("")}`;
-}
-
-function previewActivationCode(code: string) {
-  const normalized = normalizeActivationCode(code);
-  return normalized.length > 8 ? `${normalized.slice(0, 3)}...${normalized.slice(-4)}` : normalized;
-}
-
-function syncLegacyConfiguredCodes(store: AppStore) {
-  const timestamp = now();
-  const existing = new Set(store.licenseCodes.map((item) => item.codeHash));
-
-  for (const code of getConfiguredActivationCodes()) {
-    const codeHash = hashActivationCode(code);
-    if (existing.has(codeHash)) {
-      continue;
-    }
-    store.licenseCodes.push({
-      id: randomUUID(),
-      codeHash,
-      codePreview: previewActivationCode(code),
-      customerName: "本地演示授权",
-      customerContact: "",
-      status: "unused",
-      maxActivations: 1,
-      activationCount: 0,
-      notes: "由 APP_ACTIVATION_CODES 自动导入",
-      createdAt: timestamp,
-      updatedAt: timestamp
-    });
-    existing.add(codeHash);
-  }
-
-  for (const codeHash of getConfiguredActivationCodeHashes()) {
-    if (existing.has(codeHash)) {
-      continue;
-    }
-    store.licenseCodes.push({
-      id: randomUUID(),
-      codeHash,
-      codePreview: `${codeHash.slice(0, 6)}...`,
-      customerName: "本地演示授权",
-      customerContact: "",
-      status: "unused",
-      maxActivations: 1,
-      activationCount: 0,
-      notes: "由 APP_ACTIVATION_CODE_HASHES 自动导入",
-      createdAt: timestamp,
-      updatedAt: timestamp
-    });
-    existing.add(codeHash);
-  }
-}
-
-function getConfiguredActivationCodes() {
-  return String(process.env.APP_ACTIVATION_CODES ?? process.env.APP_ACTIVATION_CODE ?? "")
-    .split(/[\n,，]/)
-    .map(normalizeActivationCode)
-    .filter(Boolean);
-}
-
-function getConfiguredActivationCodeHashes() {
-  return String(process.env.APP_ACTIVATION_CODE_HASHES ?? "")
-    .split(/[\n,，]/)
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function isValidActivationCode(code: string) {
-  const normalized = normalizeActivationCode(code);
-  const codeHash = hashActivationCode(normalized);
-  const plainCodes = getConfiguredActivationCodes();
-  const hashedCodes = getConfiguredActivationCodeHashes();
-
-  if (plainCodes.length === 0 && hashedCodes.length === 0) {
-    throw new Error("未配置激活码，请先设置 APP_ACTIVATION_CODES");
-  }
-
-  return plainCodes.includes(normalized) || hashedCodes.includes(codeHash);
-}
-
-function activationEmail(customerId: string) {
-  const safeId = customerId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "customer";
-  return `${safeId}@license.local`;
-}
-
-function getLicenseServerUrl() {
-  return String(process.env.LICENSE_SERVER_URL ?? "").trim().replace(/\/+$/, "");
-}
-
-function getLicenseServerProxyAgent() {
-  const proxyUrl = String(process.env.LICENSE_SERVER_PROXY ?? "").trim();
-
-  if (!proxyUrl) {
-    return null;
-  }
-
-  return new SocksProxyAgent(proxyUrl);
-}
-
-function postJsonWithSocksProxy(input: {
-  url: string;
-  payload: Record<string, unknown>;
-  timeoutMs: number;
-  agent: SocksProxyAgent;
-}) {
-  const target = new URL(input.url);
-  const body = JSON.stringify(input.payload);
-
-  return new Promise<{ ok: boolean; status: number; body: unknown }>((resolve, reject) => {
-    const request = httpsRequest(
-      target,
-      {
-        method: "POST",
-        agent: input.agent,
-        timeout: input.timeoutMs,
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body)
-        }
-      },
-      (response) => {
-        let raw = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk) => {
-          raw += chunk;
-        });
-        response.on("end", () => {
-          const status = response.statusCode ?? 0;
-          let parsed: unknown = null;
-
-          try {
-            parsed = raw ? JSON.parse(raw) : null;
-          } catch {
-            parsed = raw;
-          }
-
-          resolve({ ok: status >= 200 && status < 300, status, body: parsed });
-        });
-      }
-    );
-
-    request.on("timeout", () => {
-      request.destroy(new Error("timeout"));
-    });
-    request.on("error", reject);
-    request.write(body);
-    request.end();
-  });
-}
-
-function readRemoteLicenseErrorMessage(body: unknown) {
-  if (body && typeof body === "object" && "error" in body) {
-    return String((body as { error: unknown }).error);
-  }
-
-  if (typeof body === "string" && body.trim()) {
-    return body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 220);
-  }
-
-  return "授权中心验证失败";
-}
-
-async function activateLicenseViaRemoteCenter(input: LicenseActivationInput) {
-  const serverUrl = getLicenseServerUrl();
-
-  if (!serverUrl) {
-    return null;
-  }
-
-  const timeoutMs = Number(process.env.LICENSE_SERVER_TIMEOUT_MS ?? 30000);
-  const url = serverUrl + "/api/license/activate";
-  const payload = {
-    activationCode: input.activationCode,
-    machineHash: input.machineHash,
-    clientName: input.clientName,
-    centerOnly: true
-  };
-  const proxyAgent = getLicenseServerProxyAgent();
-  let result: { ok: boolean; status: number; body: unknown };
-
-  try {
-    if (proxyAgent) {
-      result = await postJsonWithSocksProxy({ url, payload, timeoutMs, agent: proxyAgent });
-    } else {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          cache: "no-store",
-          signal: controller.signal
-        });
-        const raw = await response.text();
-        let body: unknown = null;
-
-        try {
-          body = raw ? JSON.parse(raw) : null;
-        } catch {
-          body = raw;
-        }
-
-        result = {
-          ok: response.ok,
-          status: response.status,
-          body
-        };
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "fetch failed";
-    const isTimeout = error instanceof Error && (error.name === "AbortError" || message === "timeout");
-    const proxyHint = proxyAgent ? "，当前代理：" + process.env.LICENSE_SERVER_PROXY : "";
-    throw new Error(isTimeout ? "连接授权中心超时：" + serverUrl + proxyHint : "无法连接授权中心：" + serverUrl + proxyHint + "，" + message);
-  }
-
-  if (!result.ok) {
-    throw new Error("授权中心 " + serverUrl + " 返回 " + result.status + "：" + readRemoteLicenseErrorMessage(result.body));
-  }
-
-  return (result.body as { license?: LicenseActivationResult } | null)?.license as LicenseActivationResult;
-}
-async function getCookieStore() {
-  try {
-    return await cookies();
-  } catch {
-    return null;
-  }
-}
-
-async function getSessionTokenFromCookies() {
-  const store = await getCookieStore();
-  return store?.get(SESSION_COOKIE)?.value ?? "";
-}
-
-function toAuthUser(user: StoredUser): AuthUserView {
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    plan: user.plan ?? "trial",
-    licenseCustomerId: user.licenseCustomerId,
-    licenseActivatedAt: user.licenseActivatedAt
-  };
-}
-
-function userDisplayName(email: string, name?: string | null) {
-  const trimmedName = String(name ?? "").trim();
-  if (trimmedName) {
-    return trimmedName;
-  }
-
-  const localPart = normalizeEmail(email).split("@")[0] || "用户";
-  return localPart || "用户";
-}
-
-function buildPlaceholderPassword() {
-  const { salt, hash } = hashPassword(randomUUID());
-  return { salt, hash };
-}
-
-function authUserId(user: { id: string }) {
-  return String(user.id || "");
-}
-
-function authUserEmail(user: { email?: string | null }) {
-  return normalizeEmail(String(user.email ?? ""));
-}
-
-function getAdminEmails() {
-  return new Set(
-    String(process.env.ADMIN_EMAILS ?? "")
-      .split(",")
-      .map((item) => normalizeEmail(item))
-      .filter(Boolean)
-  );
-}
-
-function isAdminUser(store: AppStore, user: StoredUser) {
-  if (user.role === "admin") {
-    return true;
-  }
-
-  if (getAdminEmails().has(normalizeEmail(user.email))) {
-    return true;
-  }
-
-  return false;
-}
-
-function isAdminAuthUser(user: StoredUser) {
-  return user.role === "admin" || getAdminEmails().has(normalizeEmail(user.email));
-}
-
-function parseStoreRecordPayload(value: unknown) {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function storedUserFromPayload(payload: unknown) {
-  const item = parseStoreRecordPayload(payload);
-
-  if (!item?.id || !item.email) {
-    return null;
-  }
-
-  return {
-    id: String(item.id),
-    supabaseUserId: item.supabaseUserId ? String(item.supabaseUserId) : undefined,
-    email: String(item.email),
-    name: String(item.name ?? ""),
-    passwordSalt: String(item.passwordSalt ?? ""),
-    passwordHash: String(item.passwordHash ?? ""),
-    role: item.role === "admin" ? "admin" : "user",
-    plan: item.plan === "creator" || item.plan === "studio" ? item.plan : "trial",
-    creditsBalance: Number(item.creditsBalance ?? 0),
-    licenseCustomerId: item.licenseCustomerId ? String(item.licenseCustomerId) : undefined,
-    licenseCodeHash: item.licenseCodeHash ? String(item.licenseCodeHash) : undefined,
-    licenseActivatedAt: item.licenseActivatedAt ? String(item.licenseActivatedAt) : undefined,
-    onboardingCompletedAt: item.onboardingCompletedAt ? String(item.onboardingCompletedAt) : undefined,
-    createdAt: String(item.createdAt ?? now()),
-    updatedAt: String(item.updatedAt ?? now())
-  } satisfies StoredUser;
-}
-
-function syncUserProfileFromSupabase(
-  store: AppStore,
-  authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }
-) {
-  const authId = authUserId(authUser);
-  const email = authUserEmail(authUser);
-  const displayName = userDisplayName(email, authUser.user_metadata?.name as string | undefined);
-  const timestamp = now();
-  const placeholderPassword = buildPlaceholderPassword();
-  const existingByAuthId = store.users.find((item) => item.supabaseUserId === authId);
-  const existingByEmail = store.users.find((item) => normalizeEmail(item.email) === email);
-  const user = existingByAuthId ?? existingByEmail;
-
-  if (user) {
-    let changed = false;
-
-    if (user.supabaseUserId !== authId) {
-      user.supabaseUserId = authId;
-      changed = true;
-    }
-
-    if (user.email !== email) {
-      user.email = email;
-      changed = true;
-    }
-
-    if (displayName && user.name !== displayName) {
-      user.name = displayName;
-      changed = true;
-    }
-
-    if (!user.role) {
-      user.role = getAdminEmails().has(email) ? "admin" : "user";
-      changed = true;
-    } else if (user.role !== "admin" && getAdminEmails().has(email)) {
-      user.role = "admin";
-      changed = true;
-    }
-
-    if (!user.plan) {
-      user.plan = "trial";
-      changed = true;
-    }
-
-    if (user.creditsBalance == null) {
-      user.creditsBalance = 0;
-      changed = true;
-    }
-
-    if (!user.passwordSalt) {
-      user.passwordSalt = placeholderPassword.salt;
-      changed = true;
-    }
-
-    if (!user.passwordHash) {
-      user.passwordHash = placeholderPassword.hash;
-      changed = true;
-    }
-
-    if (changed) {
-      user.updatedAt = timestamp;
-    }
-
-    return { user, changed };
-  }
-
-  const nextUser: StoredUser = {
-    id: randomUUID(),
-    supabaseUserId: authId,
-    email,
-    name: displayName,
-    passwordSalt: placeholderPassword.salt,
-    passwordHash: placeholderPassword.hash,
-    role: getAdminEmails().has(email) ? "admin" : "user",
-    plan: "trial",
-    creditsBalance: isCreditsBillingMode() ? INITIAL_TRIAL_CREDITS : 0,
-    createdAt: timestamp,
-    updatedAt: timestamp
-  };
-
-  store.users.push(nextUser);
-  return { user: nextUser, changed: true };
-}
-
-async function getSupabaseCurrentUser() {
-  return await getSupabaseAuthUser({ writable: false });
-}
-
-async function readPostgresUserByEmail(email: string) {
-  const sql = await ensurePersistencePostgresSchema();
-
-  if (!sql) {
-    return null;
-  }
-
-  const rows = await sql`
-    SELECT "payload"
-    FROM "StoreRecord"
-    WHERE "entityType" = 'users'
-      AND lower("payload"->>'email') = ${normalizeEmail(email)}
-    LIMIT 1
-  ` as Array<{ payload?: unknown }>;
-
-  return storedUserFromPayload(rows[0]?.payload);
-}
-
-async function writePostgresRecord(entityType: string, item: Record<string, unknown>) {
-  const sql = await ensurePersistencePostgresSchema();
-
-  if (!sql) {
-    return false;
-  }
-
-  const id = `${entityType}:${String(item.id ?? randomUUID())}`;
-  const payload = JSON.stringify(item);
-
-  await sql`
-    INSERT INTO "StoreRecord" (
-      "id", "entityType", "userId", "ownerUserId", "projectId", "payload"
-    )
-    VALUES (
-      ${id},
-      ${entityType},
-      ${item.userId ? String(item.userId) : null},
-      ${item.ownerUserId ? String(item.ownerUserId) : null},
-      ${item.projectId ? String(item.projectId) : null},
-      ${payload}::jsonb
-    )
-    ON CONFLICT ("id") DO UPDATE SET
-      "entityType" = EXCLUDED."entityType",
-      "userId" = EXCLUDED."userId",
-      "ownerUserId" = EXCLUDED."ownerUserId",
-      "projectId" = EXCLUDED."projectId",
-      "payload" = EXCLUDED."payload",
-      "updatedAt" = now()
-  `;
-
-  return true;
-}
-
-async function deleteExpiredPostgresSessions(userId: string, timestamp: string) {
-  const sql = await ensurePersistencePostgresSchema();
-
-  if (!sql) {
-    return;
-  }
-
-  await sql`
-    DELETE FROM "StoreRecord"
-    WHERE "entityType" = 'sessions'
-      AND "userId" = ${userId}
-      AND COALESCE("payload"->>'expiresAt', '') <= ${timestamp}
-  `;
-}
-
-async function registerUserViaSupabase(input: { email: string; password: string; name: string }) {
-  if (!hasSupabaseAuthConfig()) {
-    return null;
-  }
-
-  const email = normalizeEmail(input.email);
-  const name = input.name.trim();
-  const password = input.password.trim();
-
-  if (!email || !password || !name) {
-    throw new Error("请完整填写邮箱、用户名和密码");
-  }
-
-  const serverClient = createSupabaseServerClient({ writable: true });
-
-  if (!serverClient) {
-    return null;
-  }
-
-  const adminClient = createSupabaseAdminClient();
-  let authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null = null;
-
-  if (adminClient) {
-    const created = await adminClient.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: {
-        name
-      }
-    });
-
-    if (created.error) {
-      throw new Error(created.error.message);
-    }
-
-    authUser = created.data.user ?? null;
-    const signIn = await serverClient.auth.signInWithPassword({ email, password });
-
-    if (signIn.error) {
-      throw new Error(signIn.error.message);
-    }
-
-    authUser = signIn.data.user ?? authUser;
-  } else {
-    const signUp = await serverClient.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          name
-        }
-      }
-    });
-
-    if (signUp.error) {
-      throw new Error(signUp.error.message);
-    }
-
-    authUser = signUp.data.user ?? null;
-
-    if (!signUp.data.session) {
-      throw new Error("注册成功但没有获得会话，请检查 Supabase 是否关闭了邮箱确认，或为当前环境配置 SUPABASE_SERVICE_ROLE_KEY。");
-    }
-  }
-
-  if (!authUser) {
-    throw new Error("注册失败");
-  }
-
-  const store = await readStore();
-  const syncedUser = syncUserProfileFromSupabase(store, authUser);
-  const user = syncedUser.user;
-  user.name = userDisplayName(email, name);
-  user.plan = user.plan ?? "trial";
-  user.creditsBalance = user.creditsBalance ?? (isCreditsBillingMode() ? INITIAL_TRIAL_CREDITS : 0);
-  let shouldPersist = syncedUser.changed;
-
-  if (store.projects.every((item) => !item.ownerUserId)) {
-    claimLegacyWorkspace(store, user.id);
-    shouldPersist = true;
-  }
-
-  user.updatedAt = now();
-  if (shouldPersist) {
-    await writeStore(store);
-  }
-  return toAuthUser(user);
-}
-
-async function loginUserViaSupabase(input: { email: string; password: string }) {
-  if (!hasSupabaseAuthConfig()) {
-    return null;
-  }
-
-  const email = normalizeEmail(input.email);
-  const password = input.password.trim();
-
-  if (!email || !password) {
-    throw new Error("请填写邮箱和密码");
-  }
-
-  const client = createSupabaseServerClient({ writable: true });
-
-  if (!client) {
-    return null;
-  }
-
-  const { data, error } = await client.auth.signInWithPassword({
-    email,
-    password
-  });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const authUser = data.user;
-
-  if (!authUser) {
-    throw new Error("登录失败");
-  }
-
-  const store = await readStore();
-  const syncedUser = syncUserProfileFromSupabase(store, authUser);
-  const user = syncedUser.user;
-  user.plan = user.plan ?? "trial";
-  user.creditsBalance = user.creditsBalance ?? 0;
-  let shouldPersist = syncedUser.changed;
-
-  if (store.projects.every((item) => !item.ownerUserId)) {
-    claimLegacyWorkspace(store, user.id);
-    shouldPersist = true;
-  }
-
-  user.updatedAt = now();
-  if (shouldPersist) {
-    await writeStore(store);
-  }
-  return toAuthUser(user);
-}
-
-async function registerUserViaPostgres(input: { email: string; password: string; name: string }) {
-  if (!process.env.DATABASE_URL?.trim().startsWith("postgres")) {
-    return null;
-  }
-
-  const email = normalizeEmail(input.email);
-  const name = input.name.trim();
-  const password = input.password.trim();
-
-  if (!email || !password || !name) {
-    throw new Error("请完整填写邮箱、用户名和密码");
-  }
-
-  const existing = await readPostgresUserByEmail(email);
-
-  if (existing) {
-    throw new Error("该邮箱已注册，请直接登录");
-  }
-
-  const timestamp = now();
-  const { salt, hash } = hashPassword(password);
-  const user: StoredUser = {
-    id: randomUUID(),
-    email,
-    name,
-    passwordSalt: salt,
-    passwordHash: hash,
-    role: isAdminAuthUser({ email, role: "user" } as StoredUser) ? "admin" : "user",
-    plan: "trial",
-    creditsBalance: isCreditsBillingMode() ? INITIAL_TRIAL_CREDITS : 0,
-    createdAt: timestamp,
-    updatedAt: timestamp
-  };
-  const token = randomUUID();
-  const session: StoredSession = {
-    id: randomUUID(),
-    userId: user.id,
-    token,
-    createdAt: timestamp,
-    expiresAt: sessionExpiresAt(),
-    lastSeenAt: timestamp
-  };
-
-  await writePostgresRecord("users", user as unknown as Record<string, unknown>);
-  await writePostgresRecord("sessions", session as unknown as Record<string, unknown>);
-  await setSessionCookie(token);
-  return toAuthUser(user);
-}
-
-async function loginUserViaPostgres(input: { email: string; password: string }) {
-  if (!process.env.DATABASE_URL?.trim().startsWith("postgres")) {
-    return null;
-  }
-
-  const email = normalizeEmail(input.email);
-  const password = input.password.trim();
-
-  if (!email || !password) {
-    throw new Error("请填写邮箱和密码");
-  }
-
-  const user = await readPostgresUserByEmail(email);
-
-  if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) {
-    throw new Error("邮箱或密码错误");
-  }
-
-  const timestamp = now();
-  const token = randomUUID();
-  const session: StoredSession = {
-    id: randomUUID(),
-    userId: user.id,
-    token,
-    createdAt: timestamp,
-    expiresAt: sessionExpiresAt(),
-    lastSeenAt: timestamp
-  };
-
-  user.role = isAdminAuthUser(user) ? "admin" : user.role;
-  user.plan = user.plan ?? "trial";
-  user.creditsBalance = user.creditsBalance ?? 0;
-  user.updatedAt = timestamp;
-  await deleteExpiredPostgresSessions(user.id, timestamp);
-  await writePostgresRecord("users", user as unknown as Record<string, unknown>);
-  await writePostgresRecord("sessions", session as unknown as Record<string, unknown>);
-  await setSessionCookie(token);
-  return toAuthUser(user);
-}
-
 async function requireAdminUser(store?: AppStore) {
   const currentStore = store ?? (await readStore());
   const user = await requireCurrentUser(currentStore);
@@ -1477,40 +264,7 @@ async function requireAdminUser(store?: AppStore) {
   return user;
 }
 
-async function getActiveSession(store: AppStore) {
-  const token = await getSessionTokenFromCookies();
-
-  if (!token) {
-    return null;
-  }
-
-  const timestamp = now();
-  const session = store.sessions.find(
-    (item) => item.token === token && item.expiresAt > timestamp
-  );
-
-  if (!session) {
-    return null;
-  }
-
-  return session;
-}
-
 async function getCurrentUserFromStore(store: AppStore) {
-  if (!isDesktopRuntime()) {
-    const authUser = await getSupabaseCurrentUser();
-
-    if (authUser) {
-      const syncedUser = syncUserProfileFromSupabase(store, authUser);
-
-      if (syncedUser.changed) {
-        await writeStore(store);
-      }
-
-      return syncedUser.user;
-    }
-  }
-
   const contextUserId = userContextStorage.getStore();
 
   if (contextUserId) {
@@ -1526,6 +280,18 @@ async function getCurrentUserFromStore(store: AppStore) {
   const user = store.users.find((item) => item.id === session.userId);
 
   if (!user) {
+    return null;
+  }
+
+  const licenseState = resolveDesktopLicenseState(store, user);
+
+  if (licenseState.changed) {
+    await writeStore(store);
+  }
+
+  if (licenseState.status !== "active") {
+    store.sessions = store.sessions.filter((item) => item.userId !== user.id);
+    await writeStore(store);
     return null;
   }
 
@@ -1548,80 +314,6 @@ function runAsUser<T>(userId: string, callback: () => Promise<T>) {
   return userContextStorage.run(userId, callback);
 }
 
-function sessionExpiresAt() {
-  return new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-}
-
-async function setSessionCookie(token: string) {
-  const store = await getCookieStore();
-  store?.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
-    secure: process.env.NODE_ENV === "production"
-  });
-}
-
-async function clearSessionCookie() {
-  const store = await getCookieStore();
-  store?.delete(SESSION_COOKIE);
-}
-
-function normalizeEmail(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function getPrimaryAiSettings(store: AppStore, userId: string) {
-  const settings = Array.isArray(store.aiSettings) ? store.aiSettings : store.aiSettings ? [store.aiSettings] : [];
-  const userSettings = settings.filter((item) => item.userId === userId);
-  return userSettings.find((item) => item.active) ?? userSettings[0] ?? null;
-}
-
-function setPrimaryAiSettings(store: AppStore, settings: StoredAiSettings) {
-  const list = Array.isArray(store.aiSettings) ? store.aiSettings.slice() : store.aiSettings ? [store.aiSettings] : [];
-  const id = settings.id || `${settings.userId || "global"}:default`;
-  const nextSettings = { ...settings, id, active: true };
-  const index = list.findIndex((item) => (item.id || `${item.userId || "global"}:default`) === id);
-  const nextList = list.map((item) =>
-    item.userId === settings.userId ? { ...item, active: false } : item
-  );
-
-  if (index >= 0) {
-    nextList[index] = nextSettings;
-  } else {
-    nextList.push(nextSettings);
-  }
-
-  store.aiSettings = nextList;
-}
-
-function listUserAiProfiles(store: AppStore, userId: string) {
-  const list = Array.isArray(store.aiSettings) ? store.aiSettings : store.aiSettings ? [store.aiSettings] : [];
-  const profiles = list
-    .filter((item) => item.userId === userId)
-    .map((item, index) => ({
-      ...item,
-      id: item.id || `${userId}:default:${index}`,
-      profileName: item.profileName || item.providerName || `配置 ${index + 1}`,
-      models: Array.isArray(item.models) ? item.models : item.model ? [item.model] : []
-    }));
-
-  if (profiles.some((item) => item.active)) {
-    return profiles;
-  }
-
-  return profiles.map((item, index) => ({ ...item, active: index === 0 }));
-}
-
-function setUserAiProfiles(store: AppStore, userId: string, profiles: StoredAiSettings[]) {
-  const list = Array.isArray(store.aiSettings) ? store.aiSettings.slice() : store.aiSettings ? [store.aiSettings] : [];
-  store.aiSettings = [
-    ...list.filter((item) => item.userId !== userId),
-    ...profiles
-  ];
-}
-
 function ensureProjectOwner(project: StoredProject, userId: string) {
   if (project.ownerUserId && project.ownerUserId !== userId) {
     throw new Error("无权访问该项目");
@@ -1632,23 +324,6 @@ function ensureTemplateOwner(template: StoredTemplate, userId: string) {
   if (template.ownerUserId && template.ownerUserId !== userId) {
     throw new Error("无权访问该模板");
   }
-}
-
-function getUserAiSettings(store: AppStore, userId: string) {
-  const settings = getPrimaryAiSettings(store, userId);
-
-  if (settings) {
-    return mergeAiSettings(settings);
-  }
-
-  return mergeAiSettings({
-    userId,
-    providerName: "",
-    baseUrl: "",
-    apiKey: "",
-    model: "",
-    timeoutMs: 0
-  });
 }
 
 function now() {
@@ -1666,47 +341,6 @@ function isRunnableAiJob(job: StoredAiJob) {
 
   const updatedAt = Date.parse(job.updatedAt);
   return Number.isFinite(updatedAt) && Date.now() - updatedAt < 10 * 60 * 1000;
-}
-
-async function readStoreBase(): Promise<AppStore> {
-  return loadPersistedStore(storePath, initialStore);
-}
-
-const readStore = cache(readStoreBase);
-
-async function writeStore(store: AppStore) {
-  await savePersistedStore(storePath, store);
-}
-
-function getEnvAiSettings(): StoredAiSettings {
-  return {
-    providerName: process.env.AI_PROVIDER_NAME ?? "",
-    baseUrl: process.env.AI_BASE_URL ?? "",
-    apiKey: process.env.AI_API_KEY ?? "",
-    model: process.env.AI_MODEL ?? "",
-    timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 60000)
-  };
-}
-
-function mergeAiSettings(settings?: StoredAiSettings): StoredAiSettings {
-  const envSettings = getEnvAiSettings();
-
-  return {
-    providerName: settings?.providerName || envSettings.providerName,
-    baseUrl: settings?.baseUrl || envSettings.baseUrl,
-    apiKey: settings?.apiKey || envSettings.apiKey,
-    model: settings?.model || envSettings.model,
-    timeoutMs: settings?.timeoutMs || envSettings.timeoutMs,
-    updatedAt: settings?.updatedAt
-  };
-}
-
-function normalizeStoredAiSettings(settings?: StoredAiSettings | StoredAiSettings[]) {
-  if (Array.isArray(settings)) {
-    return settings;
-  }
-
-  return settings ? [settings] : [];
 }
 
 function claimLegacyWorkspace(store: AppStore, userId: string) {
@@ -1729,6 +363,12 @@ function claimLegacyWorkspace(store: AppStore, userId: string) {
   store.aiSettings = normalizeStoredAiSettings(store.aiSettings).map((item) =>
     item.userId ? item : { ...item, userId, updatedAt: item.updatedAt ?? timestamp }
   );
+}
+
+function createAuthServiceHooks(): AuthServiceHooks {
+  return {
+    claimLegacyWorkspace
+  };
 }
 
 export async function getCurrentUser() {
@@ -1767,32 +407,64 @@ export async function getCurrentUserOrThrow() {
 export async function getSubscriptionActivationStatus() {
   const store = await readStore();
   const currentUser = await getCurrentUserFromStore(store);
-  const activatedUsers = store.users.filter((user) => Boolean(user.licenseCustomerId || user.licenseCodeHash));
+  const candidate = currentUser
+    ? { user: currentUser, state: resolveDesktopLicenseState(store, currentUser), changed: false }
+    : getDesktopLicenseCandidate(store);
+  const candidateUser = candidate.user;
+  const licenseState: DesktopLicenseState = candidateUser
+    ? await refreshDesktopLicenseStateFromRemoteCenter(store, candidateUser, candidate.state)
+    : candidate.state;
+
+  if (candidate.changed || licenseState.changed) {
+    await writeStore(store);
+  }
 
   return {
     billingMode: getBillingMode(),
-    activated: activatedUsers.length > 0,
+    activated: licenseState.status === "active",
+    expired: licenseState.status === "expired" || licenseState.status === "disabled",
+    licenseStatus: licenseState.status,
+    licenseExpiresAt: licenseState.expiresAt,
+    licenseActivatedAt: candidateUser?.licenseActivatedAt ?? "",
+    message: licenseState.status === "expired" || licenseState.status === "disabled"
+      ? licenseState.message ?? ""
+      : "",
     currentUser: currentUser ? toAuthUser(currentUser) : null,
-    customerId: currentUser?.licenseCustomerId ?? activatedUsers[0]?.licenseCustomerId ?? ""
+    customerId: currentUser?.licenseCustomerId ?? candidateUser?.licenseCustomerId ?? "",
+    serverNow: now()
   };
 }
 
 export async function restoreSubscriptionSession() {
   if (!isDesktopRuntime() || !isSubscriptionBillingMode()) {
-    return null;
+    return { user: null, reason: "inactive" as const };
   }
 
   const store = await readStore();
   const currentUser = await getCurrentUserFromStore(store);
 
   if (currentUser) {
-    return toAuthUser(currentUser);
+    return { user: toAuthUser(currentUser) };
   }
 
-  const user = store.users.find((item) => Boolean(item.licenseCustomerId || item.licenseCodeHash));
+  const candidate = getDesktopLicenseCandidate(store);
+  const user = candidate.user;
 
   if (!user) {
-    return null;
+    return { user: null, reason: "missing" as const };
+  }
+
+  const licenseState = await refreshDesktopLicenseStateFromRemoteCenter(store, user, candidate.state);
+
+  if (candidate.changed || licenseState.changed) {
+    await writeStore(store);
+  }
+
+  if (licenseState.status !== "active") {
+    return {
+      user: null,
+      reason: licenseState.status === "expired" ? ("expired" as const) : ("disabled" as const)
+    };
   }
 
   const timestamp = now();
@@ -1809,227 +481,7 @@ export async function restoreSubscriptionSession() {
 
   await writeStore(store);
   await setSessionCookie(token);
-  return toAuthUser(user);
-}
-
-type LicenseActivationInput = {
-  activationCode: string;
-  machineHash?: string;
-  clientName?: string;
-};
-
-type LicenseActivationResult = {
-  licenseId: string;
-  customerId: string;
-  codePreview: string;
-  status: string;
-  activatedAt: string;
-  customerName?: string;
-  customerContact?: string;
-};
-
-async function activateLicenseInPostgres(input: {
-  codeHash: string;
-  machineHash: string;
-  clientName?: string;
-}) {
-  const sql = await getPersistencePostgresClient();
-
-  if (!sql) {
-    return null;
-  }
-
-  const timestamp = new Date();
-  const reusableRows = await sql`
-    UPDATE "LicenseCode"
-    SET "lastVerifiedAt" = ${timestamp},
-        "updatedAt" = ${timestamp}
-    WHERE "codeHash" = ${input.codeHash}
-      AND "status" = 'active'
-      AND "machineHash" = ${input.machineHash}
-      AND ("expiresAt" IS NULL OR "expiresAt" > now())
-    RETURNING *
-  ` as Array<Record<string, unknown>>;
-
-  if (reusableRows[0]) {
-    const license = reusableRows[0];
-    await sql`
-      INSERT INTO "LicenseActivationLog" ("id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt")
-      VALUES (${randomUUID()}, ${String(license.id)}, ${input.codeHash}, ${input.machineHash}, 'success', 'verified_same_machine', ${input.clientName ?? null}, ${timestamp})
-    `;
-    return license;
-  }
-
-  const activatedRows = await sql`
-    UPDATE "LicenseCode"
-    SET "status" = 'active',
-        "activationCount" = "activationCount" + 1,
-        "machineHash" = ${input.machineHash},
-        "activatedAt" = COALESCE("activatedAt", ${timestamp}),
-        "lastVerifiedAt" = ${timestamp},
-        "updatedAt" = ${timestamp}
-    WHERE "codeHash" = ${input.codeHash}
-      AND "status" = 'unused'
-      AND "activationCount" < "maxActivations"
-      AND ("expiresAt" IS NULL OR "expiresAt" > now())
-    RETURNING *
-  ` as Array<Record<string, unknown>>;
-
-  if (activatedRows[0]) {
-    const license = activatedRows[0];
-    await sql`
-      INSERT INTO "LicenseActivationLog" ("id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt")
-      VALUES (${randomUUID()}, ${String(license.id)}, ${input.codeHash}, ${input.machineHash}, 'success', 'activated', ${input.clientName ?? null}, ${timestamp})
-    `;
-    return license;
-  }
-
-  const rows = await sql`
-    SELECT * FROM "LicenseCode"
-    WHERE "codeHash" = ${input.codeHash}
-    LIMIT 1
-  ` as Array<Record<string, unknown>>;
-  const license = rows[0] ?? null;
-  const reason = !license
-    ? "not_found"
-    : String(license.status) === "disabled"
-      ? "disabled"
-      : license.machineHash && license.machineHash !== input.machineHash
-        ? "already_bound_other_machine"
-        : "not_available";
-
-  await sql`
-    INSERT INTO "LicenseActivationLog" ("id", "licenseCodeId", "codeHash", "machineHash", "result", "reason", "clientName", "createdAt")
-    VALUES (${randomUUID()}, ${license?.id ? String(license.id) : null}, ${input.codeHash}, ${input.machineHash}, 'failed', ${reason}, ${input.clientName ?? null}, ${timestamp})
-  `;
-
-  throw new Error(
-    reason === "already_bound_other_machine"
-      ? "该授权码已绑定其他设备，如需更换设备请联系管理员重置"
-      : reason === "disabled"
-        ? "该授权码已被禁用"
-        : "授权码无效或已过期"
-  );
-}
-
-function licenseResultFromRecord(record: Record<string, unknown>): LicenseActivationResult {
-  return {
-    licenseId: String(record.id ?? ""),
-    customerId: String(record.id ?? ""),
-    codePreview: String(record.codePreview ?? ""),
-    status: String(record.status ?? "active"),
-    activatedAt: record.activatedAt ? new Date(String(record.activatedAt)).toISOString() : now(),
-    customerName: record.customerName ? String(record.customerName) : undefined,
-    customerContact: record.customerContact ? String(record.customerContact) : undefined
-  };
-}
-
-export async function activateLicenseWithCenter(input: LicenseActivationInput): Promise<LicenseActivationResult> {
-  const normalizedCode = normalizeActivationCode(input.activationCode);
-  const machineHash = normalizeMachineHash(input.machineHash);
-
-  if (!normalizedCode) {
-    throw new Error("请填写授权码");
-  }
-
-  if (!machineHash) {
-    throw new Error("缺少本机安装标识，请刷新后重试");
-  }
-
-  const codeHash = hashActivationCode(normalizedCode);
-  const clientName = normalizeLicenseText(input.clientName);
-  const postgresResult = await activateLicenseInPostgres({ codeHash, machineHash, clientName });
-
-  if (postgresResult) {
-    return licenseResultFromRecord(postgresResult);
-  }
-
-  const store = await readStore();
-  syncLegacyConfiguredCodes(store);
-
-  const timestamp = now();
-  const license = store.licenseCodes.find((item) => item.codeHash === codeHash);
-
-  function log(result: StoredLicenseActivationLog["result"], reason: string) {
-    store.licenseActivationLogs.unshift({
-      id: randomUUID(),
-      licenseCodeId: license?.id,
-      codeHash,
-      machineHash,
-      result,
-      reason,
-      clientName,
-      createdAt: timestamp
-    });
-    store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
-  }
-
-  if (!license) {
-    log("failed", "not_found");
-    await writeStore(store);
-    throw new Error("授权码无效或已过期");
-  }
-
-  if (license.status === "disabled") {
-    log("failed", "disabled");
-    await writeStore(store);
-    throw new Error("该授权码已被禁用");
-  }
-
-  if (license.expiresAt && Date.parse(license.expiresAt) <= Date.now()) {
-    license.status = "expired";
-    license.updatedAt = timestamp;
-    log("failed", "expired");
-    await writeStore(store);
-    throw new Error("授权码无效或已过期");
-  }
-
-  if (license.status === "active") {
-    if (license.machineHash && license.machineHash !== machineHash) {
-      log("failed", "already_bound_other_machine");
-      await writeStore(store);
-      throw new Error("该授权码已绑定其他设备，如需更换设备请联系管理员重置");
-    }
-    license.machineHash = license.machineHash || machineHash;
-    license.lastVerifiedAt = timestamp;
-    license.updatedAt = timestamp;
-    log("success", "verified_same_machine");
-    await writeStore(store);
-    return {
-      licenseId: license.id,
-      customerId: license.id,
-      codePreview: license.codePreview,
-      status: license.status,
-      activatedAt: license.activatedAt ?? timestamp,
-      customerName: license.customerName,
-      customerContact: license.customerContact
-    };
-  }
-
-  if (license.activationCount >= license.maxActivations) {
-    log("failed", "activation_limit_reached");
-    await writeStore(store);
-    throw new Error("该授权码已达到可激活次数");
-  }
-
-  license.status = "active";
-  license.activationCount += 1;
-  license.machineHash = machineHash;
-  license.activatedAt = license.activatedAt ?? timestamp;
-  license.lastVerifiedAt = timestamp;
-  license.updatedAt = timestamp;
-  log("success", "activated");
-  await writeStore(store);
-
-  return {
-    licenseId: license.id,
-    customerId: license.id,
-    codePreview: license.codePreview,
-    status: license.status,
-    activatedAt: license.activatedAt,
-    customerName: license.customerName,
-    customerContact: license.customerContact
-  };
+  return { user: toAuthUser(user) };
 }
 
 export async function activateSubscriptionLicense(input: LicenseActivationInput) {
@@ -2048,6 +500,8 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
   const store = await readStore();
   const timestamp = now();
   const codeHash = hashActivationCode(normalizedCode);
+  const machineHash = normalizeMachineHash(input.machineHash);
+  syncLocalLicenseSnapshot(store, { license, codeHash, machineHash });
   let user = store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId);
 
   if (!user) {
@@ -2063,7 +517,9 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
       creditsBalance: 0,
       licenseCustomerId: license.customerId,
       licenseCodeHash: codeHash,
+      licenseMachineHash: machineHash,
       licenseActivatedAt: license.activatedAt || timestamp,
+      licenseExpiresAt: license.expiresAt || undefined,
       onboardingCompletedAt: timestamp,
       createdAt: timestamp,
       updatedAt: timestamp
@@ -2072,7 +528,9 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
   } else {
     user.licenseCustomerId = user.licenseCustomerId || license.customerId;
     user.licenseCodeHash = user.licenseCodeHash || codeHash;
+    user.licenseMachineHash = user.licenseMachineHash || machineHash;
     user.licenseActivatedAt = user.licenseActivatedAt || license.activatedAt || timestamp;
+    user.licenseExpiresAt = user.licenseExpiresAt || license.expiresAt || undefined;
     if (license.customerName) {
       user.name = license.customerName;
     }
@@ -2101,160 +559,15 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
 }
 
 export async function registerUser(input: { email: string; password: string; name: string }) {
-  if (isDesktopRuntime()) {
-    throw new Error("当前为授权模式，请使用激活码进入");
-  }
-
-  const supabaseUser = await registerUserViaSupabase(input);
-
-  if (supabaseUser) {
-    return supabaseUser;
-  }
-
-  const postgresUser = await registerUserViaPostgres(input);
-
-  if (postgresUser) {
-    return postgresUser;
-  }
-
-  const store = await readStore();
-  const email = normalizeEmail(input.email);
-  const name = input.name.trim();
-  const password = input.password.trim();
-
-  if (!email || !password || !name) {
-    throw new Error("请完整填写邮箱、用户名和密码");
-  }
-
-  if (store.users.some((item) => item.email === email)) {
-    throw new Error("该邮箱已注册，请直接登录");
-  }
-
-  const timestamp = now();
-  const { salt, hash } = hashPassword(password);
-  const user: StoredUser = {
-    id: randomUUID(),
-    email,
-    name,
-    passwordSalt: salt,
-    passwordHash: hash,
-    role: "user",
-    plan: "trial",
-    creditsBalance: 0,
-    createdAt: timestamp,
-    updatedAt: timestamp
-  };
-
-  store.users.push(user);
-  if (isCreditsBillingMode()) {
-    addCreditTransaction(store, user, {
-      type: "grant",
-      amount: INITIAL_TRIAL_CREDITS,
-      reason: "新账号注册送灵石"
-    });
-  }
-  if (store.projects.every((item) => !item.ownerUserId)) {
-    claimLegacyWorkspace(store, user.id);
-  }
-
-  const token = randomUUID();
-  store.sessions.push({
-    id: randomUUID(),
-    userId: user.id,
-    token,
-    createdAt: timestamp,
-    expiresAt: sessionExpiresAt(),
-    lastSeenAt: timestamp
-  });
-
-  await writeStore(store);
-  await setSessionCookie(token);
-  return toAuthUser(user);
+  return registerUserWithAuthService(input, createAuthServiceHooks());
 }
 
 export async function loginUser(input: { email: string; password: string }) {
-  if (isDesktopRuntime()) {
-    throw new Error("当前为授权模式，请使用激活码进入");
-  }
-
-  const supabaseUser = await loginUserViaSupabase(input);
-
-  if (supabaseUser) {
-    return supabaseUser;
-  }
-
-  const postgresUser = await loginUserViaPostgres(input);
-
-  if (postgresUser) {
-    return postgresUser;
-  }
-
-  const store = await readStore();
-  const email = normalizeEmail(input.email);
-  const password = input.password.trim();
-
-  if (!email || !password) {
-    throw new Error("请填写邮箱和密码");
-  }
-
-  const user = store.users.find((item) => item.email === email);
-
-  if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) {
-    throw new Error("邮箱或密码错误");
-  }
-
-  const timestamp = now();
-  const token = randomUUID();
-  store.sessions = store.sessions.filter((item) => item.userId !== user.id || item.expiresAt > timestamp);
-  store.sessions.push({
-    id: randomUUID(),
-    userId: user.id,
-    token,
-    createdAt: timestamp,
-    expiresAt: sessionExpiresAt(),
-    lastSeenAt: timestamp
-  });
-
-  if (store.projects.every((item) => !item.ownerUserId)) {
-    claimLegacyWorkspace(store, user.id);
-  }
-
-  user.plan = user.plan ?? "trial";
-  if (isCreditsBillingMode() && user.creditsBalance == null) {
-    user.creditsBalance = 0;
-    addCreditTransaction(store, user, {
-      type: "grant",
-      amount: INITIAL_TRIAL_CREDITS,
-      reason: "初始赠送灵石"
-    });
-  } else if (user.creditsBalance == null) {
-    user.creditsBalance = 0;
-  }
-  user.updatedAt = timestamp;
-  await writeStore(store);
-  await setSessionCookie(token);
-  return toAuthUser(user);
+  return loginUserWithAuthService(input, createAuthServiceHooks());
 }
 
 export async function logoutUser() {
-  if (!isDesktopRuntime() && hasSupabaseAuthConfig()) {
-    const client = createSupabaseServerClient({ writable: true });
-
-    if (client) {
-      await client.auth.signOut();
-      return;
-    }
-  }
-
-  const store = await readStore();
-  const token = await getSessionTokenFromCookies();
-
-  if (token) {
-    store.sessions = store.sessions.filter((item) => item.token !== token);
-    await writeStore(store);
-  }
-
-  await clearSessionCookie();
+  await logoutUserWithAuthService();
 }
 
 export async function getAccountOverview(options?: { creditTransactionLimit?: number; creditTransactionOffset?: number }) {
@@ -2430,9 +743,9 @@ function createDomainReadRepository(store: AppStore) {
           value: String(store.chapters.filter((item) => ownedProjectIds.has(item.projectId)).length)
         },
         {
-          label: "章节拆解",
+          label: "已写正文",
           value: String(
-            store.chapterAnalyses.filter((item) => ownedProjectIds.has(item.projectId)).length
+            store.chapterDrafts.filter((item) => ownedProjectIds.has(item.projectId)).length
           )
         },
         {
@@ -2574,6 +887,9 @@ function createDomainReadRepository(store: AppStore) {
         foreshadowings: store.foreshadowings
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+        customRelationGraphs: (store.customRelationGraphs ?? [])
+          .filter((item) => item.projectId === projectId)
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
         taskCards: store.writingTaskCards
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt)),
@@ -2645,6 +961,7 @@ function createDomainWriteRepository(store: AppStore) {
       type: "analysis" | "writing";
       genre?: string;
       description?: string;
+      coverImageUrl?: string;
     }) {
       const timestamp = now();
       const project: StoredProject = {
@@ -2654,6 +971,7 @@ function createDomainWriteRepository(store: AppStore) {
         type: input.type,
         description: input.description?.trim() ?? "",
         genre: input.genre?.trim() ?? "",
+        coverImageUrl: normalizeCoverImageUrl(input.coverImageUrl),
         status: input.type === "writing" ? "writing" : "draft",
         createdAt: timestamp,
         updatedAt: timestamp
@@ -2847,57 +1165,15 @@ function settleAiJobCredits(
     usedFallback?: boolean;
   }
 ) {
-  const billingMode = getBillingMode();
-
-  if (billingMode === "subscription") {
-    return {
-      mode: billingMode,
-      estimatedCredits: 0,
-      actualCredits: 0,
-      adjustmentCredits: 0
-    };
-  }
-
-  const user = job.userId ? store.users.find((item) => item.id === job.userId) : null;
-  const estimatedCredits = Math.max(0, getConsumedCreditsForJob(store, job.id) - getRefundedCreditsForJob(store, job.id));
-
-  if (!user || estimatedCredits <= 0) {
-    return {
-      mode: billingMode,
-      estimatedCredits,
-      actualCredits: 0,
-      adjustmentCredits: 0
-    };
-  }
-
-  const actualCredits = input.tokenUsage
-    ? calculateTokenUsageCredits(input.tokenUsage, { model: job.model, user })
-    : input.usedFallback && !input.usedAi
-      ? 0
-      : estimatedCredits;
-  const adjustmentCredits = actualCredits - estimatedCredits;
-
-  if (adjustmentCredits < 0) {
-    addCreditTransaction(store, user, {
-      type: "refund",
-      amount: Math.abs(adjustmentCredits),
-      reason: input.tokenUsage ? "AI 任务按实际算力结算返还" : "AI 任务未使用模型返还",
-      relatedJobId: job.id
-    });
-  } else if (adjustmentCredits > 0) {
-    addCreditTransaction(store, user, {
-      type: "consume",
-      amount: -adjustmentCredits,
-      reason: "AI 任务按实际算力结算补扣",
-      relatedJobId: job.id
-    });
-  }
+  void store;
+  void job;
+  void input;
 
   return {
-    mode: billingMode,
-    estimatedCredits,
-    actualCredits,
-    adjustmentCredits
+    mode: "disabled",
+    estimatedCredits: 0,
+    actualCredits: 0,
+    adjustmentCredits: 0
   };
 }
 
@@ -2907,7 +1183,7 @@ function withAiBillingOutput(
   output: Record<string, unknown>,
   tokenUsage?: AiTokenUsage
 ) {
-  const billing = settleAiJobCredits(store, job, {
+  settleAiJobCredits(store, job, {
     tokenUsage,
     usedAi: output.usedAi === true,
     usedFallback: output.usedFallback === true
@@ -2915,8 +1191,7 @@ function withAiBillingOutput(
 
   return {
     ...output,
-    tokenUsage,
-    billing
+    tokenUsage
   };
 }
 
@@ -2990,59 +1265,16 @@ function consumeCreditsForAiJob(
   user: StoredUser,
   job: Pick<StoredAiJob, "id" | "type" | "input">
 ) {
-  if (!isCreditsBillingMode()) {
-    return 0;
-  }
-
-  const cost = estimateAiJobCredits(job.type, job.input, user);
-
-  if (getUserCreditBalance(user) < cost) {
-    throw new Error(`灵石余额不足，本次任务预计消耗 ${cost} 灵石`);
-  }
-
-  if (cost <= 0) {
-    return cost;
-  }
-
-  addCreditTransaction(store, user, {
-    type: "consume",
-    amount: -cost,
-    reason: `AI 任务：${formatAiJobType(job.type)}`,
-    relatedJobId: job.id
-  });
-
-  return cost;
+  void store;
+  void user;
+  void job;
+  return 0;
 }
 
 function refundAiJobCredits(store: AppStore, job: StoredAiJob, reason: string) {
-  if (!isCreditsBillingMode()) {
-    return;
-  }
-
-  const user = job.userId ? store.users.find((item) => item.id === job.userId) : null;
-
-  if (!user) {
-    return;
-  }
-
-  const consumed = store.creditTransactions
-    .filter((item) => item.relatedJobId === job.id && item.type === "consume")
-    .reduce((total, item) => total + Math.abs(item.amount), 0);
-  const refunded = store.creditTransactions
-    .filter((item) => item.relatedJobId === job.id && item.type === "refund")
-    .reduce((total, item) => total + item.amount, 0);
-  const refundAmount = Math.max(0, consumed - refunded);
-
-  if (refundAmount <= 0) {
-    return;
-  }
-
-  addCreditTransaction(store, user, {
-    type: "refund",
-    amount: refundAmount,
-    reason,
-    relatedJobId: job.id
-  });
+  void store;
+  void job;
+  void reason;
 }
 
 function normalizeCreditTransactionLimit(limit: number | undefined) {
@@ -3213,9 +1445,8 @@ function buildAccountOverview(
 ) {
   const limits = getPlanLimitsForUser(user);
   const usage = getUserUsage(store, user);
-  const creditTransactionLimit = normalizeCreditTransactionLimit(options?.creditTransactionLimit);
-  const creditTransactionOffset = normalizeCreditTransactionOffset(options?.creditTransactionOffset);
-  const creditTransactionTotal = getCreditTransactionCount(store, user.id);
+  void options;
+
   return {
     user: toAuthUser(user),
     billingMode: getBillingMode(),
@@ -3225,17 +1456,12 @@ function buildAccountOverview(
     onboardingCompletedAt: user.onboardingCompletedAt ?? null,
     aiSettings: getUserAiSettings(store, user.id),
     billing: {
-      creditsBalance: getUserCreditBalance(user),
-      packages: CREDIT_PACKAGES,
-      recentTransactions: getRecentCreditTransactions(
-        store,
-        user.id,
-        creditTransactionLimit,
-        creditTransactionOffset
-      ),
-      transactionTotalCount: creditTransactionTotal,
-      transactionLimit: creditTransactionLimit,
-      transactionOffset: creditTransactionOffset
+      creditsBalance: 0,
+      packages: [],
+      recentTransactions: [],
+      transactionTotalCount: 0,
+      transactionLimit: 0,
+      transactionOffset: 0
     }
   };
 }
@@ -3263,16 +1489,9 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((user) => {
       const ownedProjectIds = getOwnedProjectIds(store, user.id);
-      const userTransactions = store.creditTransactions.filter((item) => item.userId === user.id);
       const userJobs = store.aiJobs.filter(
         (job) => job.userId === user.id || (job.projectId ? ownedProjectIds.has(job.projectId) : false)
       );
-      const creditConsumed = userTransactions
-        .filter((item) => item.type === "consume")
-        .reduce((total, item) => total + Math.abs(item.amount), 0);
-      const creditRecharged = userTransactions
-        .filter((item) => item.type === "recharge" || item.type === "grant" || item.type === "adjust")
-        .reduce((total, item) => total + Math.max(0, item.amount), 0);
       const userAiUsage = buildAdminAiUsageSummary(userJobs);
       const lastJobAt = userJobs
         .map((job) => job.updatedAt || job.createdAt)
@@ -3290,7 +1509,7 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
         plan: getPlanKey(user.plan),
         licenseCustomerId: user.licenseCustomerId,
         licenseActivatedAt: user.licenseActivatedAt,
-        creditsBalance: getUserCreditBalance(user),
+        creditsBalance: 0,
         aiModel: getUserAiSettings(store, user.id).model || process.env.AI_MODEL || "未配置",
         aiBillingMarkup: getUserAiBillingMarkup(user),
         aiBillingMinimum: getUserAiBillingMinimum(user),
@@ -3298,9 +1517,9 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
         projectCount: ownedProjectIds.size,
         aiJobCount: userJobs.length,
         aiTokenTotal: userAiUsage.totalTokens,
-        aiCreditActual: userAiUsage.actualCredits,
-        creditConsumed,
-        creditRecharged,
+        aiCreditActual: 0,
+        creditConsumed: 0,
+        creditRecharged: 0,
         lastActiveAt: session?.lastSeenAt ?? lastJobAt ?? user.updatedAt ?? user.createdAt
       };
     });
@@ -3308,146 +1527,12 @@ function buildAdminDashboard(store: AppStore): AdminDashboardSummary {
   return {
     totalUsers: store.users.length,
     adminUsers: users.filter((user) => user.role === "admin").length,
-    totalCreditsBalance: users.reduce((total, user) => total + user.creditsBalance, 0),
-    totalConsumed: users.reduce((total, user) => total + user.creditConsumed, 0),
-    totalRecharged: users.reduce((total, user) => total + user.creditRecharged, 0),
+    totalCreditsBalance: 0,
+    totalConsumed: 0,
+    totalRecharged: 0,
     totalAiJobs: store.aiJobs.length,
     aiUsage,
     users
-  };
-}
-
-function normalizeLicenseStatus(status: unknown): StoredLicenseCode["status"] {
-  return status === "active" || status === "disabled" || status === "expired" ? status : "unused";
-}
-
-function buildAdminLicenseCenter(store: AppStore): AdminLicenseCenterSummary {
-  syncLegacyConfiguredCodes(store);
-  const nowTime = Date.now();
-
-  store.licenseCodes.forEach((license) => {
-    if (license.status !== "disabled" && license.expiresAt && Date.parse(license.expiresAt) <= nowTime) {
-      license.status = "expired";
-    }
-  });
-
-  const recentLogs = store.licenseActivationLogs.slice(0, 20);
-  const licenses = store.licenseCodes
-    .slice()
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .map((license) => ({
-      id: license.id,
-      plainCode: license.plainCode,
-      codePreview: license.codePreview,
-      customerName: license.customerName ?? "",
-      customerContact: license.customerContact ?? "",
-      status: normalizeLicenseStatus(license.status),
-      maxActivations: license.maxActivations,
-      activationCount: license.activationCount,
-      machineHash: license.machineHash,
-      activatedAt: license.activatedAt,
-      lastVerifiedAt: license.lastVerifiedAt,
-      expiresAt: license.expiresAt,
-      disabledAt: license.disabledAt,
-      notes: license.notes,
-      createdAt: license.createdAt,
-      updatedAt: license.updatedAt,
-      recentLogs: store.licenseActivationLogs
-        .filter((log) => log.licenseCodeId === license.id)
-        .slice(0, 3)
-    }));
-
-  return {
-    total: store.licenseCodes.length,
-    unused: store.licenseCodes.filter((item) => item.status === "unused").length,
-    active: store.licenseCodes.filter((item) => item.status === "active").length,
-    disabled: store.licenseCodes.filter((item) => item.status === "disabled").length,
-    expired: store.licenseCodes.filter((item) => item.status === "expired").length,
-    recentLogs,
-    licenses
-  };
-}
-
-type LicenseSqlClient = NonNullable<Awaited<ReturnType<typeof getPersistencePostgresClient>>>;
-
-function dateFromDb(value: unknown) {
-  return value ? new Date(String(value)).toISOString() : undefined;
-}
-
-function licenseFromDb(row: Record<string, unknown>): StoredLicenseCode {
-  return {
-    id: String(row.id ?? ""),
-    codeHash: String(row.codeHash ?? ""),
-    plainCode: row.plainCode ? String(row.plainCode) : undefined,
-    codePreview: String(row.codePreview ?? ""),
-    customerName: row.customerName ? String(row.customerName) : undefined,
-    customerContact: row.customerContact ? String(row.customerContact) : undefined,
-    status: normalizeLicenseStatus(row.status),
-    maxActivations: Number(row.maxActivations ?? 1) || 1,
-    activationCount: Number(row.activationCount ?? 0) || 0,
-    machineHash: row.machineHash ? String(row.machineHash) : undefined,
-    activatedAt: dateFromDb(row.activatedAt),
-    lastVerifiedAt: dateFromDb(row.lastVerifiedAt),
-    expiresAt: dateFromDb(row.expiresAt),
-    disabledAt: dateFromDb(row.disabledAt),
-    notes: row.notes ? String(row.notes) : undefined,
-    createdAt: dateFromDb(row.createdAt) ?? now(),
-    updatedAt: dateFromDb(row.updatedAt) ?? now()
-  };
-}
-
-function licenseLogFromDb(row: Record<string, unknown>): StoredLicenseActivationLog {
-  return {
-    id: String(row.id ?? ""),
-    licenseCodeId: row.licenseCodeId ? String(row.licenseCodeId) : undefined,
-    codeHash: String(row.codeHash ?? ""),
-    machineHash: row.machineHash ? String(row.machineHash) : undefined,
-    result: row.result === "success" ? "success" : "failed",
-    reason: String(row.reason ?? ""),
-    clientName: row.clientName ? String(row.clientName) : undefined,
-    createdAt: dateFromDb(row.createdAt) ?? now()
-  };
-}
-
-async function buildAdminLicenseCenterFromPostgres(sql: LicenseSqlClient): Promise<AdminLicenseCenterSummary> {
-  const licenseRows = await sql`
-    SELECT * FROM "LicenseCode"
-    ORDER BY "createdAt" DESC, "id" DESC
-  ` as Array<Record<string, unknown>>;
-  const logRows = await sql`
-    SELECT * FROM "LicenseActivationLog"
-    ORDER BY "createdAt" DESC, "id" DESC
-    LIMIT 200
-  ` as Array<Record<string, unknown>>;
-  const licenses = licenseRows.map(licenseFromDb);
-  const logs = logRows.map(licenseLogFromDb);
-
-  return {
-    total: licenses.length,
-    unused: licenses.filter((item) => item.status === "unused").length,
-    active: licenses.filter((item) => item.status === "active").length,
-    disabled: licenses.filter((item) => item.status === "disabled").length,
-    expired: licenses.filter((item) => item.status === "expired").length,
-    recentLogs: logs.slice(0, 20),
-    licenses: licenses.map((license) => ({
-      id: license.id,
-      plainCode: license.plainCode,
-      codePreview: license.codePreview,
-      customerName: license.customerName ?? "",
-      customerContact: license.customerContact ?? "",
-      status: license.status,
-      maxActivations: license.maxActivations,
-      activationCount: license.activationCount,
-      machineHash: license.machineHash,
-      activatedAt: license.activatedAt,
-      lastVerifiedAt: license.lastVerifiedAt,
-      expiresAt: license.expiresAt,
-      disabledAt: license.disabledAt,
-      notes: license.notes,
-      createdAt: license.createdAt,
-      updatedAt: license.updatedAt,
-      recentLogs: logs.filter((log) => log.licenseCodeId === license.id).slice(0, 3)
-    }))
   };
 }
 
@@ -3457,16 +1542,11 @@ export async function getAdminDashboard() {
   return createDomainReadRepository(store).getAdminDashboard();
 }
 
-export async function getAdminLicenseCenter() {
+export async function getAdminLicenseCenter(options?: { recentLogLimit?: number; recentLogOffset?: number }) {
   const store = await readStore();
   await requireAdminUser(store);
-  const sql = await getPersistencePostgresClient();
 
-  if (sql) {
-    return buildAdminLicenseCenterFromPostgres(sql);
-  }
-
-  const center = buildAdminLicenseCenter(store);
+  const center = buildAdminLicenseCenter(store, options);
   await writeStore(store);
   return center;
 }
@@ -3476,12 +1556,13 @@ export async function generateAdminLicenseCodes(input: {
   customerName?: string;
   customerContact?: string;
   maxActivations?: number;
+  durationMinutes?: number;
+  durationHours?: number;
   expiresAt?: string;
   notes?: string;
 }) {
   const store = await readStore();
   await requireAdminUser(store);
-  const sql = await getPersistencePostgresClient();
   syncLegacyConfiguredCodes(store);
 
   const quantity = Math.max(1, Math.min(50, Math.floor(Number(input.quantity) || 1)));
@@ -3489,16 +1570,16 @@ export async function generateAdminLicenseCodes(input: {
   const timestamp = now();
   const generated: string[] = [];
   const existingHashes = new Set(store.licenseCodes.map((item) => item.codeHash));
-  const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
-
-  if (sql) {
-    const existingRows = await sql`SELECT "codeHash" FROM "LicenseCode"` as Array<{ codeHash?: string }>;
-    existingRows.forEach((row) => {
-      if (row.codeHash) {
-        existingHashes.add(row.codeHash);
-      }
-    });
-  }
+  const durationMinutes = Number(input.durationMinutes);
+  const durationHours = Number(input.durationHours);
+  const expiresAt =
+    Number.isFinite(durationMinutes) && durationMinutes > 0
+      ? new Date(Date.now() + durationMinutes * 60 * 1000)
+      : Number.isFinite(durationHours) && durationHours > 0
+        ? new Date(Date.now() + durationHours * 60 * 60 * 1000)
+      : input.expiresAt
+        ? new Date(input.expiresAt)
+        : null;
 
   for (let index = 0; index < quantity; index += 1) {
     let code = createActivationCode();
@@ -3528,68 +1609,18 @@ export async function generateAdminLicenseCodes(input: {
     };
 
     store.licenseCodes.unshift(license);
-
-    if (sql) {
-      await sql`
-        INSERT INTO "LicenseCode" (
-          "id", "codeHash", "plainCode", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "expiresAt", "notes", "createdAt", "updatedAt"
-        ) VALUES (
-          ${license.id}, ${license.codeHash}, ${license.plainCode || null}, ${license.codePreview}, ${license.customerName || null}, ${license.customerContact || null}, ${license.status}, ${license.maxActivations}, ${license.activationCount}, ${license.expiresAt ? new Date(license.expiresAt) : null}, ${license.notes || null}, ${new Date(license.createdAt)}, ${new Date(license.updatedAt)}
-        )
-      `;
-    }
   }
 
   await writeStore(store);
-  return { codes: generated, center: sql ? await buildAdminLicenseCenterFromPostgres(sql) : buildAdminLicenseCenter(store) };
+  return { codes: generated, center: buildAdminLicenseCenter(store) };
 }
 
 export async function updateAdminLicenseCode(input: {
   licenseId: string;
-  action: "disable" | "reset" | "enable" | "delete";
+  action: "disable" | "delete";
 }) {
   const store = await readStore();
   await requireAdminUser(store);
-  const sql = await getPersistencePostgresClient();
-
-  if (sql) {
-    const timestamp = new Date();
-    if (input.action === "delete") {
-      await sql`DELETE FROM "LicenseActivationLog" WHERE "licenseCodeId" = ${input.licenseId}`;
-      await sql`DELETE FROM "LicenseCode" WHERE "id" = ${input.licenseId}`;
-      return buildAdminLicenseCenterFromPostgres(sql);
-    }
-
-    if (input.action === "disable") {
-      await sql`
-        UPDATE "LicenseCode"
-        SET "status" = 'disabled', "disabledAt" = ${timestamp}, "updatedAt" = ${timestamp}
-        WHERE "id" = ${input.licenseId}
-      `;
-    } else if (input.action === "reset") {
-      await sql`
-        UPDATE "LicenseCode"
-        SET "status" = 'unused',
-            "activationCount" = 0,
-            "machineHash" = NULL,
-            "activatedAt" = NULL,
-            "lastVerifiedAt" = NULL,
-            "disabledAt" = NULL,
-            "updatedAt" = ${timestamp}
-        WHERE "id" = ${input.licenseId}
-      `;
-    } else if (input.action === "enable") {
-      await sql`
-        UPDATE "LicenseCode"
-        SET "status" = CASE WHEN "activationCount" > 0 THEN 'active' ELSE 'unused' END,
-            "disabledAt" = NULL,
-            "updatedAt" = ${timestamp}
-        WHERE "id" = ${input.licenseId}
-      `;
-    }
-
-    return buildAdminLicenseCenterFromPostgres(sql);
-  }
 
   const license = store.licenseCodes.find((item) => item.id === input.licenseId);
 
@@ -3609,16 +1640,6 @@ export async function updateAdminLicenseCode(input: {
   if (input.action === "disable") {
     license.status = "disabled";
     license.disabledAt = timestamp;
-  } else if (input.action === "reset") {
-    license.status = "unused";
-    license.activationCount = 0;
-    license.machineHash = undefined;
-    license.activatedAt = undefined;
-    license.lastVerifiedAt = undefined;
-    license.disabledAt = undefined;
-  } else if (input.action === "enable") {
-    license.status = license.activationCount > 0 ? "active" : "unused";
-    license.disabledAt = undefined;
   }
 
   license.updatedAt = timestamp;
@@ -3631,26 +1652,8 @@ export async function grantCreditsToUser(input: {
   amount: number;
   reason: string;
 }) {
-  const store = await readStore();
-  const admin = await requireAdminUser(store);
-  const target = store.users.find((user) => user.id === input.userId);
-  const amount = Math.floor(Number(input.amount));
-
-  if (!target) {
-    throw new Error("用户不存在");
-  }
-
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error("赠送灵石必须大于 0");
-  }
-
-  addCreditTransaction(store, target, {
-    type: "grant",
-    amount,
-    reason: input.reason.trim() || `管理员 ${admin.email} 手动赠送灵石`
-  });
-  await writeStore(store);
-  return buildAdminDashboard(store);
+  void input;
+  throw new Error("积分计费已经下线，当前版本只支持一次性授权和用户自带 AI Key。");
 }
 
 export async function updateUserAiControls(input: {
@@ -3678,14 +1681,6 @@ export async function updateUserAiControls(input: {
   const markup = Number(input.aiBillingMarkup);
   const minimum = Math.floor(Number(input.aiBillingMinimum));
 
-  if (!Number.isFinite(markup) || markup < 1) {
-    throw new Error("灵石倍率不能低于 1");
-  }
-
-  if (!Number.isFinite(minimum) || minimum < 1) {
-    throw new Error("最低实扣灵石不能低于 1");
-  }
-
   const current = getPrimaryAiSettings(store, target.id);
   setPrimaryAiSettings(store, {
     userId: target.id,
@@ -3697,9 +1692,11 @@ export async function updateUserAiControls(input: {
     updatedAt: now()
   });
 
-  target.aiBillingMarkup = Math.round(markup * 100) / 100;
-  target.aiBillingMinimum = minimum;
-  target.aiTaskPricingOverrides = normalizeAiTaskPricingOverrides(input.aiTaskPricingOverrides);
+  void markup;
+  void minimum;
+  target.aiBillingMarkup = undefined;
+  target.aiBillingMinimum = undefined;
+  target.aiTaskPricingOverrides = undefined;
   target.updatedAt = now();
 
   await writeStore(store);
@@ -3729,6 +1726,7 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     characterProfiles: store.characterProfiles.filter((item) => ownedProjectIds.has(item.projectId)),
     foreshadowings: store.foreshadowings.filter((item) => ownedProjectIds.has(item.projectId)),
     plotStates: store.plotStates.filter((item) => ownedProjectIds.has(item.projectId)),
+    customRelationGraphs: (store.customRelationGraphs ?? []).filter((item) => ownedProjectIds.has(item.projectId)),
     writingTaskCards: store.writingTaskCards.filter((item) => ownedProjectIds.has(item.projectId)),
     chapterDrafts: store.chapterDrafts.filter((item) => ownedProjectIds.has(item.projectId)),
     chapterLedgers: store.chapterLedgers.filter((item) => ownedProjectIds.has(item.projectId)),
@@ -3755,6 +1753,7 @@ async function purgeUserAccount(store: AppStore, userId: string) {
   store.characterProfiles = store.characterProfiles.filter((item) => !ownedProjectIds.has(item.projectId));
   store.foreshadowings = store.foreshadowings.filter((item) => !ownedProjectIds.has(item.projectId));
   store.plotStates = store.plotStates.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => !ownedProjectIds.has(item.projectId));
   store.writingTaskCards = store.writingTaskCards.filter((item) => !ownedProjectIds.has(item.projectId));
   store.chapterDrafts = store.chapterDrafts.filter((item) => !ownedProjectIds.has(item.projectId));
   store.chapterLedgers = store.chapterLedgers.filter((item) => !ownedProjectIds.has(item.projectId));
@@ -3823,9 +1822,9 @@ function ensureDefaultWritingState(store: AppStore, project: StoredProject) {
       resolvedThreads: [],
       nextMilestones: ["完成第一次大爽点", "引出更高层敌人"],
       nextStageGoal: "把个人冲突推进到更高层势力或更大地图",
-      powerSystemState: "尚未建立明确等级，请在创作圣经中补充能力边界和升级代价。",
-      mapAndForces: "初始地图与势力关系待补充。",
-      resourceState: "主角资源、道具、线索和身份收益待记录。",
+      powerSystemState: "",
+      mapAndForces: "",
+      resourceState: "",
       relationshipChanges: [],
       createdAt: timestamp,
       updatedAt: timestamp
@@ -3844,6 +1843,41 @@ function cleanList(values?: string[]) {
   return Array.from(
     new Set((values ?? []).map((item) => item.trim()).filter(Boolean))
   );
+}
+
+function getCustomRelationGraphs(store: AppStore) {
+  store.customRelationGraphs ??= [];
+  return store.customRelationGraphs;
+}
+
+function customGraphNodeType(value: unknown): CustomRelationGraphNodeType {
+  const type = String(value ?? "");
+  return type === "person" ||
+    type === "place" ||
+    type === "force" ||
+    type === "thread" ||
+    type === "core" ||
+    type === "power" ||
+    type === "resource" ||
+    type === "knowledge" ||
+    type === "event"
+    ? type
+    : "event";
+}
+
+function customGraphTone(value: unknown): CustomRelationGraphTone {
+  const tone = String(value ?? "");
+  return tone === "success" ||
+    tone === "danger" ||
+    tone === "warning" ||
+    tone === "core"
+    ? tone
+    : "neutral";
+}
+
+function customGraphEdgeTone(value: unknown): StoredCustomRelationGraphEdge["tone"] {
+  const tone = customGraphTone(value);
+  return tone === "core" ? "neutral" : tone;
 }
 
 function resolveTargetReader(value: string): TargetReader | null {
@@ -4165,22 +2199,18 @@ function getLatestChapterDraft(store: AppStore, projectId: string) {
     ?? null;
 }
 
-function hasConfiguredAiSettings(store: AppStore, userId?: string) {
-  const settings = userId ? getPrimaryAiSettings(store, userId) : normalizeStoredAiSettings(store.aiSettings)[0];
-
-  return Boolean(
-    settings?.baseUrl &&
-      settings?.apiKey &&
-      settings?.model
-  );
+function getLatestChapterLedgerBefore(store: AppStore, projectId: string, chapterNumber: number) {
+  return store.chapterLedgers
+    .filter((ledger) => ledger.projectId === projectId && ledger.chapterNumber < chapterNumber)
+    .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0]
+    ?? null;
 }
 
-function getActiveAiModel(store: AppStore, fallbackModel: string, userId?: string) {
-  const settings = userId ? getPrimaryAiSettings(store, userId) : normalizeStoredAiSettings(store.aiSettings)[0];
-
-  return hasConfiguredAiSettings(store, userId)
-    ? settings?.model || fallbackModel
-    : fallbackModel;
+function getLatestChapterDraftBefore(store: AppStore, projectId: string, chapterNumber: number) {
+  return store.chapterDrafts
+    .filter((draft) => draft.projectId === projectId && draft.chapterNumber < chapterNumber)
+    .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0]
+    ?? null;
 }
 
 function buildFallbackChapterDraftContent(taskCard: StoredWritingTaskCard) {
@@ -4375,6 +2405,173 @@ function extractChapterNumbers(value: string) {
     .filter((item) => Number.isFinite(item) && item > 0);
 }
 
+function hasChapterRefAtOrAfter(value: string, chapterNumber: number) {
+  return extractChapterNumbers(value).some((item) => item >= chapterNumber);
+}
+
+function stripChapterRefsAtOrAfter(value: string, chapterNumber: number) {
+  const lines = splitLines(value).filter((line) => !hasChapterRefAtOrAfter(line, chapterNumber));
+
+  if (lines.length > 0) {
+    return lines.join("\n");
+  }
+
+  return hasChapterRefAtOrAfter(value, chapterNumber) ? "" : value;
+}
+
+function characterForChapterContext(character: StoredCharacterProfile, chapterNumber: number) {
+  const touchedCurrentOrFutureChapter = [
+    character.lastAppearance,
+    character.currentState,
+    character.knownInformation,
+    character.currentGoal,
+    character.relationshipToProtagonist
+  ].some((value) => hasChapterRefAtOrAfter(value, chapterNumber));
+
+  if (!touchedCurrentOrFutureChapter) {
+    return character;
+  }
+
+  return {
+    ...character,
+    currentGoal:
+      stripChapterRefsAtOrAfter(character.currentGoal, chapterNumber) ||
+      (chapterNumber === 1 ? "待根据第一章更新" : character.currentGoal),
+    relationshipToProtagonist:
+      stripChapterRefsAtOrAfter(character.relationshipToProtagonist, chapterNumber) ||
+      character.relationshipToProtagonist,
+    knownInformation:
+      stripChapterRefsAtOrAfter(character.knownInformation, chapterNumber) ||
+      (chapterNumber === 1
+        ? "只知道开局阶段已经明确的信息，不能提前知道未揭露真相。"
+        : character.knownInformation),
+    lastAppearance: chapterNumber === 1 ? "新建作品" : "",
+    currentState:
+      stripChapterRefsAtOrAfter(character.currentState, chapterNumber) ||
+      (chapterNumber === 1 ? "新书开局待写" : "")
+  };
+}
+
+function inferCharacterGenderFromProjectEvidence(
+  store: AppStore,
+  projectId: string,
+  character: StoredCharacterProfile,
+  chapterNumber: number,
+  currentDraftContent = ""
+) {
+  const name = baseCharacterName(character.name);
+
+  if (!name) {
+    return null;
+  }
+
+  const profileText = [
+    character.name,
+    stripAutoGenderConstraints(character.identity),
+    character.relationshipToProtagonist,
+    character.currentGoal,
+    character.longTermGoal,
+    character.secret,
+    character.attitude,
+    character.abilityBoundary,
+    character.voice,
+    character.knownInformation,
+    character.unknownInformation,
+    character.currentState
+  ].join("\n");
+  const taskText = store.writingTaskCards
+    .filter((item) => item.projectId === projectId && item.chapterNumber <= chapterNumber)
+    .flatMap((item) => snippetsAroundName(JSON.stringify(item), name))
+    .join("\n");
+  const ledgerText = store.chapterLedgers
+    .filter((item) => item.projectId === projectId && item.chapterNumber < chapterNumber)
+    .flatMap((item) => snippetsAroundName(JSON.stringify(item), name))
+    .join("\n");
+  const draftText = store.chapterDrafts
+    .filter((item) => item.projectId === projectId && item.chapterNumber < chapterNumber)
+    .flatMap((item) => snippetsAroundName(item.content, name))
+    .join("\n");
+  const currentDraftText = currentDraftContent
+    ? snippetsAroundName(currentDraftContent, name, 100, 20).join("\n")
+    : "";
+
+  return inferCharacterGenderFromText(name, [profileText, taskText, ledgerText, draftText, currentDraftText].join("\n"));
+}
+
+function charactersForChapterContext(
+  store: AppStore,
+  projectId: string,
+  chapterNumber: number
+) {
+  return store.characterProfiles
+    .filter((item) => item.projectId === projectId)
+    .map((character) => {
+      const cleaned = characterForChapterContext(character, chapterNumber);
+      const gender = inferCharacterGenderFromProjectEvidence(store, projectId, cleaned, chapterNumber);
+      return withCharacterGenderConstraint(cleaned, gender);
+    });
+}
+
+function foreshadowingsForChapterContext(
+  store: AppStore,
+  projectId: string,
+  chapterNumber: number
+) {
+  return store.foreshadowings.filter(
+    (item) =>
+      item.projectId === projectId &&
+      !hasChapterRefAtOrAfter(item.plantedChapter, chapterNumber)
+  );
+}
+
+function plotStateForChapterContext(
+  plotState: StoredPlotState,
+  foreshadowings: StoredForeshadowing[],
+  chapterNumber: number,
+  lastLedger: StoredChapterLedger | null
+) {
+  const openForeshadowingNames = foreshadowings
+    .filter((item) => item.status !== "closed")
+    .map((item) => item.name)
+    .slice(0, 12);
+
+  if (chapterNumber === 1 && !lastLedger) {
+    return {
+      ...plotState,
+      shortTermGoal: "承接开局设定，生成第一章任务卡。",
+      currentStage: "新书开局阶段",
+      unresolvedQuestions: openForeshadowingNames,
+      openThreads: openForeshadowingNames,
+      resolvedThreads: [],
+      relationshipChanges: [],
+      nextStageGoal: "推进第一章主线。",
+      nextMilestones: stripChapterRefsAtOrAfter(plotState.nextMilestones.join("\n"), chapterNumber)
+        .split("\n")
+        .filter(Boolean)
+    };
+  }
+
+  return {
+    ...plotState,
+    shortTermGoal:
+      stripChapterRefsAtOrAfter(plotState.shortTermGoal, chapterNumber) ||
+      (lastLedger ? `承接第 ${lastLedger.chapterNumber} 章钩子：${lastLedger.cliffhanger}` : plotState.shortTermGoal),
+    currentStage:
+      stripChapterRefsAtOrAfter(plotState.currentStage, chapterNumber) ||
+      lastLedger?.stateChanges[0] ||
+      plotState.currentStage,
+    unresolvedQuestions: plotState.unresolvedQuestions.filter(
+      (item) => !hasChapterRefAtOrAfter(item, chapterNumber)
+    ),
+    openThreads: plotState.openThreads.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
+    resolvedThreads: plotState.resolvedThreads.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
+    nextMilestones: plotState.nextMilestones.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
+    relationshipChanges: plotState.relationshipChanges.filter(
+      (item) => !hasChapterRefAtOrAfter(item, chapterNumber)
+    )
+  };
+}
+
 function isCharacterScheduledForChapter(character: StoredCharacterProfile, chapterNumber: number) {
   const scheduledNumbers = extractChapterNumbers(
     [
@@ -4469,26 +2666,22 @@ function normalizeMapAndForceEntry(value: string) {
     .find(Boolean) ?? "";
   text = text.replace(/等具体场景.*$/, "").replace(/关系.*$/, "").trim();
 
-  if (/李家|李府/.test(text)) {
-    return "李家";
-  }
-
-  if (/纳兰家/.test(text)) {
-    return "纳兰家";
-  }
-
-  if (/苍云宗/.test(text)) {
-    return "苍云宗";
+  if (
+    !text ||
+    /^(她|他|它|我|你|这里|那里|那边|这边|前面|后面|开始|随后|然后|再|又|便|却|就|于是|忽然|突然|慢慢|轻轻|缓缓|沉默|闭上眼|转身|抬头|低头|看向|走向|停下)$/.test(text)
+  ) {
+    return "";
   }
 
   if (/^(前厅|大厅|正厅|后山|枯井|后山枯井|房间|院子|庭院|密室|屋顶|书房|厢房|后院|大门|演武场|训练场|广场|山门|内院|外院)$/.test(text)) {
     return "";
   }
 
-  const matched = text.match(/[\u4e00-\u9fa5A-Za-z0-9]{2,12}(家族|宗门|公司|学院|基地|神盾局|黑市|码头|组织|阵营|联盟|商会|王朝|帝国|宗|家|府|城|楼|局|阁|门|派|宫|谷|村|镇|堂|殿|司|营|军|盟|会|馆|塔|岛|湖|河|国)/);
+  const matched = text.match(/[\u4e00-\u9fa5A-Za-z0-9]{1,12}(家族|宗门|公司|学院|基地|黑市|码头|组织|阵营|联盟|商会|王朝|帝国|宗|家|府|城|楼|局|阁|门|派|宫|谷|村|镇|堂|殿|司|营|军|盟|会|馆|塔|岛|湖|河|国)/);
   const normalized = matched?.[0] ?? text;
 
   if (
+    !matched ||
     normalized.length > 14 ||
     /^(地点|势力|地图|组织|阵营|场景)$/.test(normalized) ||
     /^(前厅|大厅|正厅|后山|枯井|后山枯井|房间|院子|庭院|密室|屋顶|书房|厢房|后院|大门|演武场|训练场|广场|山门|内院|外院)$/.test(normalized)
@@ -4499,12 +2692,183 @@ function normalizeMapAndForceEntry(value: string) {
   return normalized;
 }
 
+function normalizePowerSystemEntry(value: string) {
+  const raw = compactStateText(value, 90);
+
+  if (!raw || /待补充|未建立|暂无|不涉及|没有|未出现|仍未|尚未/.test(raw)) {
+    return "";
+  }
+
+  if (
+    !/(战力|修为|境界|实力|能力边界|能力上限|天赋|异能|灵根|血脉|真气|灵力|灵气|内力|气劲|斗气|法力|神识|系统|金手指|升级|突破|觉醒|代价|限制|技能|功法|等级)/.test(raw)
+  ) {
+    return "";
+  }
+
+  const text = raw
+    .replace(/^(战力|修为|境界|实力|能力边界|能力上限|系统|金手指|等级|限制|代价)[：:]\s*/, "")
+    .split(/——|--|，|。|；|;|\(|（/)
+    .map((item) => item.trim())
+    .find(Boolean) ?? "";
+
+  if (
+    !text ||
+    /^(她|他|它|我|你|这里|那里|然后|随后|开始|于是|忽然|突然|慢慢|轻轻|缓缓|闭上眼|转身|抬头|低头|看向|走向|停下)$/.test(text)
+  ) {
+    return "";
+  }
+
+  return text;
+}
+
+function normalizeResourceEntry(value: string) {
+  const raw = compactStateText(value, 90);
+
+  if (!raw || /待补充|未记录|暂无|不涉及|没有|未出现|仍未|尚未/.test(raw)) {
+    return "";
+  }
+
+  if (
+    !/(获得|拿到|得到|领取|兑换|缴获|赢得|收获|失去|消耗|奖励|资源|道具|装备|丹药|灵石|功法|合同|股份|名额|钥匙|证据|账本|令牌|宝物|法器|武器|药材|钱财|银票|金币|权限|身份|线索|情报|筹码|配方|秘籍|地图碎片)/.test(raw)
+  ) {
+    return "";
+  }
+
+  const text = raw
+    .replace(/^(资源|道具|装备|奖励|线索|情报|身份|权限)[：:]\s*/, "")
+    .split(/——|--|，|。|；|;|\(|（/)
+    .map((item) => item.trim())
+    .find(Boolean) ?? "";
+
+  if (
+    !text ||
+    /^(她|他|它|我|你|这里|那里|然后|随后|开始|于是|忽然|突然|慢慢|轻轻|缓缓|闭上眼|转身|抬头|低头|看向|走向|停下)$/.test(text)
+  ) {
+    return "";
+  }
+
+  return text;
+}
+
 function cleanMapAndForceEntries(values: string[], limit = 8) {
   return uniqueList(values.map(normalizeMapAndForceEntry).filter(Boolean)).slice(0, limit);
 }
 
+function cleanPowerSystemEntries(values: string[], limit = 8) {
+  return uniqueList(values.map(normalizePowerSystemEntry).filter(Boolean)).slice(0, limit);
+}
+
+function cleanResourceEntries(values: string[], limit = 8) {
+  return uniqueList(values.map(normalizeResourceEntry).filter(Boolean)).slice(0, limit);
+}
+
 function baseCharacterName(name: string) {
   return name.replace(/[（(].*?[）)]/g, "").trim();
+}
+
+type CharacterGender = "female" | "male";
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripAutoGenderConstraints(value: string) {
+  return value
+    .replace(/[；;，,。\s]*性别[:：](?:女性|男性)[；;，,\s]*叙述代词固定用[“"]?[她他]\/[她他]的[”"]?[；;，,\s]*禁止写成[“"]?[她他]\/[她他]的[”"]?/g, "")
+    .replace(/[；;，,。\s]*叙述代词(?:必须|固定)用[“"]?[她他]\/[她他]的[”"]?[；;，,\s]*禁止写成[“"]?[她他]\/[她他]的[”"]?/g, "")
+    .replace(/[；;，,。\s]*人物性别和代词是硬约束[:：][^。；;\n]*/g, "")
+    .trim();
+}
+
+function snippetsAroundName(text: string, name: string, radius = 80, limit = 8) {
+  const snippets: string[] = [];
+  let index = text.indexOf(name);
+
+  while (index >= 0 && snippets.length < limit) {
+    snippets.push(text.slice(Math.max(0, index - radius), index + name.length + radius));
+    index = text.indexOf(name, index + name.length);
+  }
+
+  return snippets;
+}
+
+function countPatternMatches(text: string, pattern: RegExp) {
+  return Array.from(text.matchAll(pattern)).length;
+}
+
+function scoreCharacterGenderEvidence(name: string, text: string) {
+  const baseName = baseCharacterName(name);
+
+  if (!baseName) {
+    return { female: 0, male: 0 };
+  }
+
+  const escaped = escapeRegExp(baseName);
+  const cleaned = stripAutoGenderConstraints(text);
+  const explicitFemalePatterns = [
+    new RegExp(`(?:性别[:：]?\\s*女性|女性角色|女主|女业主|女修士|女修).{0,12}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,16}(?:性别[:：]?\\s*女性|女性角色|女主|女业主|女修士|女修)`, "g"),
+    new RegExp(`${escaped}[（(][^）)]*(?:女性|女主|女业主|女修士|女修)[）)]`, "g")
+  ];
+  const explicitMalePatterns = [
+    new RegExp(`(?:性别[:：]?\\s*男性|男性角色|男主|男业主|男修士|男修|男保安).{0,12}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,16}(?:性别[:：]?\\s*男性|男性角色|男主|男业主|男修士|男修|男保安)`, "g"),
+    new RegExp(`${escaped}[（(][^）)]*(?:男性|男主|男业主|男修士|男修|男保安)[）)]`, "g")
+  ];
+  const pronounFemalePatterns = [
+    new RegExp(`(?:她|她的).{0,16}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,16}(?:她|她的)`, "g")
+  ];
+  const pronounMalePatterns = [
+    new RegExp(`(?:他|他的).{0,16}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,16}(?:他|他的)`, "g")
+  ];
+  const female =
+    explicitFemalePatterns.reduce((score, pattern) => score + countPatternMatches(cleaned, pattern) * 4, 0) +
+    pronounFemalePatterns.reduce((score, pattern) => score + countPatternMatches(cleaned, pattern), 0);
+  const male =
+    explicitMalePatterns.reduce((score, pattern) => score + countPatternMatches(cleaned, pattern) * 4, 0) +
+    pronounMalePatterns.reduce((score, pattern) => score + countPatternMatches(cleaned, pattern), 0);
+
+  return { female, male };
+}
+
+function inferCharacterGenderFromText(name: string, text: string): CharacterGender | null {
+  const { female: femaleScore, male: maleScore } = scoreCharacterGenderEvidence(name, text);
+
+  if (femaleScore >= maleScore + 2) {
+    return "female";
+  }
+
+  if (maleScore >= femaleScore + 2) {
+    return "male";
+  }
+
+  return null;
+}
+
+function characterGenderConstraintText(name: string, gender: CharacterGender) {
+  return gender === "female"
+    ? `${name}：性别女性，叙述代词必须用“她/她的”，禁止写成“他/他的”。`
+    : `${name}：性别男性，叙述代词必须用“他/他的”，禁止写成“她/她的”。`;
+}
+
+function withCharacterGenderConstraint(character: StoredCharacterProfile, gender: CharacterGender | null) {
+  const cleanIdentity = stripAutoGenderConstraints(character.identity);
+
+  if (!gender) {
+    return cleanIdentity === character.identity ? character : { ...character, identity: cleanIdentity };
+  }
+
+  const baseName = baseCharacterName(character.name);
+  const constraint = gender === "female"
+    ? "性别：女性；叙述代词固定用“她/她的”，禁止写成“他/他的”"
+    : "性别：男性；叙述代词固定用“他/他的”，禁止写成“她/她的”";
+
+  return {
+    ...character,
+    identity: `${cleanIdentity || baseName}；${constraint}`
+  };
 }
 
 function isValidAutoCharacterName(name: string) {
@@ -4524,26 +2888,6 @@ function normalizeForeshadowingName(value: string) {
       .replace(/。$/, ""),
     42
   );
-
-  if (/内部有人与宗门势力勾结|势力勾结/.test(text)) {
-    return "神盾局内部勾结线索";
-  }
-
-  if (/天机神体觉醒需要|天机神体觉醒/.test(text)) {
-    return "天机神体觉醒条件";
-  }
-
-  if (/偷学禁术/.test(text)) {
-    return "偷学禁术真相";
-  }
-
-  if (/主动找到俊杰|神盾局为何/.test(text)) {
-    return "神盾局为何选中俊杰？";
-  }
-
-  if (/李元丰.*勾结|宗门长老.*勾结/.test(text)) {
-    return "李元丰勾结对象";
-  }
 
   return text;
 }
@@ -4584,6 +2928,174 @@ function splitDraftSentences(content: string) {
     .filter(Boolean);
 }
 
+function endingDraftExcerpt(content: string) {
+  const paragraphs = content
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const lastParagraph = paragraphs.at(-1) ?? "";
+
+  if (lastParagraph.length <= 180) {
+    return lastParagraph;
+  }
+
+  const sentences = splitDraftSentences(lastParagraph);
+  const lastSentences = sentences.slice(-2).join("");
+  return lastSentences.length <= 180 ? lastSentences : lastSentences.slice(-180);
+}
+
+function hookKeywordGrams(value: string) {
+  const stopGrams = new Set([
+    "一个",
+    "这些",
+    "什么",
+    "怎么",
+    "不会",
+    "不是",
+    "已经",
+    "开始",
+    "突然",
+    "发现",
+    "方向",
+    "处理",
+    "需要",
+    "明确",
+    "承接",
+    "结尾"
+  ]);
+  const compact = value.replace(/[^\p{Script=Han}A-Za-z0-9]/gu, "");
+  const grams = new Set<string>();
+
+  for (let size = 2; size <= 4; size += 1) {
+    for (let index = 0; index <= compact.length - size; index += 1) {
+      const gram = compact.slice(index, index + size);
+
+      if (!stopGrams.has(gram)) {
+        grams.add(gram);
+      }
+    }
+  }
+
+  return Array.from(grams);
+}
+
+function draftEndingAppearsToCarryHook(content: string, endingHook: string) {
+  const hook = endingHook.trim();
+
+  if (!hook) {
+    return true;
+  }
+
+  if (content.includes(hook.slice(0, 12))) {
+    return true;
+  }
+
+  const endingSection = content.slice(-700);
+  const hitCount = hookKeywordGrams(hook)
+    .filter((gram) => endingSection.includes(gram))
+    .slice(0, 4)
+    .length;
+
+  return hitCount >= 3;
+}
+
+function buildEndingHookSuggestion(content: string, endingHook: string) {
+  const original = endingDraftExcerpt(content);
+  const hook = endingHook.trim();
+
+  if (!original || !hook) {
+    return `结尾需要更明确承接任务卡钩子：${hook}`;
+  }
+
+  const replacement = original.includes(hook) ? original : `${original}\n\n${hook}`;
+  return `将结尾段“${original}”改为“${replacement}”。`;
+}
+
+function findAiFlavorFallbackSentence(content: string) {
+  const patterns = [/通过.*体现/, /整体.*较为/, /具有.*意义/, /展现了/];
+
+  return splitDraftSentences(content).find((sentence) =>
+    patterns.some((pattern) => pattern.test(sentence))
+  ) ?? "";
+}
+
+function buildAiFlavorFallbackSuggestion(sentence: string) {
+  const original = sentence.trim();
+
+  if (!original) {
+    return "删掉抽象评价，改成具体动作、具体反应和具体代价。";
+  }
+
+  const revised = original
+    .replace(/通过([^，。！？!?]{1,60})体现(?:出|了)?/g, "$1落到动作和对话里")
+    .replace(/整体(?:上)?较为/g, "")
+    .replace(/具有([^，。！？!?]{1,40})意义/g, "带来具体后果")
+    .replace(/展现了/g, "让读者看见")
+    .replace(/，{2,}/g, "，")
+    .replace(/^，|，$/g, "")
+    .trim();
+
+  if (revised && revised !== original) {
+    return `将“${original}”改为“${revised}”。如果改后仍偏虚，请补一个可见动作、对话或具体代价。`;
+  }
+
+  return `请定位“${original}”，删掉抽象评价，改成具体动作、具体反应和具体代价。`;
+}
+
+function findCharacterPronounMismatch(
+  content: string,
+  character: StoredCharacterProfile,
+  gender: CharacterGender
+) {
+  const name = baseCharacterName(character.name);
+
+  if (!name) {
+    return null;
+  }
+
+  const escaped = escapeRegExp(name);
+  const wrongPronoun = gender === "female" ? "他" : "她";
+  const rightPronoun = gender === "female" ? "她" : "他";
+  const pattern = new RegExp(
+    `(${escaped}[。！？!?；;：:\\s”“’"'）】》-]{0,16})${wrongPronoun}(?=[的也却在是有从把被对向看说问低抬缓微嘴眼身手脚])`
+  );
+  const match = content.match(pattern);
+
+  if (!match) {
+    return null;
+  }
+
+  const start = Math.max(0, (match.index ?? 0) - 40);
+  const end = Math.min(content.length, (match.index ?? 0) + match[0].length + 80);
+  const snippet = content.slice(start, end).replace(/\s+/g, " ").trim();
+
+  return {
+    location: snippet,
+    suggestion: `将“${snippet}”中指代${name}的“${wrongPronoun}”改为“${rightPronoun}”。${characterGenderConstraintText(name, gender)}`
+  };
+}
+
+function isPronounOrGenderReviewIssue(issue: ReviewIssue) {
+  const text = [issue.type, issue.problem ?? "", issue.location, issue.suggestion].join("\n");
+
+  return /代词|性别|她\/她的|他\/他的|改为[“"']?[她他]|女性|男性/.test(text);
+}
+
+function uniqueReviewIssues(issues: ReviewIssue[]) {
+  const seen = new Set<string>();
+
+  return issues.filter((issue) => {
+    const key = [issue.type, issue.location, issue.suggestion].join("\n");
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
 function extractLinesByKeywords(content: string, keywords: string[], limit = 6) {
   return cleanStateEntries(
     splitDraftSentences(content).filter((sentence) =>
@@ -4604,10 +3116,7 @@ function appendMapAndForceStateText(current: string, additions: string[], limit 
 }
 
 function getPreviousChapterDraft(store: AppStore, projectId: string, chapterNumber: number) {
-  return store.chapterDrafts
-    .filter((item) => item.projectId === projectId && item.chapterNumber < chapterNumber)
-    .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0]
-    ?? null;
+  return getLatestChapterDraftBefore(store, projectId, chapterNumber);
 }
 
 function getPreviousDraftTail(store: AppStore, projectId: string, chapterNumber: number) {
@@ -4638,7 +3147,7 @@ function buildLedgerFromDraft(
   );
   const powerLines = extractLinesByKeywords(
     draft.content,
-    ["突破", "境界", "战力", "能力", "气劲", "系统", "金手指", "等级", "限制", "代价"],
+    ["突破", "境界", "战力", "实力", "气劲", "系统", "金手指", "等级", "限制", "代价", "修为", "异能", "灵根", "血脉"],
     4
   );
   const mapLines = extractLinesByKeywords(
@@ -4743,13 +3252,13 @@ function buildLocalStateGraphUpdates(
     foreshadowingUpdates: taskForeshadowingUpdates.slice(0, 8),
     relationshipChanges,
     mapAndForceUpdates: cleanMapAndForceEntries(fallback.stateChanges.filter((item) =>
-      /城|镇|宗门|家族|公司|黑市|码头|学院|势力|地图|组织|阵营|基地|秘境|神盾局/.test(item)
+      /城|镇|宗门|家族|公司|黑市|码头|学院|势力|地图|组织|阵营|基地|秘境/.test(item)
     ), 8),
-    powerSystemUpdates: cleanStateEntries(fallback.stateChanges.filter((item) =>
-      /突破|境界|战力|能力|气劲|系统|金手指|等级|限制|代价|修为|功法/.test(item)
+    powerSystemUpdates: cleanPowerSystemEntries(fallback.stateChanges.filter((item) =>
+      /突破|境界|战力|实力|气劲|系统|金手指|等级|限制|代价|修为|功法|异能|灵根|血脉/.test(item)
     ), 8),
-    resourceUpdates: cleanStateEntries([fallback.payoff, ...fallback.stateChanges].filter((item) =>
-      /获得|拿到|奖励|资源|丹药|灵石|功法|合同|股份|名额|钥匙|线索|证据/.test(item)
+    resourceUpdates: cleanResourceEntries(fallback.stateChanges.filter((item) =>
+      /获得|拿到|奖励|资源|丹药|灵石|功法|合同|股份|名额|钥匙|线索|证据|道具|装备|令牌|宝物|法器/.test(item)
     ), 8)
   };
 }
@@ -5024,27 +3533,24 @@ function applyLedgerToWritingState(
     plotState.nextStageGoal = cleanHook || plotState.nextStageGoal;
     plotState.powerSystemState = appendStateText(
       plotState.powerSystemState,
-      [
+      cleanPowerSystemEntries([
         ...powerSystemUpdates,
-        ...cleanChanges.filter((item) => /突破|境界|战力|能力|气劲|系统|金手指|等级|限制|代价/.test(item))
-      ]
+        ...cleanChanges
+      ])
     );
     plotState.mapAndForces = appendMapAndForceStateText(
       plotState.mapAndForces,
-      [
+      cleanMapAndForceEntries([
         ...mapAndForceUpdates,
-        ...cleanChanges.filter((item) => /城|镇|宗门|家族|公司|黑市|码头|学院|势力|地图|组织|阵营/.test(item))
-      ]
+        ...cleanChanges
+      ])
     );
     plotState.resourceState = appendStateText(
       plotState.resourceState,
-      [
-        ledger.payoff,
+      cleanResourceEntries([
         ...resourceUpdates,
-        ...cleanChanges.filter((item) =>
-          /获得|拿到|奖励|资源|丹药|灵石|功法|合同|股份|名额|钥匙/.test(item)
-        )
-      ]
+        ...cleanChanges
+      ])
     );
     plotState.relationshipChanges = uniqueList([
       ...relationshipChanges,
@@ -5156,16 +3662,20 @@ async function createAndApplyLedgerForDraft(
   const timestamp = now();
   const bible = store.writingBibles.find((item) => item.projectId === input.projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === input.projectId)!;
-  const lastLedger = store.chapterLedgers
-    .filter((item) => item.projectId === input.projectId && item.chapterNumber < input.draft.chapterNumber)
-    .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
-  const characters = store.characterProfiles.filter((item) => item.projectId === input.projectId);
-  const foreshadowings = store.foreshadowings.filter((item) => item.projectId === input.projectId);
+  const lastLedger = getLatestChapterLedgerBefore(store, input.projectId, input.draft.chapterNumber);
+  const characters = charactersForChapterContext(store, input.projectId, input.draft.chapterNumber);
+  const foreshadowings = foreshadowingsForChapterContext(store, input.projectId, input.draft.chapterNumber);
+  const plotStateContext = plotStateForChapterContext(
+    plotState,
+    foreshadowings,
+    input.draft.chapterNumber,
+    lastLedger
+  );
   const extracted = await extractChapterStateUpdate({
     draft: input.draft,
     taskCard: input.taskCard,
     bible,
-    plotState,
+    plotState: plotStateContext,
     lastLedger,
     characters,
     foreshadowings
@@ -5234,6 +3744,121 @@ function rollbackPlotStateAfterChapterDelete(
   }
 
   plotState.updatedAt = now();
+}
+
+function resetWritingMemoryAfterChapterDelete(
+  store: AppStore,
+  project: StoredProject,
+  startChapter: number
+) {
+  rollbackPlotStateAfterChapterDelete(store, project, startChapter);
+
+  const timestamp = now();
+  const hasDeletedChapterRef = (entry: string) =>
+    extractChapterNumbers(entry).some((chapterNumber) => chapterNumber >= startChapter);
+  const stripDeletedChapterLines = (value: string) =>
+    splitLines(value).filter((line) => !hasDeletedChapterRef(line));
+  const latestLedger = getLatestChapterLedgerBefore(store, project.id, startChapter);
+  const noPreviousChapters = !latestLedger;
+
+  store.characterProfiles = store.characterProfiles
+    .filter((character) => {
+      if (character.projectId !== project.id) {
+        return true;
+      }
+
+      const chapterBoundFields = [
+        character.lastAppearance,
+        character.currentState,
+        character.knownInformation,
+        character.currentGoal,
+        character.relationshipToProtagonist
+      ];
+      const touchedDeletedChapter = chapterBoundFields.some(hasDeletedChapterRef);
+      const autoCreated =
+        /章节状态自动识别的人物|章节台账自动记录的新人物/.test(character.identity) ||
+        /需在状态管理页补全人物卡|首次进入重要剧情/.test(
+          `${character.currentState}\n${character.knownInformation}`
+        );
+
+      return !(touchedDeletedChapter && autoCreated);
+    })
+    .map((character) => {
+      if (character.projectId !== project.id) {
+        return character;
+      }
+
+      const chapterBoundFields = [
+        character.lastAppearance,
+        character.currentState,
+        character.knownInformation,
+        character.currentGoal,
+        character.relationshipToProtagonist
+      ];
+      const touchedDeletedChapter = chapterBoundFields.some(hasDeletedChapterRef);
+
+      if (!touchedDeletedChapter) {
+        return character;
+      }
+
+      const knownInformation = stripDeletedChapterLines(character.knownInformation).join("\n");
+
+      return {
+        ...character,
+        currentGoal: noPreviousChapters ? "待根据重写章节更新" : character.currentGoal,
+        knownInformation:
+          knownInformation ||
+          (noPreviousChapters
+            ? "只知道开局阶段已经明确的信息，不能提前知道未揭露真相。"
+            : character.knownInformation),
+        lastAppearance: noPreviousChapters ? "新建作品" : character.lastAppearance,
+        currentState: noPreviousChapters ? "新书开局待写" : character.currentState,
+        updatedAt: timestamp
+      };
+    });
+
+  store.foreshadowings = store.foreshadowings
+    .filter((item) => !(item.projectId === project.id && hasDeletedChapterRef(item.plantedChapter)))
+    .map((item) => {
+      if (item.projectId !== project.id) {
+        return item;
+      }
+
+      const touchedDeletedChapter = [
+        item.expectedRevealChapter,
+        item.revealMethod,
+        item.hiddenInformation
+      ].some(hasDeletedChapterRef);
+
+      if (!touchedDeletedChapter && !noPreviousChapters) {
+        return item;
+      }
+
+      return {
+        ...item,
+        status: noPreviousChapters ? "open" : item.status,
+        expectedRevealChapter: touchedDeletedChapter ? "待规划" : item.expectedRevealChapter,
+        revealMethod: touchedDeletedChapter ? "后续通过章节任务卡规划回收" : item.revealMethod,
+        hiddenInformation:
+          stripDeletedChapterLines(item.hiddenInformation).join("\n") || item.hiddenInformation,
+        updatedAt: timestamp
+      };
+    });
+
+  if (noPreviousChapters) {
+    const plotState = store.plotStates.find((item) => item.projectId === project.id);
+    const openForeshadowingNames = store.foreshadowings
+      .filter((item) => item.projectId === project.id && item.status !== "closed")
+      .map((item) => item.name);
+
+    if (plotState) {
+      plotState.unresolvedQuestions = openForeshadowingNames.slice(0, 12);
+      plotState.openThreads = openForeshadowingNames.slice(0, 12);
+      plotState.resolvedThreads = [];
+      plotState.relationshipChanges = [];
+      plotState.updatedAt = timestamp;
+    }
+  }
 }
 
 async function executeAnalyzeProjectJob(
@@ -5618,7 +4243,7 @@ export async function getDashboardStats(): Promise<DashboardStat[]> {
     return [
       { label: "进行中项目", value: "0" },
       { label: "已导入章节", value: "0" },
-      { label: "章节拆解", value: "0" },
+      { label: "已写正文", value: "0" },
       { label: "待处理任务", value: "0" }
     ];
   }
@@ -6063,6 +4688,7 @@ export async function createProject(input: {
   type: "analysis" | "writing";
   genre?: string;
   description?: string;
+  coverImageUrl?: string;
   initialState?: InitialProjectStateInput;
 }) {
   const store = await readStore();
@@ -6216,6 +4842,7 @@ export async function getProjectWritingState(projectId: string) {
     plotState: result.plotState,
     characters: result.characters,
     foreshadowings: result.foreshadowings,
+    customRelationGraphs: result.customRelationGraphs,
     taskCards: result.taskCards,
     drafts: result.drafts,
     ledgers: result.ledgers,
@@ -6244,6 +4871,18 @@ export async function updateProjectMetadata(
   project.name = name;
   project.genre = input.genre.trim();
   project.description = input.description.trim();
+  project.updatedAt = now();
+
+  await writeStore(store);
+  return project;
+}
+
+export async function updateProjectCover(projectId: string, coverImageUrl: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  project.coverImageUrl = normalizeCoverImageUrl(coverImageUrl);
   project.updatedAt = now();
 
   await writeStore(store);
@@ -6329,12 +4968,281 @@ export async function updatePlotState(
   Object.assign(plotState, {
     ...input,
     mainGoal,
+    powerSystemState: cleanPowerSystemEntries(splitLines(input.powerSystemState), 6).join("\n"),
+    mapAndForces: cleanMapAndForceEntries(splitLines(input.mapAndForces), 6).join("\n"),
+    resourceState: cleanResourceEntries(splitLines(input.resourceState), 6).join("\n"),
+    relationshipChanges: cleanStateEntries(input.relationshipChanges, 8),
     updatedAt: timestamp
   });
   project.updatedAt = timestamp;
 
   await writeStore(store);
   return plotState;
+}
+
+export async function createCustomRelationGraph(
+  projectId: string,
+  input: {
+    title: string;
+    description: string;
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const title = input.title.trim();
+
+  if (!title) {
+    throw new Error("图谱名称不能为空");
+  }
+
+  const timestamp = now();
+  const graph: StoredCustomRelationGraph = {
+    id: randomUUID(),
+    projectId,
+    title,
+    description: input.description.trim(),
+    nodes: [],
+    edges: [],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  getCustomRelationGraphs(store).push(graph);
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return graph;
+}
+
+export async function updateCustomRelationGraph(
+  projectId: string,
+  graphId: string,
+  input: {
+    title: string;
+    description: string;
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graph = getCustomRelationGraphs(store).find((item) => item.id === graphId && item.projectId === projectId);
+  const title = input.title.trim();
+
+  if (!graph) {
+    throw new Error("自定义图谱不存在");
+  }
+
+  if (!title) {
+    throw new Error("图谱名称不能为空");
+  }
+
+  const timestamp = now();
+  graph.title = title;
+  graph.description = input.description.trim();
+  graph.updatedAt = timestamp;
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return graph;
+}
+
+export async function deleteCustomRelationGraph(projectId: string, graphId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graphs = getCustomRelationGraphs(store);
+  const graph = graphs.find((item) => item.id === graphId && item.projectId === projectId);
+
+  if (!graph) {
+    throw new Error("自定义图谱不存在");
+  }
+
+  store.customRelationGraphs = graphs.filter((item) => item.id !== graphId);
+  project.updatedAt = now();
+
+  await writeStore(store);
+  return { graphId, deletedAt: now() };
+}
+
+export async function createCustomRelationGraphNode(
+  projectId: string,
+  graphId: string,
+  input: {
+    label: string;
+    meta: string;
+    sub: string;
+    type?: unknown;
+    tone?: unknown;
+    targetNodeId?: string;
+    relationLabel?: string;
+    relationTone?: unknown;
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graph = getCustomRelationGraphs(store).find((item) => item.id === graphId && item.projectId === projectId);
+  const label = input.label.trim();
+
+  if (!graph) {
+    throw new Error("自定义图谱不存在");
+  }
+
+  if (!label) {
+    throw new Error("节点名称不能为空");
+  }
+
+  const timestamp = now();
+  const node: StoredCustomRelationGraphNode = {
+    id: randomUUID(),
+    label,
+    meta: input.meta.trim(),
+    sub: input.sub.trim(),
+    type: customGraphNodeType(input.type),
+    tone: customGraphTone(input.tone),
+    x: 120 + (graph.nodes.length % 5) * 260,
+    y: 120 + Math.floor(graph.nodes.length / 5) * 170
+  };
+
+  graph.nodes.push(node);
+
+  if (input.targetNodeId && graph.nodes.some((item) => item.id === input.targetNodeId)) {
+    graph.edges.push({
+      id: randomUUID(),
+      from: input.targetNodeId,
+      to: node.id,
+      label: input.relationLabel?.trim() || "关联",
+      tone: customGraphEdgeTone(input.relationTone)
+    });
+  }
+
+  graph.updatedAt = timestamp;
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return { graph, node };
+}
+
+export async function updateCustomRelationGraphNode(
+  projectId: string,
+  graphId: string,
+  nodeId: string,
+  input: {
+    label: string;
+    meta: string;
+    sub: string;
+    type?: unknown;
+    tone?: unknown;
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graph = getCustomRelationGraphs(store).find((item) => item.id === graphId && item.projectId === projectId);
+  const node = graph?.nodes.find((item) => item.id === nodeId);
+  const label = input.label.trim();
+
+  if (!graph || !node) {
+    throw new Error("自定义节点不存在");
+  }
+
+  if (!label) {
+    throw new Error("节点名称不能为空");
+  }
+
+  const timestamp = now();
+  node.label = label;
+  node.meta = input.meta.trim();
+  node.sub = input.sub.trim();
+  node.type = customGraphNodeType(input.type ?? node.type);
+  node.tone = customGraphTone(input.tone ?? node.tone);
+  graph.updatedAt = timestamp;
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return { graph, node };
+}
+
+export async function deleteCustomRelationGraphNode(projectId: string, graphId: string, nodeId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graph = getCustomRelationGraphs(store).find((item) => item.id === graphId && item.projectId === projectId);
+
+  if (!graph || !graph.nodes.some((item) => item.id === nodeId)) {
+    throw new Error("自定义节点不存在");
+  }
+
+  graph.nodes = graph.nodes.filter((item) => item.id !== nodeId);
+  graph.edges = graph.edges.filter((item) => item.from !== nodeId && item.to !== nodeId);
+  graph.updatedAt = now();
+  project.updatedAt = graph.updatedAt;
+
+  await writeStore(store);
+  return graph;
+}
+
+export async function createCustomRelationGraphEdge(
+  projectId: string,
+  graphId: string,
+  input: {
+    from: string;
+    to: string;
+    label: string;
+    tone?: unknown;
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graph = getCustomRelationGraphs(store).find((item) => item.id === graphId && item.projectId === projectId);
+
+  if (!graph) {
+    throw new Error("自定义图谱不存在");
+  }
+
+  if (!input.from || !input.to || input.from === input.to) {
+    throw new Error("请选择两个不同节点建立关系");
+  }
+
+  if (!graph.nodes.some((item) => item.id === input.from) || !graph.nodes.some((item) => item.id === input.to)) {
+    throw new Error("关系节点不存在");
+  }
+
+  const timestamp = now();
+  const edge: StoredCustomRelationGraphEdge = {
+    id: randomUUID(),
+    from: input.from,
+    to: input.to,
+    label: input.label.trim() || "关联",
+    tone: customGraphEdgeTone(input.tone)
+  };
+
+  graph.edges.push(edge);
+  graph.updatedAt = timestamp;
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return { graph, edge };
+}
+
+export async function deleteCustomRelationGraphEdge(projectId: string, graphId: string, edgeId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const graph = getCustomRelationGraphs(store).find((item) => item.id === graphId && item.projectId === projectId);
+
+  if (!graph || !graph.edges.some((item) => item.id === edgeId)) {
+    throw new Error("自定义关系不存在");
+  }
+
+  graph.edges = graph.edges.filter((item) => item.id !== edgeId);
+  graph.updatedAt = now();
+  project.updatedAt = graph.updatedAt;
+
+  await writeStore(store);
+  return graph;
 }
 
 export async function createCharacterProfile(
@@ -6451,6 +5359,60 @@ export async function createForeshadowing(
   return foreshadowing;
 }
 
+export async function updateForeshadowing(
+  projectId: string,
+  foreshadowingId: string,
+  input: Omit<
+    StoredForeshadowing,
+    "id" | "projectId" | "createdAt" | "updatedAt"
+  >
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  if (!input.name.trim()) {
+    throw new Error("伏笔名称不能为空");
+  }
+
+  const foreshadowing = store.foreshadowings.find(
+    (item) => item.id === foreshadowingId && item.projectId === projectId
+  );
+
+  if (!foreshadowing) {
+    throw new Error("伏笔不存在或已被删除");
+  }
+
+  const timestamp = now();
+  Object.assign(foreshadowing, {
+    ...input,
+    updatedAt: timestamp
+  });
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return foreshadowing;
+}
+
+export async function deleteForeshadowing(projectId: string, foreshadowingId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const originalCount = store.foreshadowings.length;
+
+  store.foreshadowings = store.foreshadowings.filter(
+    (item) => !(item.id === foreshadowingId && item.projectId === projectId)
+  );
+
+  if (store.foreshadowings.length === originalCount) {
+    throw new Error("伏笔不存在或已被删除");
+  }
+
+  project.updatedAt = now();
+  await writeStore(store);
+  return { deleted: true };
+}
+
 export async function cleanupProjectWritingState(projectId: string) {
   const store = await readStore();
   const currentUser = await requireCurrentUser(store);
@@ -6563,12 +5525,9 @@ export async function cleanupProjectWritingState(projectId: string) {
       ...ledgerChanges.slice(0, 3)
     ]).slice(0, 8),
     nextStageGoal: latestHook || plotState.nextStageGoal,
-    powerSystemState: cleanStateEntries(splitLines(plotState.powerSystemState), 6).join("\n") ||
-      "记录主角能力边界、升级条件和代价。",
-    mapAndForces: cleanMapAndForceEntries(splitLines(plotState.mapAndForces), 6).join("\n") ||
-      "记录当前地图、神盾局、宗门和外部势力关系。",
-    resourceState: cleanStateEntries(splitLines(plotState.resourceState), 6).join("\n") ||
-      "记录主角已获得的资源、功法、装备和线索。",
+    powerSystemState: cleanPowerSystemEntries(splitLines(plotState.powerSystemState), 6).join("\n"),
+    mapAndForces: cleanMapAndForceEntries(splitLines(plotState.mapAndForces), 6).join("\n"),
+    resourceState: cleanResourceEntries(splitLines(plotState.resourceState), 6).join("\n"),
     relationshipChanges: cleanStateEntries(plotState.relationshipChanges, 8),
     updatedAt: timestamp
   });
@@ -6632,15 +5591,15 @@ export async function generateWritingTaskCard(
         )
         .slice(0, 5)
     : [];
-  const lastLedger = store.chapterLedgers
+  const latestLedger = store.chapterLedgers
     .filter((item) => item.projectId === projectId)
-    .sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
-  const lastDraft = getLatestChapterDraft(store, projectId);
+    .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0];
+  const latestDraft = getLatestChapterDraft(store, projectId);
   const lastTaskCard = getLatestWritingTaskCard(store, projectId);
   const nextChapterNumber =
     Math.max(
-      lastLedger?.chapterNumber ?? 0,
-      lastDraft?.chapterNumber ?? 0,
+      latestLedger?.chapterNumber ?? 0,
+      latestDraft?.chapterNumber ?? 0,
       lastTaskCard?.chapterNumber ?? 0,
       0
     ) + 1;
@@ -6648,11 +5607,20 @@ export async function generateWritingTaskCard(
     Number.isFinite(input?.chapterNumber) && Number(input?.chapterNumber) > 0
       ? Math.floor(Number(input?.chapterNumber))
       : nextChapterNumber;
+  const lastLedger = getLatestChapterLedgerBefore(store, projectId, targetChapterNumber);
+  const lastDraft = getLatestChapterDraftBefore(store, projectId, targetChapterNumber);
 
-  const openForeshadowings = store.foreshadowings
-    .filter((item) => item.projectId === projectId && item.status !== "closed")
+  const contextForeshadowings = foreshadowingsForChapterContext(store, projectId, targetChapterNumber);
+  const plotStateContext = plotStateForChapterContext(
+    plotState,
+    contextForeshadowings,
+    targetChapterNumber,
+    lastLedger
+  );
+  const openForeshadowings = contextForeshadowings
+    .filter((item) => item.status !== "closed")
     .slice(0, 3);
-  const allCharacters = store.characterProfiles.filter((item) => item.projectId === projectId);
+  const allCharacters = charactersForChapterContext(store, projectId, targetChapterNumber);
   const scheduledCharacters = allCharacters.filter((item) =>
     isCharacterScheduledForChapter(item, targetChapterNumber)
   );
@@ -6699,17 +5667,25 @@ export async function generateWritingTaskCard(
     title: input?.title?.trim() || `第${targetChapterNumber}章 反击前夜`,
     chapterGoal: withCharacterTaskRequirement(
       input?.chapterGoal?.trim() ||
-        `承接当前主线，围绕“${plotState.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，让主角获得可见收益或新线索。`,
+        `${project.description.trim() ? `参考作品简介的开局方向：${project.description.trim()}。` : ""}围绕“${plotStateContext.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，让主角获得可见收益或新线索。`,
       chapterCharacterConstraints
     ),
     continuity: withCharacterTaskRequirement(
       input?.continuity?.trim() ||
-        (lastLedger ? `承接上一章钩子：${lastLedger.cliffhanger}` : `承接当前阶段：${plotState.currentStage}`),
+        (lastLedger
+          ? `承接上一章钩子：${lastLedger.cliffhanger}`
+          : targetChapterNumber === 1
+            ? project.description.trim()
+              ? `开启第一章：参考作品简介的开局设定：${project.description.trim()}`
+              : `开启第一章：建立主角初始处境与第一轮压力`
+          : project.description.trim()
+            ? `参考作品简介的开局设定：${project.description.trim()}`
+            : `承接当前阶段：${plotStateContext.currentStage}`),
       chapterCharacterConstraints
     ),
     mainPlotProgress: withCharacterTaskRequirement(
       input?.mainPlotProgress?.trim() ||
-        `按“${storyAnalysis?.mainLoop || plotState.currentStage}”继续推进到下一个冲突点。`,
+        `${project.description.trim() ? "避免明显偏离作品简介里的主角身份、初始危机和核心卖点。" : ""}按“${storyAnalysis?.mainLoop || plotStateContext.currentStage}”继续推进到下一个冲突点。`,
       chapterCharacterConstraints
     ),
     requiredCharacters: relevantCharacters.length > 0 ? relevantCharacters : ["主角", "主要对手"],
@@ -6719,13 +5695,13 @@ export async function generateWritingTaskCard(
     foreshadowingTasks:
       openForeshadowings.length > 0
         ? openForeshadowings.map((item) => `${item.name}：保持${item.status === "partial" ? "部分回收" : "未回收"}状态`)
-        : plotState.unresolvedQuestions.length > 0
-          ? plotState.unresolvedQuestions.slice(0, 3).map((item) => `围绕未解悬念继续埋设：${item}`)
+        : plotStateContext.unresolvedQuestions.length > 0
+          ? plotStateContext.unresolvedQuestions.slice(0, 3).map((item) => `围绕未解悬念继续埋设：${item}`)
           : ["埋设一条可在后续章节回收的线索"],
     rulesNotToBreak: splitLines(`${bible.narrativeTaboos}\n${bible.immutableSettings}`),
     endingHook: withCharacterTaskRequirement(
       input?.endingHook?.trim() ||
-        `章末抛出一个新信息，让当前阶段的“${plotState.currentEnemy || "压力源"}”升级。`,
+        `章末抛出一个新信息，让当前阶段的“${plotStateContext.currentEnemy || "压力源"}”升级。`,
       chapterCharacterConstraints
     )
   };
@@ -6736,13 +5712,14 @@ export async function generateWritingTaskCard(
     try {
       aiCard = await generateWritingTaskCardWithAi({
         projectName: project.name,
+        projectDescription: project.description,
         bible,
-        plotState,
-        lastLedger: lastLedger ?? null,
-        latestDraft: lastDraft ?? null,
+        plotState: plotStateContext,
+        lastLedger,
+        latestDraft: lastDraft,
         characters: allCharacters,
         chapterCharacterConstraints,
-        foreshadowings: store.foreshadowings.filter((item) => item.projectId === projectId),
+        foreshadowings: contextForeshadowings,
         storyAnalysis,
         recentChapterAnalyses,
         userInput: input,
@@ -6857,6 +5834,9 @@ export async function deleteWritingTaskCard(projectId: string, taskCardId: strin
   store.writingTaskCards = store.writingTaskCards.filter(
     (item) => !(item.id === taskCardId && item.projectId === projectId)
   );
+  if (deletedDraftCount > 0 || deletedLedgerCount > 0 || deletedReviewCount > 0) {
+    resetWritingMemoryAfterChapterDelete(store, project, taskCard.chapterNumber);
+  }
   project.updatedAt = now();
 
   await writeStore(store);
@@ -6922,7 +5902,7 @@ export async function deleteWritingChaptersFrom(projectId: string, chapterNumber
   store.writingTaskCards = store.writingTaskCards.filter(
     (item) => !(item.projectId === projectId && item.chapterNumber >= startChapter)
   );
-  rollbackPlotStateAfterChapterDelete(store, project, startChapter);
+  resetWritingMemoryAfterChapterDelete(store, project, startChapter);
   project.updatedAt = now();
 
   await writeStore(store);
@@ -6957,11 +5937,15 @@ export async function generateChapterDraft(
   const timestamp = now();
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
-  const lastLedger = store.chapterLedgers
-    .filter((item) => item.projectId === projectId)
-    .sort((a, b) => b.chapterNumber - a.chapterNumber)[0] ?? null;
-  const characters = store.characterProfiles.filter((item) => item.projectId === projectId);
-  const foreshadowings = store.foreshadowings.filter((item) => item.projectId === projectId);
+  const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
+  const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
+  const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
+  const plotStateContext = plotStateForChapterContext(
+    plotState,
+    foreshadowings,
+    taskCard.chapterNumber,
+    lastLedger
+  );
   const targetWordCount = normalizeDraftTargetWordCount(options?.targetWordCount);
   const job = options?.existingJobId
     ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
@@ -6996,15 +5980,15 @@ export async function generateChapterDraft(
 
   try {
     aiDraft = await generateChapterDraftWithAi({
-        taskCard,
-        bible,
-        plotState,
-        lastLedger,
-        previousDraftTail: getPreviousDraftTail(store, projectId, taskCard.chapterNumber),
-        characters,
-        foreshadowings,
-        targetWordCount
-      });
+      taskCard,
+      bible,
+      plotState: plotStateContext,
+      lastLedger,
+      previousDraftTail: getPreviousDraftTail(store, projectId, taskCard.chapterNumber),
+      characters,
+      foreshadowings,
+      targetWordCount
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "章节正文 AI 生成失败";
     failAiJob(job, message);
@@ -7030,24 +6014,8 @@ export async function generateChapterDraft(
     throw new Error(message);
   }
 
-  try {
-    assertChapterDraftComplete(aiDraft.content);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "正文结尾疑似被截断，未保存为章节草稿";
-    failAiJob(job, message, withAiBillingOutput(store, job, {
-      usedAi: true,
-      usedFallback: false,
-      failed: true,
-      chapterNumber: taskCard.chapterNumber,
-      targetWordCount,
-      actualCharacters: countDraftCharacters(aiDraft.content)
-    }, getAiTokenUsage(aiDraft)));
-    await writeStore(store);
-    throw error;
-  }
-
   const title = aiDraft.title || taskCard.title;
-  const content = aiDraft.content;
+  const content = prepareChapterDraftContentForSave(aiDraft.content, targetWordCount);
 
   const draft: StoredChapterDraft = {
     id: randomUUID(),
@@ -7076,6 +6044,8 @@ export async function generateChapterDraft(
     usedFallback: false,
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
+    targetWordCount,
+    actualCharacters: countDraftCharacters(draft.content),
     ledgerId: stateUpdate.ledger.id,
     stateUpdated: true,
     stateUpdateUsedAi: stateUpdate.usedAi,
@@ -7105,18 +6075,18 @@ export async function prepareChapterDraftStream(
 
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
-  const lastLedger = store.chapterLedgers
-    .filter((item) => item.projectId === projectId)
-    .sort((a, b) => b.chapterNumber - a.chapterNumber)[0] ?? null;
+  const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
+  const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
   const targetWordCount = normalizeDraftTargetWordCount(options?.targetWordCount);
   const context: ChapterDraftContext = {
     taskCard,
+    projectDescription: project.description,
     bible,
-    plotState,
+    plotState: plotStateForChapterContext(plotState, foreshadowings, taskCard.chapterNumber, lastLedger),
     lastLedger,
     previousDraftTail: getPreviousDraftTail(store, projectId, taskCard.chapterNumber),
-    characters: store.characterProfiles.filter((item) => item.projectId === projectId),
-    foreshadowings: store.foreshadowings.filter((item) => item.projectId === projectId),
+    characters: charactersForChapterContext(store, projectId, taskCard.chapterNumber),
+    foreshadowings,
     targetWordCount
   };
   const job = createAiJob(store, {
@@ -7177,21 +6147,30 @@ export async function saveStreamedChapterDraft(input: {
   }
 
   const timestamp = now();
+  const lastLedger = getLatestChapterLedgerBefore(store, input.projectId, taskCard.chapterNumber);
+  const foreshadowings = foreshadowingsForChapterContext(store, input.projectId, taskCard.chapterNumber);
   const draftContext: ChapterDraftContext = {
     taskCard,
+    projectDescription: project.description,
     bible: store.writingBibles.find((item) => item.projectId === input.projectId)!,
-    plotState: store.plotStates.find((item) => item.projectId === input.projectId)!,
-    lastLedger: store.chapterLedgers
-      .filter((item) => item.projectId === input.projectId && item.chapterNumber < taskCard.chapterNumber)
-      .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0] ?? null,
+    plotState: plotStateForChapterContext(
+      store.plotStates.find((item) => item.projectId === input.projectId)!,
+      foreshadowings,
+      taskCard.chapterNumber,
+      lastLedger
+    ),
+    lastLedger,
     previousDraftTail: getPreviousDraftTail(store, input.projectId, taskCard.chapterNumber),
-    characters: store.characterProfiles.filter((item) => item.projectId === input.projectId),
-    foreshadowings: store.foreshadowings.filter((item) => item.projectId === input.projectId),
+    characters: charactersForChapterContext(store, input.projectId, taskCard.chapterNumber),
+    foreshadowings,
     targetWordCount: Number(getJobInputRecord(job)?.targetWordCount ?? 0) || undefined
   };
-  const content = sanitizeChapterDraftDiction(input.content.trim(), draftContext);
   const payload = getJobInputRecord(job);
   const targetWordCount = Number(payload?.targetWordCount ?? 0) || undefined;
+  const content = prepareChapterDraftContentForSave(
+    sanitizeChapterDraftDiction(input.content.trim(), draftContext),
+    targetWordCount
+  );
 
   if (!content) {
     const message = "AI 没有返回正文，未保存为章节草稿";
@@ -7226,23 +6205,6 @@ export async function saveStreamedChapterDraft(input: {
     throw new Error(message);
   }
 
-  try {
-    assertChapterDraftComplete(content);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "正文结尾疑似被截断，未保存为章节草稿";
-    failAiJob(job, message, withAiBillingOutput(store, job, {
-      usedAi: input.usedAi,
-      usedFallback: false,
-      streamed: true,
-      failed: true,
-      chapterNumber: taskCard.chapterNumber,
-      targetWordCount,
-      actualCharacters: countDraftCharacters(content)
-    }, input.tokenUsage));
-    await writeStore(store);
-    throw error;
-  }
-
   const draft: StoredChapterDraft = {
     id: randomUUID(),
     projectId: input.projectId,
@@ -7271,6 +6233,8 @@ export async function saveStreamedChapterDraft(input: {
     streamed: true,
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
+    targetWordCount,
+    actualCharacters: countDraftCharacters(draft.content),
     ledgerId: stateUpdate.ledger.id,
     stateUpdated: true,
     stateUpdateUsedAi: stateUpdate.usedAi,
@@ -7360,11 +6324,21 @@ export async function reviewChapterDraft(
   const taskCard = store.writingTaskCards.find((item) => item.id === draft.taskCardId);
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
-  const lastLedger = store.chapterLedgers
-    .filter((item) => item.projectId === projectId)
-    .sort((a, b) => b.chapterNumber - a.chapterNumber)[0] ?? null;
-  const characters = store.characterProfiles.filter((item) => item.projectId === projectId);
-  const foreshadowings = store.foreshadowings.filter((item) => item.projectId === projectId);
+  const lastLedger = getLatestChapterLedgerBefore(store, projectId, draft.chapterNumber);
+  const characters = charactersForChapterContext(store, projectId, draft.chapterNumber);
+  const reviewCharacters = characters.map((character) =>
+    withCharacterGenderConstraint(
+      character,
+      inferCharacterGenderFromProjectEvidence(store, projectId, character, draft.chapterNumber, draft.content)
+    )
+  );
+  const foreshadowings = foreshadowingsForChapterContext(store, projectId, draft.chapterNumber);
+  const plotStateContext = plotStateForChapterContext(
+    plotState,
+    foreshadowings,
+    draft.chapterNumber,
+    lastLedger
+  );
   const job = options?.existingJobId
     ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
     : createAiJob(store, {
@@ -7388,23 +6362,46 @@ export async function reviewChapterDraft(
   const timestamp = now();
   const issues: ReviewIssue[] = [];
 
-  if (taskCard && !draft.content.includes(taskCard.endingHook.slice(0, 12))) {
+  if (taskCard && !draftEndingAppearsToCarryHook(draft.content, taskCard.endingHook)) {
     issues.push({
       type: "章末钩子弱化",
-      location: "结尾段",
+      location: endingDraftExcerpt(draft.content) || "结尾段",
       severity: "medium",
-      suggestion: `结尾需要更明确承接任务卡钩子：${taskCard.endingHook}`
+      suggestion: buildEndingHookSuggestion(draft.content, taskCard.endingHook)
     });
   }
 
-  if (/通过.*体现|整体.*较为|具有.*意义|展现了/.test(draft.content)) {
+  const aiFlavorFallbackSentence = findAiFlavorFallbackSentence(draft.content);
+
+  if (aiFlavorFallbackSentence) {
     issues.push({
       type: "AI 味表达",
-      location: "正文概述句",
+      location: aiFlavorFallbackSentence,
       severity: "medium",
-      suggestion: "删掉抽象评价，改成具体动作、具体反应和具体代价。"
+      suggestion: buildAiFlavorFallbackSuggestion(aiFlavorFallbackSentence)
     });
   }
+
+  reviewCharacters.forEach((character) => {
+    const gender = inferCharacterGenderFromProjectEvidence(
+      store,
+      projectId,
+      character,
+      draft.chapterNumber,
+      draft.content
+    );
+    const mismatch = gender ? findCharacterPronounMismatch(draft.content, character, gender) : null;
+
+    if (mismatch) {
+      issues.push({
+        type: "人物代词错误",
+        location: mismatch.location,
+        severity: "high",
+        problem: `${baseCharacterName(character.name)}的人物性别/代词与前文状态不一致。`,
+        suggestion: mismatch.suggestion
+      });
+    }
+  });
 
   if (draft.content.length < 800) {
     issues.push({
@@ -7424,7 +6421,7 @@ export async function reviewChapterDraft(
     });
   }
 
-  characters.forEach((character) => {
+  reviewCharacters.forEach((character) => {
     const hiddenFragments = splitLines(`${character.secret}\n${character.unknownInformation}`)
       .filter((item) => item.length >= 4)
       .slice(0, 5);
@@ -7451,8 +6448,8 @@ export async function reviewChapterDraft(
       bible.worldRules,
       bible.powerSystem,
       bible.immutableSettings,
-      plotState.mapAndForces,
-      plotState.powerSystemState
+      plotStateContext.mapAndForces,
+      plotStateContext.powerSystemState
     ].join("\n");
     return !knownSettingText.includes(line.slice(0, 12));
   });
@@ -7487,18 +6484,25 @@ export async function reviewChapterDraft(
             updatedAt: draft.updatedAt
           } as StoredWritingTaskCard),
         bible,
-        plotState,
+        plotState: plotStateContext,
         lastLedger,
-        characters,
+        characters: reviewCharacters,
         foreshadowings
       })
     : null;
+  const localPronounIssues = issues.filter(isPronounOrGenderReviewIssue);
+  const aiIssues = aiReview?.issues?.filter((issue) => !isPronounOrGenderReviewIssue(issue)) ?? [];
+  const finalIssues = uniqueReviewIssues(
+    aiIssues.length > 0 ? [...localPronounIssues, ...aiIssues] : issues
+  );
+  const aiOverall = aiReview?.overall?.trim() ?? "";
+  const finalOverall =
+    aiOverall && (localPronounIssues.length > 0 || !/代词|性别|她\/她的|他\/他的|女性|男性/.test(aiOverall))
+      ? aiOverall
+      : issues.length === 0
+        ? "未发现明显跑偏问题，可以进入人工二稿。"
+        : "已发现需要修正的问题，建议先处理一致性和表达问题再入库。";
 
-  const finalIssues =
-    aiReview?.issues && aiReview.issues.length > 0 ? aiReview.issues : issues;
-  const finalOverall = aiReview?.overall?.trim() || (issues.length === 0
-    ? "未发现明显跑偏问题，可以进入人工二稿。"
-    : "已发现需要修正的问题，建议先处理一致性和表达问题再入库。");
   const finalStateSuggestions =
     aiReview?.stateUpdateSuggestions && aiReview.stateUpdateSuggestions.length > 0
       ? aiReview.stateUpdateSuggestions
@@ -7784,23 +6788,24 @@ export async function applyEditedTextToDraft(input: {
   }
 
   const deletedLedgerCount = store.chapterLedgers.filter(
-    (item) => item.projectId === input.projectId && item.draftId === draft.id
+    (item) => item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber
   ).length;
   const deletedReviewCount = store.reviewReports.filter(
-    (item) => item.projectId === input.projectId && item.draftId === draft.id
+    (item) => item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber
   ).length;
   const timestamp = now();
 
   store.chapterLedgers = store.chapterLedgers.filter(
-    (item) => !(item.projectId === input.projectId && item.draftId === draft.id)
+    (item) => !(item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber)
   );
   store.reviewReports = store.reviewReports.filter(
-    (item) => !(item.projectId === input.projectId && item.draftId === draft.id)
+    (item) => !(item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber)
   );
 
   draft.content = revisedText;
   draft.status = "draft";
   draft.updatedAt = timestamp;
+  resetWritingMemoryAfterChapterDelete(store, project, draft.chapterNumber);
   project.updatedAt = timestamp;
 
   await writeStore(store);
@@ -8003,6 +7008,7 @@ export async function deleteProject(projectId: string) {
   store.characterProfiles = store.characterProfiles.filter((item) => item.projectId !== projectId);
   store.foreshadowings = store.foreshadowings.filter((item) => item.projectId !== projectId);
   store.plotStates = store.plotStates.filter((item) => item.projectId !== projectId);
+  store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => item.projectId !== projectId);
   store.writingTaskCards = store.writingTaskCards.filter((item) => item.projectId !== projectId);
   store.chapterDrafts = store.chapterDrafts.filter((item) => item.projectId !== projectId);
   store.chapterLedgers = store.chapterLedgers.filter((item) => item.projectId !== projectId);

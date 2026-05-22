@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
 import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
+import { formatReviewText } from "@/lib/review-display";
 
 const genreOptions = [
   "都市逆袭",
@@ -60,13 +61,26 @@ export default async function ProjectStatePage({
       : hasUnwrittenTaskCard
         ? `继续写第 ${maxChapterNumber} 章`
         : `继续创作第 ${maxChapterNumber + 1} 章`;
+  const openForeshadowingCount = state.foreshadowings.filter((item) => item.status !== "closed").length;
+  const latestTaskCard = state.taskCards[0];
+  const latestLedger = state.ledgers[0];
+  const latestReview = state.reviews[0];
+  const latestCharacter = state.characters[0];
+  const keySettingCount = [
+    state.bible.corePleasure,
+    state.bible.protagonistDesire,
+    state.bible.worldRules,
+    state.bible.goldenFingerRules,
+    state.bible.immutableSettings,
+    state.plotState.mainGoal,
+    state.plotState.nextStageGoal
+  ].filter((item) => item.trim()).length;
 
   return (
-    <div className="grid">
-      <section className="hero">
+    <div className="grid state-page">
+      <section className="hero state-hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">状态管理</div>
             <h1>创作圣经、人物、伏笔和主线状态统一维护</h1>
             <p>这里是长篇不跑偏的核心。写作时不是喂全文，而是读取这些结构化状态。</p>
           </div>
@@ -88,9 +102,27 @@ export default async function ProjectStatePage({
             <span className="chip">主线 {state.plotState.currentVolume}</span>
           </div>
         </div>
+        <div className="state-health-strip">
+          <div>
+            <span>已推进</span>
+            <strong>{maxChapterNumber > 0 ? `第 ${maxChapterNumber} 章` : "尚未开写"}</strong>
+          </div>
+          <div>
+            <span>设定完整度</span>
+            <strong>{keySettingCount}/7</strong>
+          </div>
+          <div>
+            <span>人物档案</span>
+            <strong>{profileCount} 人</strong>
+          </div>
+          <div>
+            <span>未回收伏笔</span>
+            <strong>{openForeshadowingCount} 条</strong>
+          </div>
+        </div>
       </section>
 
-      <Panel title="这个页面做什么" description="这里不是写正文的地方，而是给 AI 写作时读取的长期记忆。">
+      <section className="state-command-strip" aria-label="页面维护重点">
         <div className="state-guide">
           <div>
             <strong>1. 定规则</strong>
@@ -109,11 +141,18 @@ export default async function ProjectStatePage({
             <span>伏笔表记录埋设、回收和不能提前透露的信息。</span>
           </div>
         </div>
-      </Panel>
+      </section>
 
       <div className="state-layout">
         <div className="state-main">
-      <Panel title="作品信息" description="这里填写真正要创作的小说名称、题材和一句话设想。">
+      <details id="project-info" className="state-editor-section">
+        <summary>
+          <span>
+            <strong>作品信息</strong>
+            <small>真正要创作的小说名称、题材和一句话设想。</small>
+          </span>
+          <span className="state-section-tag">{state.project.genre || "未填写题材"}</span>
+        </summary>
         <ApiForm
           className="forms"
           endpoint={`/api/projects/${projectId}/state`}
@@ -150,9 +189,16 @@ export default async function ProjectStatePage({
             保存作品信息
           </button>
         </ApiForm>
-      </Panel>
+      </details>
 
-      <Panel title="创作圣经" description="稳定设定写在这里，生成任务卡时会读取。">
+      <details id="bible" className="state-editor-section">
+        <summary>
+          <span>
+            <strong>创作圣经</strong>
+            <small>稳定设定写在这里，生成任务卡时会读取。</small>
+          </span>
+          <span className="state-section-tag">规则与禁区</span>
+        </summary>
         <ApiForm
           className="forms"
           endpoint={`/api/projects/${projectId}/state`}
@@ -228,11 +274,18 @@ export default async function ProjectStatePage({
             保存创作圣经
           </button>
         </ApiForm>
-      </Panel>
+      </details>
 
-      <Panel title="主线状态" description="用于告诉 AI 当前写到哪里，下一步必须推进什么。">
+      <details id="plot-state" className="state-editor-section" open>
+        <summary>
+          <span>
+            <strong>主线状态</strong>
+            <small>告诉 AI 当前写到哪里，下一步必须推进什么。</small>
+          </span>
+          <span className="state-section-tag">{state.plotState.currentVolume || "第一卷"}</span>
+        </summary>
         <ApiForm
-          className="forms"
+          className="forms state-plot-form"
           endpoint={`/api/projects/${projectId}/state`}
           body={{ action: "update_plot_state" }}
           arrayFields={[
@@ -315,17 +368,29 @@ export default async function ProjectStatePage({
           <div className="split-panels">
             <div className="field">
               <div className="field-label">战力状态</div>
-              <textarea name="powerSystemState" defaultValue={state.plotState.powerSystemState} />
+              <textarea
+                name="powerSystemState"
+                defaultValue={state.plotState.powerSystemState}
+                placeholder="没有明确战力体系可以留空；只写境界、能力边界、升级条件和代价。"
+              />
             </div>
             <div className="field">
               <div className="field-label">地图与势力</div>
-              <textarea name="mapAndForces" defaultValue={state.plotState.mapAndForces} />
+              <textarea
+                name="mapAndForces"
+                defaultValue={state.plotState.mapAndForces}
+                placeholder="只写顶层地点、势力、组织和阵营；没有变化可以留空。"
+              />
             </div>
           </div>
           <div className="split-panels">
             <div className="field">
               <div className="field-label">资源状态</div>
-              <textarea name="resourceState" defaultValue={state.plotState.resourceState} />
+              <textarea
+                name="resourceState"
+                defaultValue={state.plotState.resourceState}
+                placeholder="只写真实获得/失去的资源、道具、线索和身份收益。"
+              />
             </div>
             <div className="field">
               <div className="field-label">关系变化</div>
@@ -336,9 +401,18 @@ export default async function ProjectStatePage({
             保存主线状态
           </button>
         </ApiForm>
-      </Panel>
+      </details>
 
-      <Panel title="人物档案" description="重点记录人物知道什么、不知道什么。">
+      <details id="characters" className="state-editor-section" open>
+        <summary>
+          <span>
+            <strong>人物档案</strong>
+            <small>重点记录人物知道什么、不知道什么。</small>
+          </span>
+          <span className="state-section-tag">{profileCount} 人</span>
+        </summary>
+        <details className="state-inline-form">
+          <summary>添加人物</summary>
         <ApiForm
           className="forms"
           endpoint={`/api/projects/${projectId}/state`}
@@ -398,8 +472,9 @@ export default async function ProjectStatePage({
             添加人物
           </button>
         </ApiForm>
+        </details>
 
-        <div className="list" style={{ marginTop: 14 }}>
+        <div className="list">
           {state.characters.length === 0 ? (
             <div className="section-card">暂无人物档案。</div>
           ) : (
@@ -504,9 +579,18 @@ export default async function ProjectStatePage({
             ))
           )}
         </div>
-      </Panel>
+      </details>
 
-      <Panel title="伏笔表" description="伏笔独立管理，避免提前爆雷或忘记回收。">
+      <details id="foreshadowings" className="state-editor-section" open>
+        <summary>
+          <span>
+            <strong>伏笔表</strong>
+            <small>伏笔独立管理，避免提前爆雷或忘记回收。</small>
+          </span>
+          <span className="state-section-tag">未回收 {openForeshadowingCount}</span>
+        </summary>
+        <details className="state-inline-form">
+          <summary>添加伏笔</summary>
         <ApiForm
           className="forms"
           endpoint={`/api/projects/${projectId}/state`}
@@ -553,8 +637,9 @@ export default async function ProjectStatePage({
             添加伏笔
           </button>
         </ApiForm>
+        </details>
 
-        <div className="timeline" style={{ marginTop: 14 }}>
+        <div className="timeline">
           {state.foreshadowings.length === 0 ? (
             <div className="section-card">暂无伏笔。</div>
           ) : (
@@ -572,11 +657,18 @@ export default async function ProjectStatePage({
             ))
           )}
         </div>
-      </Panel>
+      </details>
 
         </div>
 
         <aside className="state-side">
+          <nav className="state-jump-nav" aria-label="状态维护导航">
+            <a href="#project-info">作品</a>
+            <a href="#bible">圣经</a>
+            <a href="#plot-state">主线</a>
+            <a href="#characters">人物</a>
+            <a href="#foreshadowings">伏笔</a>
+          </nav>
           <Panel title="状态摘要" description="创作页生成任务卡和正文时会读取这些内容。">
             <div className="list compact-list">
               <div className="task-block">
@@ -601,6 +693,28 @@ export default async function ProjectStatePage({
                 <div className="meta-row">
                   <span className="chip">人物 {profileCount}</span>
                   <span className="chip">伏笔 {foreshadowingCount}</span>
+                  <span className="chip">台账 {state.ledgers.length}</span>
+                  <span className="chip">审稿 {state.reviews.length}</span>
+                </div>
+              </div>
+              <div className="task-block">
+                <div className="task-title">最近自动状态</div>
+                <div className="muted">
+                  {latestTaskCard ? `任务卡：第 ${latestTaskCard.chapterNumber} 章 ${latestTaskCard.title}` : "暂无任务卡"}
+                </div>
+                <div className="muted">
+                  {latestLedger ? `台账：第 ${latestLedger.chapterNumber} 章 ${latestLedger.cliffhanger || latestLedger.payoff}` : "暂无章节台账"}
+                </div>
+                <div className="muted">
+                  {latestReview ? `审稿：第 ${latestReview.chapterNumber} 章 ${formatReviewText(latestReview.overall)}` : "暂无审稿报告"}
+                </div>
+              </div>
+              <div className="task-block">
+                <div className="task-title">最近更新人物</div>
+                <div className="muted">
+                  {latestCharacter
+                    ? `${latestCharacter.name}：${latestCharacter.currentState || latestCharacter.identity || "未填写状态"}`
+                    : "暂无人物档案"}
                 </div>
               </div>
               <Link className="button primary" href={`/projects/${projectId}/writing`}>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Panel } from "@/components/panel";
+import { ApiButton, ApiForm } from "@/components/api-form";
+import { CollapsibleGraphPanel } from "@/components/collapsible-graph-panel";
 import { StateRelationGraph } from "@/components/state-relation-graph";
 import { buildStateRelationGraphs, shortText } from "@/lib/state-graphs";
 import { getProjectWritingState } from "@/lib/projects";
@@ -26,6 +27,7 @@ export default async function ProjectStateGraphPage({
     resourceGraph,
     knowledgeGraph,
     causalityGraph,
+    customGraphs,
     relationshipNodes,
     openForeshadowings
   } = buildStateRelationGraphs(state);
@@ -79,7 +81,6 @@ export default async function ProjectStateGraphPage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">状态图谱</div>
             <h1>长篇创作状态关系网</h1>
             <p>人物、地图、伏笔、主线、战力、资源、知情边界和章节因果都接入图谱，支持全屏、缩放、拖拽、重置布局和小地图。</p>
           </div>
@@ -89,13 +90,49 @@ export default async function ProjectStateGraphPage({
             </Link>
             <span className="chip">人物节点 {characterGraph.nodes.length}</span>
             <span className="chip">地图节点 {forceGraph.nodes.length}</span>
-            <span className="chip">图谱 {extendedGraphs.length + 2}</span>
+            <span className="chip">图谱 {extendedGraphs.length + 2 + customGraphs.length}</span>
           </div>
         </div>
       </section>
 
-      <Panel title="人物关系网络" description="默认只显示人物节点和真实人物关系；伏笔与地点放到地图/势力图里，避免第一章就过度复杂。">
+      <section className="panel custom-graph-manager">
+        <div className="panel-head">
+          <div>
+            <h2>自定义图谱</h2>
+            <p>题材特有体系可以单独建图：修炼境界、规则怪谈规则、情绪债、家族血脉、商业版图都不用硬塞进战力或资源里。</p>
+          </div>
+          <span className="chip">自定义 {customGraphs.length}</span>
+        </div>
+        <ApiForm
+          className="forms custom-graph-create"
+          endpoint={`/api/projects/${projectId}/state`}
+          body={{ action: "create_custom_graph" }}
+          resetOnSuccess
+        >
+          <div className="split-panels">
+            <div className="field">
+              <div className="field-label">图谱名称</div>
+              <input name="title" placeholder="例如：修炼体系 / 规则怪谈规则 / 情绪债关系" required />
+            </div>
+            <div className="field">
+              <div className="field-label">说明</div>
+              <input name="description" placeholder="这张图主要维护什么关系" />
+            </div>
+          </div>
+          <button className="button primary" type="submit">
+            新建自定义图谱
+          </button>
+        </ApiForm>
+      </section>
+
+      <CollapsibleGraphPanel
+        title="人物关系网络"
+        description="默认只显示人物节点和真实人物关系；伏笔与地点放到地图/势力图里，避免第一章就过度复杂。"
+        nodeCount={characterGraph.nodes.length}
+        edgeCount={characterGraph.edges.length}
+      >
         <StateRelationGraph
+          projectId={projectId}
           title="人物关系"
           description="主角只是中心锚点；只有关系变化明确提到两个人以上时，才画成交叉边。"
           nodes={characterGraph.nodes}
@@ -122,10 +159,16 @@ export default async function ProjectStateGraphPage({
             <div className="muted">用于检查人物关系、阵营变化、角色出场线索是否已经接入后续章节任务卡。</div>
           </div>
         </div>
-      </Panel>
+      </CollapsibleGraphPanel>
 
-      <Panel title="地图 / 势力网络" description="地点、势力、当前地图和未回收伏笔独立成图，用画布查看层级和挂载关系。">
+      <CollapsibleGraphPanel
+        title="地图 / 势力网络"
+        description="地点、势力、当前地图和未回收伏笔独立成图，用画布查看层级和挂载关系。"
+        nodeCount={forceGraph.nodes.length}
+        edgeCount={forceGraph.edges.length}
+      >
         <StateRelationGraph
+          projectId={projectId}
           title="地图与势力"
           description="地点、势力和伏笔分层挂载，默认展开，不需要每次手动拖开。"
           nodes={forceGraph.nodes}
@@ -153,17 +196,69 @@ export default async function ProjectStateGraphPage({
             <div className="muted">用于检查地图推进、势力层级和伏笔位置，避免章节生成时漏掉已建立的空间关系。</div>
           </div>
         </div>
-      </Panel>
+      </CollapsibleGraphPanel>
 
       {extendedGraphs.map((item) => (
-        <Panel key={item.title} title={item.title} description={item.description}>
+        <CollapsibleGraphPanel
+          key={item.title}
+          title={item.title}
+          description={item.description}
+          nodeCount={item.graph.nodes.length}
+          edgeCount={item.graph.edges.length}
+        >
           <StateRelationGraph
+            projectId={projectId}
             title={item.graphTitle}
             description={item.graphDescription}
             nodes={item.graph.nodes}
             edges={item.graph.edges}
           />
-        </Panel>
+        </CollapsibleGraphPanel>
+      ))}
+
+      {customGraphs.map((item) => (
+        <CollapsibleGraphPanel
+          key={item.graph.id}
+          title={`自定义 · ${item.graph.title}`}
+          description={item.graph.description || "用户手动维护的题材专属关系图。"}
+          nodeCount={item.relationGraph.nodes.length}
+          edgeCount={item.relationGraph.edges.length}
+        >
+          <div className="custom-graph-tools">
+            <ApiForm
+              className="forms custom-graph-rename"
+              endpoint={`/api/projects/${projectId}/state`}
+              body={{ action: "update_custom_graph", graphId: item.graph.id }}
+            >
+              <div className="split-panels">
+                <div className="field">
+                  <div className="field-label">图谱名称</div>
+                  <input name="title" defaultValue={item.graph.title} required />
+                </div>
+                <div className="field">
+                  <div className="field-label">说明</div>
+                  <input name="description" defaultValue={item.graph.description} />
+                </div>
+              </div>
+              <button className="button" type="submit">保存图谱信息</button>
+            </ApiForm>
+            <ApiButton
+              endpoint={`/api/projects/${projectId}/state`}
+              body={{ action: "delete_custom_graph", graphId: item.graph.id }}
+              label="删除整张图谱"
+              className="button danger"
+              confirmMessage={`确定删除「${item.graph.title}」整张自定义图谱吗？节点和关系线都会删除。`}
+            />
+          </div>
+          <StateRelationGraph
+            projectId={projectId}
+            customGraphId={item.graph.id}
+            title={item.graph.title}
+            description={item.graph.description || "手动维护题材专属节点和关系线。"}
+            nodes={item.relationGraph.nodes}
+            edges={item.relationGraph.edges}
+          />
+        </CollapsibleGraphPanel>
       ))}
     </div>
   );

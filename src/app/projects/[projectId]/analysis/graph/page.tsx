@@ -34,7 +34,7 @@ export default async function ProjectAnalysisGraphPage({
     },
     {
       title: "主线 / 支线推进网",
-      description: "从开局、主循环、冲突和 reader hook 中观察推进规律。",
+      description: "从开局、主循环、冲突和读者钩子中观察推进规律。",
       graphTitle: "主线推进",
       graphDescription: "拆出原书的主线建立、阶段压力和支线牵引。",
       graph: graphs.plotProgressGraph
@@ -48,14 +48,14 @@ export default async function ProjectAnalysisGraphPage({
     },
     {
       title: "资源 / 收益网",
-      description: "从 payoff、新增信息和状态变化中观察章节回报。",
+      description: "从爽点回报、新增信息和状态变化中观察章节回报。",
       graphTitle: "资源收益",
       graphDescription: "拆出原书每章给读者的资源、线索、身份或情绪收益。",
       graph: graphs.resourceGraph
     },
     {
       title: "知情 / 秘密网",
-      description: "从 entityRelations 里查看信息差、秘密、误判和人物认知关系。",
+      description: "从人物关系里查看信息差、秘密、误判和人物认知关系。",
       graphTitle: "知情秘密",
       graphDescription: "看谁与谁发生了信息关系，以及证据来自哪一章。",
       graph: graphs.knowledgeGraph
@@ -74,9 +74,6 @@ export default async function ProjectAnalysisGraphPage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className={`pill ${hasAnalysis ? "success" : "warning"}`}>
-              {hasAnalysis ? "拆书图谱" : "等待章节分析"}
-            </div>
             <h1>拆书结构图谱</h1>
             <p>这里看的是原书的商业结构：章节节奏、爽点、人物、线索、伏笔、主线、战力、资源、知情边界和章节因果。</p>
           </div>

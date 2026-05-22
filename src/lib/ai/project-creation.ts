@@ -6,6 +6,7 @@ import {
 
 export type ProjectCreationAssistAction = "titles" | "protagonists" | "description";
 export type TitleNamingStyle = "fanqie" | "qidian";
+export type DescriptionWritingStyle = "fanqie" | "qidian";
 
 export type ProjectCreationAssistInput = {
   action: ProjectCreationAssistAction;
@@ -20,6 +21,8 @@ export type ProjectCreationAssistInput = {
   openingHook?: string;
   description?: string;
   titleNamingStyle?: TitleNamingStyle;
+  descriptionWritingStyle?: DescriptionWritingStyle;
+  avoidTitles?: string[];
 };
 
 export type ProjectCreationAssistResult = {
@@ -42,8 +45,65 @@ function normalizeResult(value: Partial<ProjectCreationAssistResult>) {
   }, getAiTokenUsage(value));
 }
 
+function titleCraftRules(titleNamingStyle: TitleNamingStyle) {
+  const sharedRules = [
+    "书名不是标签改写。genre、tags、goldenFinger 是幕后创作约束，不是必须出现在书名里的词。",
+    "优先把标签翻译成一个具体的读者钩子：主角处境、第一轮危机、反差身份、关键动作、隐藏秘密或命运问题。",
+    "默认不要直接使用用户选择的主分类、题材标签、主题标签、角色标签、金手指类型词；除非用户在 titleConcept 中明确要求某个词必须进标题。",
+    "不要把主分类、题材、角色标签、金手指类型直接连成一个标题。",
+    "关系类标签只能转成关系张力、阵营牵引或剧情矛盾，不要写成低质占有式卖点。",
+    "性格类标签不要直接写成标签词，要体现为行动方式、选择代价、布局方式或剧情结果。",
+    "高频类型词可以使用，但不能成为标题唯一卖点；每个标题都要有一个具体新信息。",
+    "同一批 6 个标题必须走不同卖点方向，不要围绕同一个名词反复变体。"
+  ];
+
+  return titleNamingStyle === "qidian"
+    ? [
+        ...sharedRules,
+        "起点风格要短、稳、耐看，优先 2-8 个中文字符，最多 12 字；用意象、职业、制度、命运主题和世界观名词承载卖点。",
+        "起点短标题也不能空泛，不要只生成类型词或角色标签词。",
+        "起点短标题可以从制度、暗线、身份、命运、城市规则、能力代价里取意象；不要照搬这些规则里的词。"
+      ]
+    : [
+        ...sharedRules,
+        "番茄风格可以更直给，但要像一个剧情钩子，而不是标签清单。建议 12-32 个中文字符，最多 46 字。",
+        "番茄长标题优先使用“处境 + 反差动作 + 爽点后果”的结构，可以用冒号，但冒号前后都必须有剧情信息。",
+        "番茄长标题可以从开局误判、第一次反击、隐藏身份、规则漏洞、关系张力里找钩子；不要照搬这些规则里的词。"
+      ];
+}
+
+function descriptionTask(descriptionWritingStyle: DescriptionWritingStyle) {
+  return descriptionWritingStyle === "qidian"
+    ? [
+        "根据已有设想润色或扩写作品简介。风格偏起点：设定质感更强，语气更稳，少喊口号，少用标签堆叠。",
+        "简介要交代主角身份、世界规则、开局异常、核心矛盾和长期悬念；可以保留爽点，但不要写成平台标签广告。",
+        "不要用【标签+标签+卖点】开头，不要使用“爆爽”“杀疯了”“全员震惊”等番茄式强刺激表达。",
+        "控制在 180-420 字，不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。"
+      ].join("")
+    : [
+        "根据已有设想润色或扩写作品简介。风格偏番茄小说：开头可用【标签+标签+卖点】概括，随后交代主角处境、危机、金手指/关键机制、第一轮爽点和追读钩子。",
+        "表达要直接、强冲突、强期待，让读者迅速知道爽点在哪里。",
+        "控制在 180-420 字，不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。"
+      ].join("");
+}
+
+function descriptionStyleRules(descriptionWritingStyle: DescriptionWritingStyle) {
+  return descriptionWritingStyle === "qidian"
+    ? [
+        "简介风格偏起点：重设定可信度、长期悬念、主角选择和世界规则。",
+        "少用强营销语、少用感叹句，避免把简介写成短视频推文。",
+        "可以制造期待，但要通过问题、代价、秘密和世界变化来制造期待。"
+      ]
+    : [
+        "简介风格偏番茄：开头快、卖点清楚、冲突直给，尽快抛出压制、反击和追读钩子。",
+        "可以使用更强的情绪词和节奏句，但不要低俗擦边或夸张到失真。",
+        "读完第一屏要知道主角为什么被压、靠什么翻盘、后面还有什么更大的爽点。"
+      ];
+}
+
 export async function generateProjectCreationAssistWithAi(input: ProjectCreationAssistInput) {
   const titleNamingStyle = input.titleNamingStyle === "qidian" ? "qidian" : "fanqie";
+  const descriptionWritingStyle = input.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie";
   const actionConfig: Record<
     ProjectCreationAssistAction,
     {
@@ -57,7 +117,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       task:
         titleNamingStyle === "qidian"
           ? "只生成 6 个中文网文新书名。风格偏起点：更短、更传统、更有类型辨识度和意象感，优先 2-8 个中文字符，最多 12 字。可以使用职业身份、世界观概念、核心意象、命运主题来命名，但严禁照搬任何现有作品名、角色名、专有名词。避免番茄式长句、第一人称设问、逗号标题、强行解释剧情的标题。"
-          : "只生成 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、题材、标签、金手指、反差或爽点。不要把构思原句压缩成标题，不要照搬任何现有作品名、角色名、专有名词。标题可长一些，建议 12-32 个中文字符，最多 46 字。",
+          : "只生成 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、反差动作、爽点后果或追读悬念。不要把构思原句压缩成标题，不要照搬任何现有作品名、角色名、专有名词。标题可长一些，建议 12-32 个中文字符，最多 46 字。",
       outputSchema: {
         titles: "string[]"
       },
@@ -74,8 +134,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       maxTokens: 350
     },
     description: {
-      task:
-        "根据已有设想润色或扩写作品简介。简介要符合当前网文平台口味：开头可用【标签+标签+卖点】概括，随后交代主角处境、危机、金手指/关键机制、第一轮爽点和追读钩子。控制在 180-420 字，不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。",
+      task: descriptionTask(descriptionWritingStyle),
       outputSchema: {
         description: "string"
       },
@@ -85,6 +144,12 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
   };
   const currentTask = actionConfig[input.action];
   const titleSeedName = input.action === "titles" && input.titleConcept?.trim() ? "" : (input.name ?? "").trim();
+  const directLabelTerms =
+    input.action === "titles" && !input.titleConcept?.trim()
+      ? [input.genre, ...(input.tags ?? []), input.goldenFinger]
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+      : [];
   const styleRules = [
     titleNamingStyle === "qidian"
       ? "书名优先短、稳、耐看，有类型气质和记忆点；不要把完整剧情塞进标题，不要使用“我都……怎么……”这类番茄长标题句式。"
@@ -93,14 +158,22 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       ? "如果提供了起名构思 titleConcept，优先依据它来命名；不要把它原句压缩成标题，也不要让上一轮生成出的 title 反过来主导这一轮。"
       : null,
     input.action === "titles"
-      ? "必须同时参考 genre、targetReader 和 tags，不要只围绕 titleConcept 做字面简化；至少体现其中 2 个标签或气质。"
+      ? "必须理解 genre、targetReader 和 tags 背后的读者期待，但默认不要把这些标签词直接写进书名；优先体现冲突、场景、动作、秘密和追读问题。"
       : null,
+    ...(input.action === "titles" ? titleCraftRules(titleNamingStyle) : []),
     input.action === "titles" && input.titleConcept?.trim()
       ? "如果构思里出现现成作品名、角色名或专有名词，不要直接照搬进书名，要转成原创意象、身份或冲突。"
+      : null,
+    input.action === "titles" && input.avoidTitles?.length
+      ? "用户正在重新生成书名。必须避开 avoidTitles 中已经出现过的标题和核心名词，不要只做同义改写或换序。"
+      : null,
+    directLabelTerms.length > 0
+      ? "directLabelTerms 是用户选择的分类/标签原词。生成书名时默认不要直接使用这些词，要转成原创意象、动作、场景或冲突。"
       : null,
     input.action === "description"
       ? "简介要先让读者知道主角是谁、被什么压住、靠什么翻盘、后面有什么更大期待。"
       : "本次只处理当前任务，不要顺手补充其他字段。",
+    ...(input.action === "description" ? descriptionStyleRules(descriptionWritingStyle) : []),
     "如果用户已经输入内容，请保留核心意思并增强网文吸引力。",
     "所有输出必须服务当前题材和标签，不要生成泛泛模板话。"
   ].filter((item): item is string => Boolean(item));
@@ -127,7 +200,10 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               goldenFinger: input.goldenFinger,
               openingHook: input.openingHook,
               description: input.description,
-              titleNamingStyle
+              titleNamingStyle,
+              descriptionWritingStyle,
+              avoidTitles: input.avoidTitles ?? [],
+              directLabelTerms
             },
             styleRules,
             retryMode: compact ? "compact_title_retry" : "standard",
@@ -136,7 +212,8 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
                   "只返回 titles 数组，不要返回其他字段。",
                   "每个标题控制在 10-28 个中文字符。",
                   "不要复述 titleConcept 的原句，不要使用现成作品或角色名。",
-                  "优先生成有悬疑灵异气质、人物身份反差和追读钩子的标题。"
+                  "优先生成有人物身份反差、具体动作、第一章危机和追读钩子的标题。",
+                  "不要把 genre 和 tags 直接拼成标题。"
                 ]
               : [],
             outputSchema: currentTask.outputSchema

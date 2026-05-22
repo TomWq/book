@@ -36,9 +36,9 @@ export default async function RegisterPage({
         <div className="auth-slogan">
           <div className="auth-calligraphy">先拆懂<br />再迁移<br />把长篇管住</div>
           <div className="auth-slogan-side">
-            <strong>Build your formula</strong>
-            <span>chapter ledger</span>
-            <span>story bible</span>
+            <strong>沉淀你的爆款公式</strong>
+            <span>章节台账</span>
+            <span>创作圣经</span>
           </div>
         </div>
 

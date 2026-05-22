@@ -33,7 +33,9 @@ export async function POST(request: Request) {
       goldenFinger: String(body.goldenFinger ?? ""),
       openingHook: String(body.openingHook ?? ""),
       description: String(body.description ?? ""),
-      titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie"
+      titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie",
+      descriptionWritingStyle: body.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie",
+      avoidTitles: list(body.avoidTitles)
     });
 
     return Response.json({ result });

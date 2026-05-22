@@ -2,6 +2,8 @@ import {
   countDraftCharacters,
   isChapterDraftEndingIncomplete,
   minimumDraftCharacters,
+  prepareChapterDraftContentForSave,
+  streamChapterDraftClosingTextWithAi,
   streamChapterDraftExpansionTextWithAi,
   streamChapterDraftTextWithAi,
   streamEditDraftTextWithAi
@@ -15,6 +17,8 @@ import {
 } from "@/lib/projects";
 
 export const runtime = "nodejs";
+
+const streamDraftSavingMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_SAVING]]";
 
 function streamText(
   handler: (enqueue: (chunk: string) => void) => Promise<void>
@@ -77,6 +81,34 @@ export async function POST(
       let usedAi = false;
       const tokenUsages: AiTokenUsage[] = [];
       const targetWordCount = prepared.context.targetWordCount;
+      const appendExpansion = async (message: string) => {
+        enqueue(`\n\n[${message}]\n\n`);
+
+        for await (const chunk of streamChapterDraftExpansionTextWithAi(
+          prepared.context,
+          content,
+          (usage) => {
+            tokenUsages.push(usage);
+          }
+        )) {
+          content += chunk;
+          enqueue(chunk);
+        }
+      };
+      const appendClosing = async (message: string) => {
+        enqueue(`\n\n[${message}]\n\n`);
+
+        for await (const chunk of streamChapterDraftClosingTextWithAi(
+          prepared.context,
+          content,
+          (usage) => {
+            tokenUsages.push(usage);
+          }
+        )) {
+          content += chunk;
+          enqueue(chunk);
+        }
+      };
 
       if (prepared.useAi) {
         try {
@@ -93,47 +125,53 @@ export async function POST(
             (countDraftCharacters(content) < minimumDraftCharacters(targetWordCount) ||
               isChapterDraftEndingIncomplete(content))
           ) {
-            enqueue(
-              `\n\n[正文需要补足，正在续写完整结尾：当前 ${countDraftCharacters(content)} 字，最低参考 ${minimumDraftCharacters(targetWordCount)} 字]\n\n`
+            await appendExpansion(
+              `正文需要补足，正在续写完整结尾：当前 ${countDraftCharacters(content)} 字，最低参考 ${minimumDraftCharacters(targetWordCount)} 字`
             );
-
-            for await (const chunk of streamChapterDraftExpansionTextWithAi(
-              prepared.context,
-              content,
-              (usage) => {
-                tokenUsages.push(usage);
-              }
-            )) {
-              content += chunk;
-              enqueue(chunk);
-            }
           }
 
           if (usedAi && isChapterDraftEndingIncomplete(content)) {
-            enqueue("\n\n[结尾仍疑似被截断，正在二次补尾]\n\n");
-
-            for await (const chunk of streamChapterDraftExpansionTextWithAi(
-              prepared.context,
-              content,
-              (usage) => {
-                tokenUsages.push(usage);
-              }
-            )) {
-              content += chunk;
-              enqueue(chunk);
-            }
+            await appendExpansion("结尾仍疑似被截断，正在二次补尾");
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : "AI 流式生成失败";
+          const isLengthLimit = message.includes("长度限制") || message.toLowerCase().includes("length");
 
           if (content.trim()) {
+            if (isLengthLimit || isChapterDraftEndingIncomplete(content)) {
+              try {
+                await appendClosing(`AI 输出被长度限制截断，正在补完整句结尾：当前 ${countDraftCharacters(content)} 字`);
+
+                if (isChapterDraftEndingIncomplete(content)) {
+                  await appendClosing("补尾后结尾仍不完整，正在最后一次补完整句");
+                }
+              } catch (expansionError) {
+                throw new Error(
+                  `${message}；尝试补写结尾失败：${expansionError instanceof Error ? expansionError.message : "补写失败"}，未保存为章节草稿。`
+                );
+              }
+            }
+
+            if (isChapterDraftEndingIncomplete(content)) {
+              const completedContent = prepareChapterDraftContentForSave(content, targetWordCount);
+
+              if (completedContent && completedContent !== content) {
+                content = completedContent;
+                enqueue("\n\n[补尾仍不稳定，已保留到最后一个完整句保存]\n\n");
+              } else {
+                throw new Error(`${message}；正文结尾仍然不完整，未保存为章节草稿。`);
+              }
+            }
+
             if (!hasUsableDraftContent(content, targetWordCount)) {
               throw new Error(
                 `${message}；已生成正文只有 ${countDraftCharacters(content)} 字，低于最低要求 ${minimumDraftCharacters(targetWordCount)} 字，未保存为章节草稿。`
               );
             }
 
-            enqueue(`\n\n[AI 流式生成提前结束，已保留并保存前面生成的正文：${message}]\n\n`);
+            if (!isLengthLimit) {
+              enqueue(`\n\n[AI 流式生成提前结束，已保存已经完整的正文：${message}]\n\n`);
+            }
           } else {
             throw new Error(`${message}；AI 没有返回正文，未保存为章节草稿。`);
           }
@@ -141,6 +179,8 @@ export async function POST(
       } else {
         throw new Error("AI 未配置，无法生成章节正文。");
       }
+
+      enqueue(`\n\n${streamDraftSavingMarker}\n\n`);
 
       await saveStreamedChapterDraft({
         projectId: prepared.projectId,

@@ -11,6 +11,8 @@ export async function POST(request: Request) {
       customerName: String(body.customerName ?? ""),
       customerContact: String(body.customerContact ?? ""),
       maxActivations: Number(body.maxActivations ?? 1),
+      durationMinutes: Number(body.durationMinutes ?? 0),
+      durationHours: Number(body.durationHours ?? 0),
       expiresAt: String(body.expiresAt ?? ""),
       notes: String(body.notes ?? "")
     });
@@ -30,7 +32,7 @@ export async function PATCH(request: Request) {
   try {
     const result = await updateAdminLicenseCode({
       licenseId: String(body.licenseId ?? ""),
-      action: String(body.action ?? "") as "disable" | "reset" | "enable" | "delete"
+      action: String(body.action ?? "") as "disable" | "delete"
     });
 
     return Response.json(result);

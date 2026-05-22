@@ -82,14 +82,12 @@ function resetJsonStore() {
 function main() {
   const databaseUrl = process.env.DATABASE_URL || readEnvValue("DATABASE_URL");
 
-  if (/^postgres(?:ql)?:\/\//.test(databaseUrl)) {
-    throw new Error("检测到 DATABASE_URL 是 PostgreSQL。为避免误删线上授权数据，本命令只允许清理本地 SQLite/JSON 状态。");
-  }
-
   const sqlitePath = resolveSqlitePath(databaseUrl);
 
   if (sqlitePath) {
     resetSqlite(sqlitePath);
+  } else if (databaseUrl.trim()) {
+    throw new Error("当前命令只支持 file: 开头的本地 SQLite 数据库，或未配置数据库时清理本地 JSON 状态。");
   } else {
     resetJsonStore();
   }

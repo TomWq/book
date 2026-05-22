@@ -1,20 +1,6 @@
-import type { StoredChapter } from "@/lib/projects";
+import type { EntityRelation, PleasurePoint, StoredChapter } from "@/lib/project-types";
 
-export type PleasurePoint = {
-  type: string;
-  setup: string;
-  release: string;
-  whyItWorks: string;
-  drivesMainPlot: boolean;
-};
-
-export type EntityRelation = {
-  source: string;
-  target: string;
-  type: string;
-  evidence: string;
-  chapterNumber?: number;
-};
+export type { EntityRelation, PleasurePoint } from "@/lib/project-types";
 
 export type ChapterAnalysisInput = Pick<
   StoredChapter,
@@ -361,18 +347,18 @@ export function buildStoryAnalysis(analyses: Array<ReturnType<typeof analyzeChap
   const topPleasure = topTypes[0]?.replace(/\s+\d+\s*次$/, "") || "情绪释放";
   const firstConflict = analyses[0]?.conflict ?? "尚未形成明确开局钩子";
   const openingModel = firstConflict.includes("退婚")
-    ? "退婚羞辱开局"
+    ? "关系破裂与公开压力开局"
     : firstConflict.includes("看不起") || firstConflict.includes("羞辱")
-      ? "被轻视压制开局"
-      : "问题先行开局";
+      ? "误判压制开局"
+      : "核心问题先行开局";
   const goldenFingerMechanism = hasGoldenFinger
-    ? "金手指早期提供方向和第一次收益，中后期应增加代价或门槛。"
-    : "当前样本未出现强金手指，可作为信息差、身份差或资源差机制迁移。";
+    ? "特殊机制早期提供方向和第一次收益，中后期应增加代价、限制或门槛。"
+    : "当前样本未出现强外挂机制，可把信息差、身份差或资源差作为推进动力。";
   const usablePatterns = [
-    "先压制或误判，再让主角获得有限反击机会。",
-    "每章保留一个明确状态变化，让读者知道主角不是原地打转。",
-    hasResourceLine ? "用资源到账或线索到账承接爽点，推动下一层冲突。" : "用新麻烦承接爽点，避免单章结束后失去追读理由。",
-    hasIdentityLine ? "身份或旧案线只露一角，不提前讲透真相。" : "重要信息分批揭示，保留断章钩子。"
+    "先建立压力或误判，再给核心人物一个有限行动窗口。",
+    "每章保留一个明确状态变化，让读者知道剧情没有原地打转。",
+    hasResourceLine ? "用资源、线索或资格变化承接回报，并推动下一层冲突。" : "用新的阻碍或待解问题承接回报，避免单章结束后失去追读理由。",
+    hasIdentityLine ? "身份、旧案或秘密线只露一角，不提前讲透真相。" : "重要信息分批揭示，保留断章钩子。"
   ];
   const avoidCopying = [
     "不要照搬原作角色姓名、势力名和标志性设定。",
@@ -383,22 +369,22 @@ export function buildStoryAnalysis(analyses: Array<ReturnType<typeof analyzeChap
 
   return {
     genre,
-    protagonistModel: "被误判或被压制，但拥有反击窗口的成长型主角",
+    protagonistModel: "处于压力、误判或资源不足状态，但逐步获得行动窗口的核心人物",
     openingModel,
     goldenFingerMechanism,
-    villainFunction: "反派负责制造压制、误判和升级压力，不能只做被打脸工具。",
+    villainFunction: "阻力方负责制造压力、误判和升级成本，不能只做一次性衬托工具。",
     supportingRoles: "配角承担见证、误判、资源转交和信息差放大的功能。",
-    mapProgression: "从个人处境进入小圈层冲突，再逐步抬升到更高势力或更大地图。",
+    mapProgression: "从个人处境进入小圈层冲突，再逐步扩展到更高层级的关系、势力或地图。",
     usablePatterns,
     avoidCopying,
     openingHook: firstConflict,
-    mainLoop: "压制 / 误判 → 冲突加码 → 主角获得反击机会 → 爽点释放 → 留下下一章钩子",
+    mainLoop: "压力 / 误判 → 冲突加码 → 核心人物获得行动窗口 → 回报释放 → 留下下一章钩子",
     pacing:
       analyses.length >= 3
         ? "当前样本基本做到每章都有冲突或状态变化，适合继续进入 AI 精拆。"
         : "章节样本较少，节奏判断还需要更多章节。",
     topPleasureTypes: topTypes,
-    formula: `${openingModel} → ${topPleasure} → 收益到账 → 引出更高层麻烦`,
-    migrationAdvice: "可以迁移到都市系统流、玄幻升级流、重生复仇流等题材。"
+    formula: `${openingModel} → ${topPleasure} → 状态变化 → 引出新的阻碍或信息`,
+    migrationAdvice: "迁移时只保留压力、行动窗口、回报和断章方式，题材、人设、世界观与具体桥段需要重新设计。"
   };
 }

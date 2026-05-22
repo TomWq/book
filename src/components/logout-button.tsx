@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export function LogoutButton({ redirectTo = "/login" }: { redirectTo?: string }) {
   const router = useRouter();
@@ -10,13 +9,7 @@ export function LogoutButton({ redirectTo = "/login" }: { redirectTo?: string })
 
   function handleLogout() {
     startTransition(async () => {
-      const client = getSupabaseBrowserClient();
-
-      if (client) {
-        await client.auth.signOut();
-      } else {
-        await fetch("/api/auth/logout", { method: "POST" });
-      }
+      await fetch("/api/auth/logout", { method: "POST" });
 
       router.replace(redirectTo);
       router.refresh();

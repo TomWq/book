@@ -10,7 +10,7 @@ import {
   normalizeCharacterMentions,
   normalizeCharacterName
 } from "@/lib/analysis";
-import type { StoredChapter } from "@/lib/projects";
+import type { StoredChapter } from "@/lib/project-types";
 
 export type ChapterAnalysisResult = ReturnType<typeof analyzeChapter>;
 export type StoryAnalysisResult = ReturnType<typeof buildStoryAnalysis>;

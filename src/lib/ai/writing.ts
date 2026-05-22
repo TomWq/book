@@ -18,10 +18,11 @@ import type {
   StoredStoryAnalysis,
   StoredWritingBible,
   StoredWritingTaskCard
-} from "@/lib/projects";
+} from "@/lib/project-types";
 
 type TaskCardContext = {
   projectName: string;
+  projectDescription?: string;
   bible: StoredWritingBible;
   plotState: StoredPlotState;
   lastLedger: StoredChapterLedger | null;
@@ -42,6 +43,7 @@ type TaskCardContext = {
 };
 
 export type ChapterDraftContext = {
+  projectDescription?: string;
   taskCard: StoredWritingTaskCard;
   bible: StoredWritingBible;
   plotState: StoredPlotState;
@@ -226,6 +228,103 @@ function asForeshadowingUpdates(value: unknown): ForeshadowingStateUpdate[] {
   }, []);
 }
 
+function splitReviewSentences(content: string) {
+  return content
+    .split(/(?<=[。！？!?])/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+function shortReviewExcerpt(value: string, limit = 180) {
+  const text = value.trim();
+
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function rewriteAiFlavorSentence(sentence: string, signals: string[]) {
+  let rewritten = sentence;
+
+  signals.forEach((signal) => {
+    rewritten = rewritten
+      .replace(new RegExp(`(^|[，,。；;：:\\s])${signal}[，,]?`, "g"), "$1")
+      .replaceAll(signal, "");
+  });
+
+  return rewritten
+    .replace(/，{2,}/g, "，")
+    .replace(/^，|，$/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
+
+function detectAiFlavorIssues(content: string): ReviewIssue[] {
+  const text = content.trim();
+
+  if (!text) {
+    return [];
+  }
+
+  const paragraphs = text
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const longParagraphs = paragraphs.filter((paragraph) => paragraph.length >= 220);
+  const signals = [
+    "这意味着",
+    "显然",
+    "无疑",
+    "某种程度上",
+    "不禁",
+    "仿佛",
+    "似乎",
+    "也就是说",
+    "本质上",
+    "总之",
+    "从某种意义上",
+    "她意识到",
+    "他意识到",
+    "她知道",
+    "他知道"
+  ];
+  const signalHits = signals.filter((signal) => text.includes(signal));
+  const issues: ReviewIssue[] = [];
+
+  if (longParagraphs.length >= 2) {
+    const paragraph = shortReviewExcerpt(longParagraphs[0]);
+
+    issues.push({
+      type: "ai_flavor",
+      location: `“${paragraph}”`,
+      severity: "medium",
+      problem: "连续长段落太多，读起来像模型在堆叙述，不够像自然网文分镜。",
+      suggestion: `这类问题通常不适合机械替换。建议把“${paragraph}”拆成 2-4 个短段，优先补角色动作、对话和即时反应，每段控制在 1-4 句。`
+    });
+  }
+
+  if (signalHits.length >= 2) {
+    const signalSentence = splitReviewSentences(text).find((sentence) =>
+      signals.some((signal) => sentence.includes(signal))
+    );
+    const sentence = signalSentence ? shortReviewExcerpt(signalSentence) : signalHits.slice(0, 2).join(" / ");
+    const sentenceSignals = signals.filter((signal) => sentence.includes(signal));
+    const rewritten = signalSentence ? rewriteAiFlavorSentence(sentence, sentenceSignals) : "";
+    const suggestion =
+      rewritten && rewritten !== sentence
+        ? `将“${sentence}”改为“${rewritten}”。如果删掉判断词后语义变薄，请再补一个动作、对话或可见反应。`
+        : `请定位“${sentence}”，删掉抽象判断词，改成角色动作、对话或即时反应。`;
+
+    issues.push({
+      type: "ai_flavor",
+      location: `“${sentence}”`,
+      severity: "medium",
+      problem: `出现“${sentenceSignals.slice(0, 3).join(" / ")}”这类典型书面腔/总结腔标记，容易让正文显得像 AI 在解释故事。`,
+      suggestion
+    });
+  }
+
+  return issues;
+}
+
 function buildStoryReference(storyAnalysis?: StoredStoryAnalysis | null) {
   if (!storyAnalysis) {
     return null;
@@ -273,7 +372,22 @@ function normalizeDraftTargetWordCount(value?: number) {
 }
 
 function estimateDraftMaxTokens(targetWordCount: number) {
-  return Math.min(12000, Math.max(2600, Math.ceil(targetWordCount * 1.7)));
+  return Math.min(12000, Math.max(3600, Math.ceil(targetWordCount * 2.2)));
+}
+
+function estimateDraftContinuationMaxTokens(targetWordCount: number, currentCharacters: number) {
+  const maxCharacters = maximumDraftCharacters(targetWordCount);
+  const remainingCharacters = Math.max(0, maxCharacters - currentCharacters);
+
+  if (remainingCharacters <= 0) {
+    return 620;
+  }
+
+  return Math.min(1800, Math.max(360, Math.ceil(remainingCharacters * 1.25)));
+}
+
+function estimateDraftClosingMaxTokens() {
+  return 900;
 }
 
 export function countDraftCharacters(content: string) {
@@ -282,6 +396,10 @@ export function countDraftCharacters(content: string) {
 
 export function minimumDraftCharacters(targetWordCount?: number) {
   return Math.floor(normalizeDraftTargetWordCount(targetWordCount) * 0.7);
+}
+
+export function maximumDraftCharacters(targetWordCount?: number) {
+  return Math.ceil(normalizeDraftTargetWordCount(targetWordCount) * 1.25);
 }
 
 function estimateEditMaxTokens(originalText: string) {
@@ -322,6 +440,10 @@ function isDraftTooShort(content: string, targetWordCount?: number) {
   return countDraftCharacters(content) < minimumDraftCharacters(targetWordCount);
 }
 
+function isDraftTooLong(content: string, targetWordCount?: number) {
+  return countDraftCharacters(content) > maximumDraftCharacters(targetWordCount);
+}
+
 export function isChapterDraftEndingIncomplete(content: string) {
   const text = content.trim();
 
@@ -349,6 +471,222 @@ export function isChapterDraftEndingIncomplete(content: string) {
   return leftQuotes > rightQuotes;
 }
 
+const chapterDraftEndingMarks = new Set(["。", "！", "？", "!", "?", "…"]);
+const chapterDraftClosingMarks = new Set(["”", "’", "\"", "）", "】", "》", ")", "]"]);
+
+function trimChapterDraftToLastCompleteSentence(content: string) {
+  const text = content.trim();
+
+  if (!text || !isChapterDraftEndingIncomplete(text)) {
+    return text;
+  }
+
+  let sentenceEndIndex = -1;
+
+  for (let index = text.length - 1; index >= 0; index -= 1) {
+    if (chapterDraftEndingMarks.has(text[index])) {
+      sentenceEndIndex = index + 1;
+      break;
+    }
+  }
+
+  if (sentenceEndIndex < 0) {
+    return text;
+  }
+
+  while (sentenceEndIndex < text.length && chapterDraftClosingMarks.has(text[sentenceEndIndex])) {
+    sentenceEndIndex += 1;
+  }
+
+  return text.slice(0, sentenceEndIndex).trim();
+}
+
+function splitDraftParagraphSentences(paragraph: string) {
+  const matches = paragraph.match(/[^。！？!?…]+[。！？!?…]+[”’"）】》)]*/g) ?? [];
+  const matchedLength = matches.join("").length;
+  const tail = paragraph.slice(matchedLength).trim();
+
+  return tail ? [...matches, tail] : matches;
+}
+
+export function formatChapterDraftParagraphs(content: string) {
+  const maxParagraphCharacters = 220;
+  const targetParagraphCharacters = 170;
+  const minParagraphCharacters = 80;
+  const paragraphs = content
+    .trim()
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  return paragraphs
+    .flatMap((paragraph) => {
+      if (
+        countDraftCharacters(paragraph) <= maxParagraphCharacters ||
+        /^#/.test(paragraph) ||
+        !/[。！？!?…]/.test(paragraph)
+      ) {
+        return [paragraph];
+      }
+
+      const sentences = splitDraftParagraphSentences(paragraph);
+
+      if (sentences.length <= 1) {
+        return [paragraph];
+      }
+
+      const chunks = sentences.reduce<string[]>((items, sentence) => {
+        const current = items.at(-1) ?? "";
+        const next = `${current}${sentence}`.trim();
+        const currentCharacters = countDraftCharacters(current);
+        const nextCharacters = countDraftCharacters(next);
+
+        if (
+          current &&
+          currentCharacters >= minParagraphCharacters &&
+          nextCharacters > targetParagraphCharacters
+        ) {
+          items.push(sentence.trim());
+          return items;
+        }
+
+        if (items.length === 0) {
+          items.push(sentence.trim());
+        } else {
+          items[items.length - 1] = next;
+        }
+
+        return items;
+      }, []);
+
+      const last = chunks.at(-1) ?? "";
+
+      if (chunks.length > 1 && countDraftCharacters(last) < 45) {
+        const tail = chunks.pop();
+        chunks[chunks.length - 1] = `${chunks[chunks.length - 1]}${tail}`;
+      }
+
+      return chunks;
+    })
+    .join("\n\n");
+}
+
+export function prepareChapterDraftContentForSave(content: string, targetWordCount?: number) {
+  const text = content.trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (!isChapterDraftEndingIncomplete(text)) {
+    return formatChapterDraftParagraphs(text);
+  }
+
+  const trimmed = trimChapterDraftToLastCompleteSentence(text);
+
+  if (!trimmed) {
+    return text;
+  }
+
+  if (countDraftCharacters(trimmed) >= minimumDraftCharacters(targetWordCount)) {
+    return formatChapterDraftParagraphs(trimmed);
+  }
+
+  return formatChapterDraftParagraphs(text);
+}
+
+function limitDraftLengthToCompleteSentence(content: string, targetWordCount?: number) {
+  const maxCharacters = maximumDraftCharacters(targetWordCount);
+
+  if (countDraftCharacters(content) <= maxCharacters) {
+    return content.trim();
+  }
+
+  let count = 0;
+  let cutIndex = content.length;
+
+  for (let index = 0; index < content.length; index += 1) {
+    if (!/\s/.test(content[index])) {
+      count += 1;
+    }
+
+    if (count > maxCharacters) {
+      cutIndex = index;
+      break;
+    }
+  }
+
+  return trimChapterDraftToLastCompleteSentence(content.slice(0, cutIndex));
+}
+
+export async function compressChapterDraftToTarget(
+  content: string,
+  context: ChapterDraftContext,
+  targetWordCount: number
+) {
+  const maxCharacters = maximumDraftCharacters(targetWordCount);
+  const minCharacters = minimumDraftCharacters(targetWordCount);
+
+  if (countDraftCharacters(content) <= maxCharacters) {
+    return { content, usage: undefined as AiTokenUsage | undefined };
+  }
+
+  const response = await requestAiJson<{ content?: string }>({
+    messages: [
+      {
+        role: "system",
+        content:
+          `你是网文正文压缩编辑。请严格输出 JSON。当前章节明显超过目标篇幅，需要压缩到 ${targetWordCount} 字左右，最高不得超过 ${maxCharacters} 个中文字符。必须保留本章目标、核心冲突、爽点释放和章末钩子，不要改成提纲、总结或分析。`
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            targetWordCount,
+            maxCharacters,
+            currentCharacters: countDraftCharacters(content),
+            content,
+            taskCard: context.taskCard,
+            compressionRules: [
+              "保留主要场景和关键对话，删掉重复解释、重复心理活动、同义铺垫和多余环境描写。",
+              "不要删除任务卡要求的章末钩子。",
+              "压缩后仍然必须是完整小说正文，不能变成梗概。",
+              "结尾必须以完整句子结束。"
+            ],
+            outputSchema: {
+              content: "string"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.25,
+    maxTokens: estimateDraftMaxTokens(targetWordCount)
+  });
+
+  const compressed = prepareChapterDraftContentForSave(
+    String(response.content ?? "").trim(),
+    targetWordCount
+  );
+  const compressedCharacters = countDraftCharacters(compressed);
+  const limitedContent = limitDraftLengthToCompleteSentence(content, targetWordCount);
+  const limitedCharacters = countDraftCharacters(limitedContent);
+
+  return {
+    content:
+      compressed &&
+      compressedCharacters >= minCharacters &&
+      compressedCharacters <= Math.ceil(maxCharacters * 1.08)
+        ? compressed
+        : limitedCharacters >= minCharacters
+          ? limitedContent
+        : content,
+    usage: getAiTokenUsage(response)
+  };
+}
+
 export function assertChapterDraftComplete(content: string) {
   if (isChapterDraftEndingIncomplete(content)) {
     throw new Error("正文结尾疑似被截断，未保存为章节草稿。请重新生成或降低目标字数。");
@@ -371,12 +709,103 @@ function isCultivationFantasyContext(context: Pick<ChapterDraftContext, "bible" 
   return /玄幻|修仙|仙侠|修炼|宗门|灵气|灵力|境界|炼气|筑基|金丹|元婴|神体|灵根|功法|丹药|法器|长老|家族/.test(text);
 }
 
+function baseCharacterName(name: string) {
+  return name.replace(/[（(].*?[）)]/g, "").trim();
+}
+
+function inferCharacterPronoun(character: StoredCharacterProfile) {
+  const stripAutoGenderConstraints = (value: string) =>
+    value
+      .replace(/[；;，,。\s]*性别[:：](?:女性|男性)[；;，,\s]*叙述代词固定用[“"]?[她他]\/[她他]的[”"]?[；;，,\s]*禁止写成[“"]?[她他]\/[她他]的[”"]?/g, "")
+      .replace(/[；;，,。\s]*叙述代词(?:必须|固定)用[“"]?[她他]\/[她他]的[”"]?[；;，,\s]*禁止写成[“"]?[她他]\/[她他]的[”"]?/g, "")
+      .trim();
+  const text = [
+    character.name,
+    stripAutoGenderConstraints(character.identity),
+    character.relationshipToProtagonist,
+    character.currentGoal,
+    character.longTermGoal,
+    character.secret,
+    character.attitude,
+    character.voice,
+    character.knownInformation,
+    character.unknownInformation,
+    character.currentState
+  ].join("\n");
+  const femaleScore =
+    (text.match(/性别[:：]?\s*女性|女性角色|女业主|女修士|女修|女主|她\/她的|用“她/g) ?? []).length * 2 +
+    (text.match(/(?:她|她的)/g) ?? []).length;
+  const maleScore =
+    (text.match(/性别[:：]?\s*男性|男性角色|男业主|男修士|男修|男主|男保安|他\/他的|用“他/g) ?? []).length * 2 +
+    (text.match(/(?:他|他的)/g) ?? []).length;
+
+  if (femaleScore >= maleScore + 2) {
+    return "female" as const;
+  }
+
+  if (maleScore >= femaleScore + 2) {
+    return "male" as const;
+  }
+
+  return null;
+}
+
+function buildCharacterPronounRules(characters: StoredCharacterProfile[]) {
+  return characters
+    .map((character) => {
+      const gender = inferCharacterPronoun(character);
+      const name = baseCharacterName(character.name);
+
+      if (!gender || !name) {
+        return "";
+      }
+
+      return gender === "female"
+        ? `${name}=女性，叙述代词固定用“她/她的”，不要写成“他/他的”。`
+        : `${name}=男性，叙述代词固定用“他/他的”，不要写成“她/她的”。`;
+    })
+    .filter(Boolean);
+}
+
+function fixCharacterPronouns(content: string, characters: StoredCharacterProfile[]) {
+  return characters.reduce((text, character) => {
+    const gender = inferCharacterPronoun(character);
+    const name = baseCharacterName(character.name);
+
+    if (!gender || !name) {
+      return text;
+    }
+
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    if (gender === "female") {
+      return text
+        .replace(new RegExp(`(${escaped}[。！？!?；;：:\\s”“’"'）】》-]{0,16})他(?=[的也却在是有从把被对向看说问低抬缓微嘴眼身手脚])`, "g"), "$1她")
+        .replace(new RegExp(`(${escaped}[^。！？!?]{0,28}，)他(?=[的也却在是有从把被对向看说问低抬缓微嘴眼身手脚])`, "g"), "$1她");
+    }
+
+    return text
+      .replace(new RegExp(`(${escaped}[。！？!?；;：:\\s”“’"'）】》-]{0,16})她(?=[的也却在是有从把被对向看说问低抬缓微嘴眼身手脚])`, "g"), "$1他")
+      .replace(new RegExp(`(${escaped}[^。！？!?]{0,28}，)她(?=[的也却在是有从把被对向看说问低抬缓微嘴眼身手脚])`, "g"), "$1他");
+  }, content);
+}
+
 function buildNarrativeDictionRules(context: ChapterDraftContext) {
+  const pronounRules = buildCharacterPronounRules(context.characters);
   const rules = [
     "正文称谓、对白和物件必须符合当前题材、时代感和世界观，不要混入与题材不符的现代口语。",
     "亲属、师门、家族、宗门称谓必须稳定，不能同一人物一会儿现代口语一会儿古风称谓。",
+    pronounRules.length
+      ? `人物性别和代词是硬约束：${pronounRules.join("；")}`
+      : "",
     `本书作品类型固定为「${context.bible.workType}」，目标读者固定为「${context.bible.targetReader}」，正文不得擅自切换题材频道、时代背景、主角类型或核心卖点。`,
-    "创作圣经 immutableSettings、narrativeTaboos、corePleasure、styleGuide 中的主分类、题材边界、作品标签和禁止项都是硬约束；如果任务卡与圣经冲突，优先遵守圣经。"
+    context.projectDescription
+      ? `项目简介是方向参考：正文不要与「${context.projectDescription}」中的主角身份、初始危机和核心卖点明显冲突；具体桥段以任务卡为准。`
+      : "",
+    "创作圣经 immutableSettings、narrativeTaboos、corePleasure、styleGuide 中的主分类、题材边界、作品标签和禁止项都是硬约束；如果任务卡与圣经冲突，优先遵守圣经。",
+    "每段尽量控制在 1-4 句；一个自然段接近 200 字时必须换段，不要写成一大段散文，也不要连续堆很多长句。",
+    "优先写动作、对话、冲突、结果和信息推进，不要用华丽词藻、排比句、总结腔或抒情腔去撑篇幅。",
+    "语言要像正常网文，不要刻意堆砌比喻、成语、抽象修辞或过度精致的句式。"
   ];
 
   if (isCultivationFantasyContext(context)) {
@@ -387,15 +816,17 @@ function buildNarrativeDictionRules(context: ChapterDraftContext) {
     );
   }
 
-  return rules;
+  return rules.filter(Boolean);
 }
 
 export function sanitizeChapterDraftDiction(content: string, context: ChapterDraftContext) {
+  const pronounFixed = fixCharacterPronouns(content, context.characters);
+
   if (!isCultivationFantasyContext(context)) {
-    return content;
+    return pronounFixed;
   }
 
-  return content
+  return pronounFixed
     .replace(/老爸|爸爸|爸/g, "父亲")
     .replace(/老妈|妈妈|妈/g, "母亲");
 }
@@ -408,14 +839,15 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
         content:
           "你是网文长篇创作助手。请严格输出 JSON。你的任务是基于创作圣经、主线状态、最近章节台账、拆书结构参考和伏笔表，生成一张“新作品”的本章任务卡。拆书分析只能作为结构参考，用来迁移冲突循环、爽点功能、节奏密度和钩子类型；严禁照搬或续写原书内容，严禁复用原书人物名、地点名、专有设定、具体线索、章节事件、原文表达和同款章末钩子。用户输入不为空时必须优先遵守；用户输入为空时自动补全，但必须围绕当前项目的创作圣经和主线状态生成全新的剧情任务。"
       },
-      {
-        role: "user",
-        content: JSON.stringify(
-          {
-            projectName: context.projectName,
-            bible: context.bible,
-            plotState: context.plotState,
-            lastLedger: context.lastLedger,
+            {
+              role: "user",
+              content: JSON.stringify(
+                {
+                  projectName: context.projectName,
+                  projectDescription: context.projectDescription,
+                  bible: context.bible,
+                  plotState: context.plotState,
+                  lastLedger: context.lastLedger,
             latestDraft: context.latestDraft,
             characters: context.characters,
             chapterCharacterConstraints: context.chapterCharacterConstraints ?? [],
@@ -427,7 +859,8 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             chapterNumber: context.chapterNumber,
             migrationRules: [
               "必须先从拆书结果抽象出结构功能，再迁移到当前新书变量。",
-              "任务卡里的本章目标、承接、主线推进、爽点和章末钩子都必须服务当前 projectName、bible、plotState。",
+              "任务卡里的本章目标、承接、主线推进、爽点和章末钩子都必须服务当前 projectName、projectDescription、bible、plotState。",
+              "如果 projectDescription 不为空，它是本书开局方向参考，任务卡不要明显违背简介里的主角身份、初始危机和核心卖点。",
               "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
               "不得为了套用拆书结构而改变当前新书的目标读者、主分类、主题标签、角色标签、时代背景、核心人设或力量体系。",
               "如果 chapterCharacterConstraints 不为空，本章任务卡必须显式使用这些人物约束，并把相关人物写入 requiredCharacters。",
@@ -472,28 +905,31 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
   try {
     const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
     const minCharacters = minimumDraftCharacters(targetWordCount);
+    const maxCharacters = maximumDraftCharacters(targetWordCount);
 
     const response = await requestAiJson<{ title?: string; content?: string }>({
       messages: [
         {
           role: "system",
           content:
-            `你是网文正文生成助手。请严格输出 JSON。你要根据任务卡和项目状态写出一章正文，要求是连贯的中文小说正文，不要输出提纲、列表或分析。正文目标约 ${targetWordCount} 个中文字，允许上下浮动 10%-15%，不要为了凑字重复解释、复述设定或写分析腔。`
+            `你是网文正文生成助手。请严格输出 JSON。你要根据任务卡和项目状态写出一章正文，要求是连贯的中文小说正文，不要输出提纲、列表或分析。正文目标约 ${targetWordCount} 个中文字，最高不得超过 ${maxCharacters} 字，不要为了凑字重复解释、复述设定或写分析腔。`
         },
         {
           role: "user",
-          content: JSON.stringify(
-            {
-              targetWordCount,
-              taskCard: context.taskCard,
-              bible: context.bible,
-              plotState: context.plotState,
-              lastLedger: context.lastLedger,
+              content: JSON.stringify(
+                {
+                  targetWordCount,
+                  maxCharacters,
+                  taskCard: context.taskCard,
+                  projectDescription: context.projectDescription,
+                  bible: context.bible,
+                  plotState: context.plotState,
+                  lastLedger: context.lastLedger,
               previousDraftTail: context.previousDraftTail,
               characters: context.characters,
               foreshadowings: context.foreshadowings,
               writingRules: [
-                `正文目标约 ${targetWordCount} 字，篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
+                `正文目标约 ${targetWordCount} 字，最高不得超过 ${maxCharacters} 字；篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
                 ...buildNarrativeDictionRules(context),
                 "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
                 "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
@@ -512,8 +948,8 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
           )
         }
       ],
-      temperature: 0.7,
-      maxTokens: estimateDraftMaxTokens(targetWordCount)
+    temperature: 0.48,
+    maxTokens: estimateDraftMaxTokens(targetWordCount)
     });
 
     const title = String(response.title ?? "").trim();
@@ -534,16 +970,17 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
           },
           {
             role: "user",
-            content: JSON.stringify(
-              {
-                targetWordCount,
-                minCharacters,
-                currentCharacters: countDraftCharacters(content),
-                currentContent: content,
-                taskCard: context.taskCard,
-                bible: context.bible,
-                plotState: context.plotState,
-                continuationRules: [
+              content: JSON.stringify(
+                {
+                  targetWordCount,
+                  minCharacters,
+                  currentCharacters: countDraftCharacters(content),
+                  currentContent: content,
+                  taskCard: context.taskCard,
+                  projectDescription: context.projectDescription,
+                  bible: context.bible,
+                  plotState: context.plotState,
+                  continuationRules: [
                   "只续写正文后半段，不要重复已有内容。",
                   ...buildNarrativeDictionRules(context),
                   "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
@@ -561,8 +998,8 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
             )
           }
         ],
-        temperature: 0.72,
-        maxTokens: estimateDraftMaxTokens(Math.max(800, targetWordCount - countDraftCharacters(content)))
+        temperature: 0.42,
+        maxTokens: estimateDraftContinuationMaxTokens(targetWordCount, countDraftCharacters(content))
       });
       const extra = String(expansion.content ?? "").trim();
 
@@ -573,7 +1010,13 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
     }
 
     content = sanitizeChapterDraftDiction(content, context);
-    assertChapterDraftComplete(content);
+    content = prepareChapterDraftContentForSave(content, targetWordCount);
+
+    if (isDraftTooLong(content, targetWordCount)) {
+      const compressed = await compressChapterDraftToTarget(content, context, targetWordCount);
+      content = compressed.content;
+      usages.push(compressed.usage);
+    }
 
     return attachAiTokenUsage({
       title: title || context.taskCard.title,
@@ -589,19 +1032,21 @@ export async function* streamChapterDraftTextWithAi(
   onUsage?: (usage: AiTokenUsage) => void
 ) {
   const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
+  const maxCharacters = maximumDraftCharacters(targetWordCount);
 
   yield* requestAiTextStream({
     messages: [
       {
         role: "system",
         content:
-          `你是网文正文生成助手。请直接输出连贯的中文小说正文，不要输出 JSON、提纲、列表或分析。必须严格遵守任务卡、创作圣经、人物已知信息和伏笔限制。正文目标约 ${targetWordCount} 个中文字，允许上下浮动 10%-15%，不要为了凑字重复解释、复述设定或写分析腔。`
+          `你是网文正文生成助手。请直接输出连贯的中文小说正文，不要输出 JSON、提纲、列表或分析。必须严格遵守任务卡、创作圣经、人物已知信息和伏笔限制。正文目标约 ${targetWordCount} 个中文字，最高不得超过 ${maxCharacters} 字，不要为了凑字重复解释、复述设定或写分析腔。`
       },
       {
         role: "user",
         content: JSON.stringify(
           {
             targetWordCount,
+            maxCharacters,
             taskCard: context.taskCard,
             bible: context.bible,
             plotState: context.plotState,
@@ -610,7 +1055,7 @@ export async function* streamChapterDraftTextWithAi(
             characters: context.characters,
             foreshadowings: context.foreshadowings,
             writingRules: [
-              `正文目标约 ${targetWordCount} 字，篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
+              `正文目标约 ${targetWordCount} 字，最高不得超过 ${maxCharacters} 字；篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
               ...buildNarrativeDictionRules(context),
               "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
               "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
@@ -627,7 +1072,7 @@ export async function* streamChapterDraftTextWithAi(
         )
       }
     ],
-    temperature: 0.7,
+    temperature: 0.48,
     maxTokens: estimateDraftMaxTokens(targetWordCount),
     onUsage
   });
@@ -641,13 +1086,14 @@ export async function* streamChapterDraftExpansionTextWithAi(
   const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
   const currentCharacters = countDraftCharacters(currentContent);
   const minCharacters = minimumDraftCharacters(targetWordCount);
+  const maxCharacters = maximumDraftCharacters(targetWordCount);
 
   yield* requestAiTextStream({
     messages: [
       {
         role: "system",
         content:
-          `你是网文正文续写助手。上一轮正文当前 ${currentCharacters} 字，最低参考 ${minCharacters} 字，可能篇幅不足或结尾被截断。请直接输出续写正文，不要重写开头，不要输出提纲、总结或分析。目标是把整章补足到接近 ${targetWordCount} 字，并写出完整章末落点。`
+          `你是网文正文续写助手。上一轮正文当前 ${currentCharacters} 字，最低参考 ${minCharacters} 字，最高参考 ${maxCharacters} 字。请直接输出续写正文，不要重写开头，不要输出提纲、总结或分析。目标是把整章补足到接近 ${targetWordCount} 字，并写出完整章末落点。`
       },
       {
         role: "user",
@@ -655,6 +1101,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
           {
             targetWordCount,
             minCharacters,
+            maxCharacters,
             currentCharacters,
             currentContent,
             taskCard: context.taskCard,
@@ -664,6 +1111,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
             foreshadowings: context.foreshadowings,
             continuationRules: [
               "只续写正文后半段，不要重复已有内容。",
+              `续写后整章最高不得超过 ${maxCharacters} 字。`,
               ...buildNarrativeDictionRules(context),
               "续写也必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得补写成另一个频道或另一个题材。",
               "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
@@ -678,8 +1126,50 @@ export async function* streamChapterDraftExpansionTextWithAi(
         )
       }
     ],
-    temperature: 0.72,
-    maxTokens: estimateDraftMaxTokens(Math.max(800, targetWordCount - currentCharacters)),
+        temperature: 0.42,
+        maxTokens: estimateDraftContinuationMaxTokens(targetWordCount, currentCharacters),
+        onUsage
+      });
+}
+
+export async function* streamChapterDraftClosingTextWithAi(
+  context: ChapterDraftContext,
+  currentContent: string,
+  onUsage?: (usage: AiTokenUsage) => void
+) {
+  const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
+  const currentCharacters = countDraftCharacters(currentContent);
+  const tail = currentContent.slice(-700);
+
+  yield* requestAiTextStream({
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是网文正文补尾助手。正文被输出长度限制截断了。请只补完最后半句话或最后一小段，让正文以完整句子结束；不要重写前文，不要继续展开新剧情，不要输出分析或说明。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            targetWordCount,
+            currentCharacters,
+            tail,
+            taskCard: context.taskCard,
+            closingRules: [
+              "只补 1-3 句，优先补完当前断句。",
+              "如果可以，把章末钩子自然收住；不能完整展开也不要开新事件。",
+              "必须以句号、问号、叹号、右引号或省略号结束。",
+              "不要重复 tail 里的原文。"
+            ]
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.28,
+    maxTokens: estimateDraftClosingMaxTokens(),
     onUsage
   });
 }
@@ -725,15 +1215,15 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
               characterRelationGraph:
                 "由 characterUpdates 与 relationshipChanges 生成。必须只记录真实出场人物、真实关系推进、态度变化和立场变化。",
               mapForceGraph:
-                "由 mapAndForceUpdates 与 foreshadowingUpdates.relatedLocation 生成。只记录顶层地点/势力/组织，不记录房间、前厅、后山、枯井等内部场景。",
+                "由 mapAndForceUpdates 与 foreshadowingUpdates.relatedLocation 生成。只记录顶层地点/势力/组织，不记录房间、前厅、后山、枯井等内部场景。没有明确地点或势力变化时必须返回空数组，不要硬凑。",
               foreshadowingGraph:
                 "由 foreshadowingUpdates 与 newClues 生成。必须写清伏笔名称、状态、关联人物、关联地点、隐藏信息、预计回收方式。",
               plotProgressGraph:
                 "由 stateChanges、events、cliffhanger 生成。必须写清本章推进了哪条主线或支线、留下了什么下一步压力。",
               powerGraph:
-                "由 powerSystemUpdates 与 characterUpdates.abilityBoundary 生成。必须写清境界/能力/金手指变化、限制、代价和不能突破的边界。",
+                "由 powerSystemUpdates 与 characterUpdates.abilityBoundary 生成。必须写清境界/战力/能力边界/金手指变化、限制、代价和不能突破的边界。没有明确战力系统或能力变化时必须返回空数组，不要把动作句写进去。",
               resourceGraph:
-                "由 resourceUpdates、payoff、newClues 生成。必须写清主角获得或失去的资源、功法、道具、线索、权限或收益。",
+                "由 resourceUpdates、payoff、newClues 生成。必须写清主角获得或失去的资源、功法、道具、线索、权限或收益。没有明确资源变化时必须返回空数组，不要把情绪回报或普通剧情推进当资源。",
               knowledgeGraph:
                 "由 characterUpdates.knownInformation、unknownInformation、secret 生成。必须写清每个重要人物本章后知道什么、不知道什么、误判什么、隐藏什么。",
               causalityGraph:
@@ -747,8 +1237,8 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
               "relationshipChanges 只记录关系真的变化、立场变化或被明确加深的内容，必须写出双方姓名，格式建议：第N章：A 与 B 因某事件关系变化为……",
               "mapAndForceUpdates 只记录顶层地点、势力、组织、阵营、地图推进相关变化，必须写出地点或势力名称；不要把前厅、后山、枯井、房间、院落等内部场景单独写成地图/势力节点，内部场景只放在 events 或 foreshadowingUpdates.relatedLocation 中。",
               "stateChanges 必须覆盖主线/支线推进网：写清本章推进了哪条主线或支线、当前阶段发生了什么变化、下一步压力是什么。",
-              "powerSystemUpdates 只记录战力、能力、金手指、限制、代价变化，必须写清变化前后、新增限制、代价或能力边界。",
-              "resourceUpdates 只记录资源/收益网：功法、丹药、装备、线索、证据、名额、权限、财富、声望等获得/失去/消耗。",
+              "powerSystemUpdates 只记录战力、能力边界、金手指、限制、代价变化，必须写清变化前后、新增限制、代价或能力边界；如果本章没有这类变化就返回空数组。",
+              "resourceUpdates 只记录资源/收益网：功法、丹药、装备、线索、证据、名额、权限、财富、声望等获得/失去/消耗；如果本章没有这类变化就返回空数组。",
               "foreshadowingUpdates 记录新埋伏笔、部分回收、已回收伏笔，并写清 relatedCharacters、relatedLocation、hiddenInformation 或 revealMethod。",
               "knownInformation 和 unknownInformation 是知情/秘密网核心字段：不能空泛写“待补充”，必须根据正文写人物本章后明确知道/不知道的信息；没有变化时沿用已有边界。",
               "cliffhanger 必须提取章末钩子；没有明显钩子时写最后留下的未解决压力。",
@@ -827,7 +1317,7 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
         {
           role: "system",
           content:
-            "你是网文一致性审稿器。请严格输出 JSON。你要检查章节是否违背创作圣经、人物知道了不该知道的信息、是否忘记上一章钩子、是否推进主线，以及是否有明显 AI 味。"
+            "你是网文一致性审稿器。请严格输出 JSON。你要检查章节是否违背创作圣经、人物知道了不该知道的信息、是否忘记上一章钩子、是否推进主线，以及是否有明显 AI 味。AI 味检测是硬要求，不是可选项；如果正文存在长段落、抽象总结、书面腔、模板式转折、情绪空泛或句子过于平均，必须明确写进 issues，不能只抓章末钩子。"
         },
         {
           role: "user",
@@ -843,7 +1333,14 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
               reviewRules: [
                 "必须检查正文是否偏离创作圣经中的目标读者、作品类型、主分类、题材边界、作品标签和禁止偏离项。",
                 "如果正文把故事写成另一个频道、另一个题材，或无视主题/角色标签，应作为 high severity 问题指出。",
-                "如果任务卡 rulesNotToBreak 与正文冲突，应指出冲突位置和改法。"
+                "如果任务卡 rulesNotToBreak 与正文冲突，应指出冲突位置和改法。",
+                "AI 味要单独检查：长段落、抽象总结、书面腔、模板式推进、过度解释、句式平均、缺少具体动作和对话，都要明确指出。",
+                "如果正文存在明显 AI 味，即使章末钩子也有问题，也不能只报钩子；AI 味问题必须单独列出。",
+                "problem、location、suggestion 和 overall 都是给用户看的中文文案，不要写 characters、taskCard、plotState、bible、ledger、draft、cliffhanger、payoff、style 等内部字段名；请改写成人物档案、章节任务卡、主线状态、创作圣经、章节台账、正文草稿、章末钩子、爽点回报、风格。",
+                "不要把人物档案、章节台账或代词推断说成“创作圣经明确规定”。只有 bible 字段原文直接写明的内容，才能称为创作圣经设定；人物姓名、身份、代词、已知/未知信息应称为人物档案或正文证据。",
+                "每条 issue 必须可执行：location 优先填写正文中可定位的原句或原段，不要只写“结尾段/全文”；suggestion 必须写成“将‘原句’改为‘改句’”或“在‘原句’后补入‘补写内容’”。",
+                "如果 suggestion 使用“将原句改为改句”，改句必须是可以直接放回正文的完整句子或完整段落，不能只给半句话、摘要、修改方向或省略上下文；否则请明确写“需手动处理：……”并说明处理方向。",
+                "如果确实无法给出原句替换，也要在 problem 里说明为什么无法自动替换，并给出人工修改方向。"
               ],
               outputSchema: {
                 overall: "string",
@@ -869,11 +1366,13 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
       maxTokens: 1600
     });
 
+    const issues = [...asReviewIssues(response.issues), ...detectAiFlavorIssues(context.draft.content)];
+
     return attachAiTokenUsage({
       overall: String(response.overall ?? "").trim(),
       shouldUpdateState: Boolean(response.shouldUpdateState),
       stateUpdateSuggestions: asTextList(response.stateUpdateSuggestions),
-      issues: asReviewIssues(response.issues)
+      issues
     }, getAiTokenUsage(response));
   } catch {
     return null;

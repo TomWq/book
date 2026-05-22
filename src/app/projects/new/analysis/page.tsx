@@ -8,7 +8,6 @@ export default function NewAnalysisProjectPage() {
       <section className="hero analysis-create-hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">拆书入口</div>
             <h1>新建拆书项目，只保留拆解需要的信息</h1>
             <p>这里不要求主角名、金手指和作品简介。先建立拆书容器，下一步直接导入文本、选择章节区间，再运行分析。</p>
           </div>

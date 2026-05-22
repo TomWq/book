@@ -45,7 +45,6 @@ export default async function ProjectEditorPage({
       <section className="hero">
         <div className="hero-top">
           <div>
-            <div className="pill success">二稿编辑</div>
             <h1>把 AI 味、模板腔和平均句子改掉</h1>
             <p>二稿编辑面向拆书稿和小说正文，不是简单润色，而是标问题、讲原因、给更有判断力的改写。</p>
           </div>
