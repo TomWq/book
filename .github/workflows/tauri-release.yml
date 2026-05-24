@@ -39,18 +39,27 @@ jobs:
           - name: macOS arm64
             platform: macos-latest
             rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
+            rustTarget: aarch64-apple-darwin
             prepareArgs: --mac --arm64
             tauriArgs: --target aarch64-apple-darwin
+            artifactName: macos-arm64
+            artifactPath: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*aarch64.dmg
           - name: macOS x64
             platform: macos-latest
             rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
+            rustTarget: x86_64-apple-darwin
             prepareArgs: --mac --x64
             tauriArgs: --target x86_64-apple-darwin
+            artifactName: macos-x64
+            artifactPath: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*x64.dmg
           - name: Windows x64
             platform: windows-latest
             rustTargets: x86_64-pc-windows-msvc
+            rustTarget: x86_64-pc-windows-msvc
             prepareArgs: --win --x64
             tauriArgs: --target x86_64-pc-windows-msvc --bundles nsis
+            artifactName: windows-x64
+            artifactPath: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*x64-setup.exe
 
     steps:
       - name: Checkout
@@ -73,17 +82,40 @@ jobs:
       - name: Prepare Tauri target resources
         run: node scripts/tauri-build.mjs --prepare-only ${{ matrix.prepareArgs }}
 
-      - name: Build and upload Tauri bundles
-        uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri bundles
+        run: npx tauri build ${{ matrix.tauriArgs }}
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifactName }}
+          path: ${{ matrix.artifactPath }}
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish draft release
+    needs: build-tauri
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create draft release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tauriScript: npx tauri
-          args: ${{ matrix.tauriArgs }}
-          tagName: app-v__VERSION__
-          releaseName: "AI 网文写作助手 v__VERSION__"
-          releaseBody: "自动构建的桌面端安装包，请在 Assets 中下载对应系统版本。"
-          releaseDraft: true
-          prerelease: false
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: ${{ matrix.name }}-__VERSION__
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="app-v${VERSION}"
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q true; then
+            gh release delete "$TAG" --yes
+          fi
+          gh release create "$TAG" release-artifacts/* \
+            --draft \
+            --title "AI 网文写作助手 v${VERSION}" \
+            --notes "自动构建的桌面端安装包，请在 Assets 中下载对应系统版本。"
