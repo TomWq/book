@@ -31,7 +31,7 @@ jobs:
             platform: windows-latest
             rustTargets: x86_64-pc-windows-msvc
             prepareArgs: --win --x64
-            tauriArgs: --target x86_64-pc-windows-msvc
+            tauriArgs: --target x86_64-pc-windows-msvc --bundles nsis
 
     steps:
       - name: Checkout
