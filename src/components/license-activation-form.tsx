@@ -3,29 +3,14 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-const MACHINE_ID_KEY = "nw_license_machine_id";
-
-function getMachineId() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  const existing = window.localStorage.getItem(MACHINE_ID_KEY);
-  if (existing) {
-    return existing;
-  }
-
-  const id = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  window.localStorage.setItem(MACHINE_ID_KEY, id);
-  return id;
-}
-
 export function LicenseActivationForm({
   nextPath,
-  initialError
+  initialError,
+  replaceExisting = false
 }: {
   nextPath: string;
   initialError?: string;
+  replaceExisting?: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -50,8 +35,8 @@ export function LicenseActivationForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           activationCode: String(formData.get("activationCode") ?? ""),
-          machineHash: getMachineId(),
-          clientName: window.navigator.userAgent.slice(0, 160)
+          clientName: window.navigator.userAgent.slice(0, 160),
+          replaceExisting
         })
       });
 
@@ -88,13 +73,13 @@ export function LicenseActivationForm({
           />
         </label>
         <button className="button auth-submit" type="submit" disabled={isBusy}>
-          {isSubmitting ? "正在连接授权中心..." : isPending ? "正在进入..." : "验证并进入"}
+          {isSubmitting ? "正在连接授权中心..." : isPending ? "正在进入..." : replaceExisting ? "验证并更换授权" : "验证并进入"}
         </button>
         {isSubmitting ? <div className="pill form-status">正在验证授权码，请不要关闭页面。</div> : null}
       </form>
 
       <div className="auth-switch">
-        <span>授权码一次性使用，已用过就不能再次激活。</span>
+        <span>{replaceExisting ? "更换授权只替换本机授权状态，不会删除本地项目和创作数据。" : "授权码一次性使用，已用过就不能再次激活。"}</span>
       </div>
     </>
   );

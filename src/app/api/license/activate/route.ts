@@ -1,5 +1,6 @@
 import { activateLicenseWithCenter, activateSubscriptionLicense } from "@/lib/projects";
 import { isCloudRuntime } from "@/lib/app-runtime";
+import { getDesktopMachineHash } from "@/lib/desktop-machine-id";
 
 export const runtime = "nodejs";
 
@@ -16,12 +17,15 @@ export async function POST(request: Request) {
     forwardedFor ? `IP ${forwardedFor}` : "",
     geoParts.length > 0 ? `位置 ${geoParts.join(" / ")}` : ""
   ].filter(Boolean).join(" | ");
+  const machineHash = isCloudRuntime() || body.centerOnly
+    ? String(body.machineHash ?? "")
+    : getDesktopMachineHash();
 
   try {
     if (isCloudRuntime() || body.centerOnly) {
       const license = await activateLicenseWithCenter({
         activationCode: String(body.activationCode ?? ""),
-        machineHash: String(body.machineHash ?? ""),
+        machineHash,
         clientName: clientMeta
       });
 
@@ -30,8 +34,10 @@ export async function POST(request: Request) {
 
     const user = await activateSubscriptionLicense({
       activationCode: String(body.activationCode ?? ""),
-      machineHash: String(body.machineHash ?? ""),
+      machineHash,
       clientName: clientMeta
+    }, {
+      replaceExisting: Boolean(body.replaceExisting)
     });
 
     return Response.json({ user });

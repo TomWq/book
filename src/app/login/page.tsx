@@ -59,7 +59,7 @@ export default async function LoginPage({
             </div>
           ) : null}
 
-          <AuthForm mode="login" nextPath={nextPath} initialError={params.error} />
+          <AuthForm mode="login" nextPath={nextPath} initialError={params.error} showSwitch={false} />
         </div>
 
         <footer className="auth-immersive-footer">© 2026 AI 网文写作助手</footer>

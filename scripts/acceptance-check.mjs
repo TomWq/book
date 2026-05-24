@@ -43,9 +43,15 @@ const requiredRoutes = [
   "src/app/projects/[projectId]/state/page.tsx",
   "src/app/projects/[projectId]/editor/page.tsx",
   "src/app/admin/page.tsx",
+  "src/app/api/app/update/manifest/route.ts",
+  "src/app/api/app/update/check/route.ts",
+  "src/app/download/page.tsx",
+  "src/app/downloads/page.tsx",
   "src/app/api/jobs/worker/route.ts",
   "scripts/run-worker.mjs",
-  "scripts/main-flow-check.mjs"
+  "scripts/main-flow-check.mjs",
+  "scripts/desktop-release.mjs",
+  "scripts/publish-downloads.mjs"
 ];
 
 for (const file of [...requiredDocs, ...requiredRoutes]) {
@@ -92,13 +98,21 @@ assertIncludes("src/lib/projects.ts", [
   "getProjectAnalysisForUser",
   "getProjectWritingStateForUser"
 ]);
-assertIncludes("package.json", ["acceptance:flow"]);
+assertIncludes("package.json", ["acceptance:flow", "desktop:dist:release", "desktop:publish", "desktop:publish:local"]);
+assertIncludes("src/lib/app-update.ts", [
+  "APP_LATEST_VERSION",
+  "APP_UPDATE_DOWNLOAD_WIN_URL",
+  "APP_UPDATE_MANIFEST_URL",
+  "compareAppVersions"
+]);
+assertIncludes("src/app/download/page.tsx", ["Windows 版", "Mac 版", "Mac Intel 版"]);
+assertIncludes("src/components/version-update-card.tsx", ["检查更新", "下载新版"]);
 assertIncludes("src/lib/store-persistence.ts", [
   "resolveSqliteFilePath",
   "syncCoreTables",
   "readCoreStoreFromDb",
   "getPersistenceStatus"
 ]);
-assertIncludes("src/proxy.ts", ["/api/jobs/worker"]);
+assertIncludes("src/proxy.ts", ["/download", "/downloads", "/api/jobs/worker", "/api/app/update/manifest"]);
 
 console.log("验收守门检查通过：拆书、模板、大纲、创作、状态、二稿、后台 Worker 和 SQLite 关键契约均存在。");

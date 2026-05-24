@@ -54,6 +54,14 @@ export function LicenseCodeGenerator() {
       <form className="forms" onSubmit={handleSubmit} aria-busy={pending}>
         <div className="admin-control-grid compact-admin-control-grid">
           <div className="field">
+            <div className="field-label">客户名称</div>
+            <input name="customerName" placeholder="例如：张三 / 某工作室" />
+          </div>
+          <div className="field">
+            <div className="field-label">联系方式</div>
+            <input name="customerContact" placeholder="手机号、微信或邮箱" />
+          </div>
+          <div className="field">
             <div className="field-label">生成数量</div>
             <input name="quantity" type="number" min="1" max="50" step="1" defaultValue="1" />
           </div>
@@ -68,8 +76,8 @@ export function LicenseCodeGenerator() {
             />
           </div>
           <div className="field">
-            <div className="field-label">可激活设备数</div>
-            <input name="maxActivations" type="number" min="1" max="10" step="1" defaultValue="1" />
+            <div className="field-label">备注</div>
+            <input name="notes" placeholder="交付批次、渠道或内部说明" />
           </div>
         </div>
         <button className="button" type="submit" disabled={pending}>

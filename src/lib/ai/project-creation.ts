@@ -6,6 +6,7 @@ import {
 
 export type ProjectCreationAssistAction = "titles" | "protagonists" | "description";
 export type TitleNamingStyle = "fanqie" | "qidian";
+export type TagTaxonomyStyle = "fanqie" | "qidian";
 export type DescriptionWritingStyle = "fanqie" | "qidian";
 
 export type ProjectCreationAssistInput = {
@@ -21,6 +22,7 @@ export type ProjectCreationAssistInput = {
   openingHook?: string;
   description?: string;
   titleNamingStyle?: TitleNamingStyle;
+  tagTaxonomyStyle?: TagTaxonomyStyle;
   descriptionWritingStyle?: DescriptionWritingStyle;
   avoidTitles?: string[];
 };
@@ -103,6 +105,7 @@ function descriptionStyleRules(descriptionWritingStyle: DescriptionWritingStyle)
 
 export async function generateProjectCreationAssistWithAi(input: ProjectCreationAssistInput) {
   const titleNamingStyle = input.titleNamingStyle === "qidian" ? "qidian" : "fanqie";
+  const tagTaxonomyStyle = input.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie";
   const descriptionWritingStyle = input.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie";
   const actionConfig: Record<
     ProjectCreationAssistAction,
@@ -158,7 +161,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       ? "如果提供了起名构思 titleConcept，优先依据它来命名；不要把它原句压缩成标题，也不要让上一轮生成出的 title 反过来主导这一轮。"
       : null,
     input.action === "titles"
-      ? "必须理解 genre、targetReader 和 tags 背后的读者期待，但默认不要把这些标签词直接写进书名；优先体现冲突、场景、动作、秘密和追读问题。"
+      ? `必须理解 genre、targetReader 和 tags 背后的读者期待。当前标签体系是${tagTaxonomyStyle === "qidian" ? "起点分类，genre 是大类，tags 是子类" : "番茄分类，genre 是主分类，tags 是主题/角色"}；默认不要把这些标签词直接写进书名，优先体现冲突、场景、动作、秘密和追读问题。`
       : null,
     ...(input.action === "titles" ? titleCraftRules(titleNamingStyle) : []),
     input.action === "titles" && input.titleConcept?.trim()
@@ -201,6 +204,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               openingHook: input.openingHook,
               description: input.description,
               titleNamingStyle,
+              tagTaxonomyStyle,
               descriptionWritingStyle,
               avoidTitles: input.avoidTitles ?? [],
               directLabelTerms

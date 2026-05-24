@@ -85,6 +85,32 @@ ADMIN_EMAILS="你的管理员邮箱"
 如果云端只用于管理员下发授权码和客户端激活校验，使用本地账号体系 + SQLite 即可。完整部署步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 如果你已经配好 SSH，可以直接用 `npm run deploy:server` 一键把改动发到服务器。
 
+授权中心也提供客户端下载中心：
+
+```text
+/download
+```
+
+本地打好 Windows x64、macOS arm64、macOS x64 三个安装包后，可以执行：
+
+```bash
+npm run desktop:publish
+```
+
+脚本会把安装包上传到服务器 `public/downloads/`，并生成 `manifest.json`，下载中心页面和客户端“检查更新”都会读取这份发布清单。
+
+## 作者端客户端
+
+作者端采用 Electron 承载现有 Next 工作台，管理端继续部署在云端授权中心。
+
+```bash
+npm run desktop:dev      # 本地开发
+npm run desktop:preview  # 构建后用 Electron 预览
+npm run desktop:dist     # 打安装包
+```
+
+详细说明见 [DESKTOP.md](./DESKTOP.md)。
+
 ## 核心流程
 
 第一版产品围绕一条主链路设计：

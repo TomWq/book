@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LicenseActivationForm } from "@/components/license-activation-form";
 import { isDesktopRuntime } from "@/lib/app-runtime";
-import { getSubscriptionActivationStatus } from "@/lib/projects";
+import { getSubscriptionActivationStatus } from "@/lib/desktop-license-status";
 
 function normalizeActivationError(value?: string) {
   const message = String(value ?? "").trim();
@@ -29,23 +29,24 @@ function normalizeActivationError(value?: string) {
 export default async function ActivatePage({
   searchParams
 }: {
-  searchParams: Promise<{ error?: string; next?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; mode?: string }>;
 }) {
   if (!isDesktopRuntime()) {
-    redirect("/login");
+    redirect("/download");
   }
 
   const params = await searchParams;
   const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
+  const replaceExisting = params.mode === "replace";
   const rawError = params.error ?? "";
   const normalizedError = normalizeActivationError(rawError);
   const status = await getSubscriptionActivationStatus();
 
-  if (status.currentUser) {
+  if (!replaceExisting && status.currentUser) {
     redirect(nextPath);
   }
 
-  if (status.activated) {
+  if (!replaceExisting && status.activated) {
     redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
   }
 
@@ -86,12 +87,12 @@ export default async function ActivatePage({
           <div className="auth-card-head">
             <div>
               <h2>授权码激活</h2>
-              <p>输入交付给你的一次性授权码，验证后进入写作工作台。</p>
+              <p>{replaceExisting ? "输入新的授权码，本机作品和设置会继续保留。" : "输入交付给你的一次性授权码，验证后进入写作工作台。"}</p>
             </div>
-            <div className="chip">授权码</div>
+            <div className="chip">{replaceExisting ? "更换授权" : "授权码"}</div>
           </div>
 
-          <LicenseActivationForm nextPath={nextPath} initialError={initialError} />
+          <LicenseActivationForm nextPath={nextPath} initialError={initialError} replaceExisting={replaceExisting} />
         </div>
 
         <footer className="auth-immersive-footer"></footer>

@@ -8,11 +8,13 @@ type AuthMode = "login" | "register";
 export function AuthForm({
   mode,
   nextPath,
-  initialError
+  initialError,
+  showSwitch = true
 }: {
   mode: AuthMode;
   nextPath: string;
   initialError?: string;
+  showSwitch?: boolean;
 }) {
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState(initialError ?? "");
@@ -86,19 +88,21 @@ export function AuthForm({
         </button>
       </form>
 
-      <div className="auth-switch">
-        {isLogin ? (
-          <>
-            <span>还没有账号？</span>
-            <Link href={`/register?next=${encodeURIComponent(nextPath)}`}>去注册</Link>
-          </>
-        ) : (
-          <>
-            <span>已经有账号？</span>
-            <Link href={`/login?next=${encodeURIComponent(nextPath)}`}>去登录</Link>
-          </>
-        )}
-      </div>
+      {showSwitch ? (
+        <div className="auth-switch">
+          {isLogin ? (
+            <>
+              <span>还没有账号？</span>
+              <Link href={`/register?next=${encodeURIComponent(nextPath)}`}>去注册</Link>
+            </>
+          ) : (
+            <>
+              <span>已经有账号？</span>
+              <Link href={`/login?next=${encodeURIComponent(nextPath)}`}>去登录</Link>
+            </>
+          )}
+        </div>
+      ) : null}
     </>
   );
 }

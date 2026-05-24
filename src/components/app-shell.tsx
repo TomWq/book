@@ -1,23 +1,28 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { getAdminLoginPath } from "@/lib/admin-login-path";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getCurrentUserAccess, getCurrentUserAiSetupStatus } from "@/lib/projects";
-import { LogoutButton } from "@/components/logout-button";
-import { LicenseCountdown } from "@/components/license-countdown";
 import { SideNav, type SideNavItem } from "@/components/side-nav";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { FloatingWritingAssistant } from "@/components/floating-writing-assistant";
+import { WorkspaceActions } from "@/components/workspace-actions";
+import { AppIconMark } from "@/components/app-icon-mark";
+import { PenNameOnboarding } from "@/components/pen-name-onboarding";
 
 const navItems: SideNavItem[] = [
   { href: "/", label: "首页" },
   { href: "/projects", label: "项目中心" },
-  { href: "/templates", label: "模板库" }
+  { href: "/templates", label: "模板库" },
+  { href: "/assistant", label: "墨澜" }
 ];
 
-const standaloneAuthPaths = new Set(["/activate", "/login", "/register"]);
+const standaloneAuthPaths = new Set(["/activate", "/login", "/register", "/download", "/downloads"]);
 
 export async function AppShell({ children }: { children: ReactNode }) {
   const pathname = (await headers()).get("x-nw-pathname") ?? "";
+  const adminLoginPath = getAdminLoginPath();
 
   if (standaloneAuthPaths.has(pathname)) {
     return <>{children}</>;
@@ -25,6 +30,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
   const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
+
+  if (!user && desktopRuntime) {
+    const next = pathname && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
+    redirect(`/activate${next}`);
+  }
+
   const isAdminMode = isAdmin && !desktopRuntime;
   const aiSetup = user && !isAdminMode
     ? await getCurrentUserAiSetupStatus()
@@ -34,36 +45,11 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className={`app-shell ${user ? "app-shell-auth" : "app-shell-public"}`}>
-      {user ? (
-        <aside className="sidebar">
-          <Link href={brandHref} className="brand-link sidebar-brand">
-            <div className="brand-mark">书</div>
-            <div>
-              <div className="brand-title">AI 网文写作助手</div>
-              <div className="brand-subtitle">
-                {isAdminMode ? "授权中心 · 客户与版本管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
-              </div>
-            </div>
-          </Link>
-
-          <SideNav items={visibleNavItems} />
-
-          {!isAdminMode ? (
-            <div className="sidebar-actions">
-              <Link href="/projects/new" className="button primary">
-                新建作品
-              </Link>
-              <Link href="/projects/new/analysis" className="button">
-                新建拆书
-              </Link>
-            </div>
-          ) : null}
-        </aside>
-      ) : (
+      {!user ? (
         <header className="topbar public-topbar">
           <div className="brand-block">
             <Link href="/" className="brand-link">
-              <div className="brand-mark">书</div>
+              <AppIconMark />
               <div>
                 <div className="brand-title">AI 网文写作助手</div>
                 <div className="brand-subtitle">爆款拆解 · 模板迁移 · 长篇管理</div>
@@ -78,53 +64,40 @@ export async function AppShell({ children }: { children: ReactNode }) {
                   输入激活码
                 </Link>
               ) : (
-                <>
-                  <Link href="/login" className="button">
-                    登录
-                  </Link>
-                  <Link href="/register" className="button primary">
-                    注册
-                  </Link>
-                </>
+                <Link href="/download" className="button primary">
+                  下载客户端
+                </Link>
               )}
-              <ThemeToggle />
             </span>
           </div>
         </header>
-      )}
+      ) : null}
 
       <div className="workspace-frame">
         {user ? (
           <header className="workspace-topbar">
-            <div>
-              <strong>{isAdminMode ? "管理后台" : "个人工作台"}</strong>
-              <span>
-                {isAdminMode ? "查看授权码、客户激活状态和 AI 用量。" : "按项目推进拆书、模板迁移和长篇创作。"}
-              </span>
-              {desktopRuntime && !isAdminMode && user.licenseExpiresAt ? (
-                <LicenseCountdown expiresAt={user.licenseExpiresAt} className="pill warning license-countdown" />
-              ) : null}
+            <Link href={brandHref} className="brand-link workspace-brand">
+              <AppIconMark />
+              <div>
+                <div className="brand-title">AI 网文写作助手</div>
+                <div className="brand-subtitle">
+                  {isAdminMode ? "授权中心 · 客户与版本管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
+                </div>
+              </div>
+            </Link>
+
+            <div className="workspace-nav">
+              <SideNav items={visibleNavItems} />
             </div>
-            <div className="topbar-meta">
-              <span className="row" style={{ alignItems: "center" }}>
-                {!desktopRuntime ? <span className="chip">{user.name}</span> : null}
-                {!isAdminMode ? (
-                  <Link href="/settings/ai" className="button">
-                    AI 设置
-                  </Link>
-                ) : null}
-                <ThemeToggle />
-                {!isAdminMode && !desktopRuntime ? (
-                  <Link href="/settings/account" className="button">
-                    账号
-                  </Link>
-                ) : null}
-                {/* <Link href="/legal" className="button">
-                  合规
-                </Link> */}
-                {desktopRuntime ? null : <LogoutButton redirectTo="/login" />}
-              </span>
-            </div>
+
+            <WorkspaceActions
+              desktopRuntime={desktopRuntime}
+              isAdminMode={isAdminMode}
+              userName={user.name}
+              penName={user.penName}
+              licenseExpiresAt={user.licenseExpiresAt}
+              adminLoginPath={adminLoginPath}
+            />
           </header>
         ) : null}
 
@@ -142,6 +115,9 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
         <main className="app-main">{children}</main>
       </div>
+
+      {user && !isAdminMode ? <FloatingWritingAssistant authorName={user.penName || user.name} /> : null}
+      {user && !isAdminMode ? <PenNameOnboarding initialPenName={user.penName} /> : null}
     </div>
   );
 }

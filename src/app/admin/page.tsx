@@ -4,6 +4,8 @@ import { ApiButton } from "@/components/api-form";
 import { CopyButton } from "@/components/copy-button";
 import { LicenseCodeGenerator } from "@/components/license-code-generator";
 import { Panel } from "@/components/panel";
+import { ReleaseSettingsForm } from "@/components/release-settings-form";
+import { getLocalUpdateManifest, type AppUpdateFile } from "@/lib/app-update";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getAdminLicenseCenter } from "@/lib/projects";
 
@@ -78,14 +80,85 @@ function logReasonName(reason: string) {
     case "already_bound_other_machine":
       return "其他设备尝试";
     case "activation_limit_reached":
-      return "超过激活次数";
+      return "已有绑定设备";
+    case "machine_reset":
+      return "设备已重置";
     default:
       return reason || "未知原因";
   }
 }
 
 function compactMachine(value?: string) {
-  return value ? `${value.slice(0, 10)}...` : "-";
+  const text = String(value ?? "").trim();
+  return text ? `${text.slice(0, 10)}...` : "-";
+}
+
+function compactId(value?: string) {
+  const text = String(value ?? "").trim();
+  return text ? `${text.slice(0, 8)}...${text.slice(-6)}` : "-";
+}
+
+function formatBytes(value?: number) {
+  const bytes = Number(value ?? 0);
+
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "-";
+  }
+
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
+
+  if (bytes >= 1024 * 1024) {
+    return `${Math.round(bytes / 1024 / 1024)} MB`;
+  }
+
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+function shortHash(value?: string) {
+  const text = String(value ?? "").trim();
+  return text ? `${text.slice(0, 8)}...${text.slice(-6)}` : "-";
+}
+
+function releaseFileRows(files?: Record<string, AppUpdateFile | undefined>) {
+  return [
+    files?.win32X64,
+    files?.darwinArm64,
+    files?.darwinX64
+  ].filter((item): item is AppUpdateFile => Boolean(item?.fileName || item?.url));
+}
+
+function bindingStatusName(license: { status: string; machineHash?: string; recentLogs: { reason: string }[] }) {
+  if (license.status === "disabled") {
+    return "已作废";
+  }
+
+  if (license.status === "expired") {
+    return "已过期";
+  }
+
+  if (license.status === "used" && license.machineHash) {
+    return "已绑定";
+  }
+
+  if (license.recentLogs.some((log) => log.reason === "machine_reset")) {
+    return "已解绑可重新激活";
+  }
+
+  return "未绑定";
+}
+
+function bindingStatusClass(license: { status: string; machineHash?: string; recentLogs: { reason: string }[] }) {
+  if (license.status === "used" && license.machineHash) {
+    return "success";
+  }
+
+  if (license.status === "disabled" || license.status === "expired") {
+    return "danger";
+  }
+
+  return "warning";
 }
 
 export default async function AdminPage({
@@ -124,6 +197,8 @@ export default async function AdminPage({
   const pageStart = (currentPage - 1) * PAGE_SIZE;
   const pageLicenses = licenseCenter.licenses.slice(pageStart, pageStart + PAGE_SIZE);
   const pageRecentLogs = licenseCenter.recentLogs.slice(0, RECENT_LOG_PAGE_SIZE);
+  const releaseManifest = getLocalUpdateManifest();
+  const releaseFiles = releaseFileRows(releaseManifest.files);
 
   return (
     <div className="grid license-admin-page">
@@ -131,7 +206,7 @@ export default async function AdminPage({
         <div className="hero-top">
           <div>
             <h1>授权码管理</h1>
-            <p>批量生成一次性授权码，查看使用状态、设备信息、最近记录和异常激活记录。</p>
+            <p>批量生成单设备授权码，查看绑定状态、客户信息、最近记录和异常激活记录。</p>
           </div>
           <div className="hero-actions">
             <span className="chip">每页 {PAGE_SIZE}</span>
@@ -150,7 +225,7 @@ export default async function AdminPage({
           </div>
           <div className="stat-card">
             <strong>{formatNumber(licenseCenter.active)}</strong>
-            <span>已使用</span>
+            <span>已绑定</span>
           </div>
           <div className="stat-card">
             <strong>{formatNumber(licenseCenter.disabled + licenseCenter.expired)}</strong>
@@ -159,7 +234,47 @@ export default async function AdminPage({
         </div>
       </section>
 
-      <Panel title="批量生成授权码" description="生成后可在授权码列表继续复制，旧版只保存哈希的授权码无法还原完整内容。">
+      <Panel title="版本发布中心" description="管理客户端安装包发布信息。安装包地址、大小和校验码由上传脚本生成，版本号和发布说明可在这里调整。">
+        <div className="release-admin-grid">
+          <ReleaseSettingsForm
+            initialValue={{
+              version: releaseManifest.version,
+              releaseDate: releaseManifest.releaseDate,
+              notes: releaseManifest.notes,
+              announcement: releaseManifest.announcement,
+              required: releaseManifest.required
+            }}
+          />
+
+          <div className="release-package-list">
+            <div>
+              <strong>当前安装包</strong>
+              <p>发布后客户端检查更新和下载中心都会读取这里的清单。</p>
+            </div>
+            {releaseFiles.length ? (
+              <div className="release-package-table">
+                {releaseFiles.map((file) => (
+                  <div key={file.fileName || file.url} className="release-package-row">
+                    <div>
+                      <strong>{file.label || file.fileName || "安装包"}</strong>
+                      <span>{file.fileName || file.url}</span>
+                    </div>
+                    <span>{formatBytes(file.sizeBytes)}</span>
+                    <span>{shortHash(file.sha256)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <strong>暂无安装包清单</strong>
+                <span>先执行 desktop:publish 上传安装包。</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="批量生成授权码" description="当前为单设备授权。生成后可在授权码列表继续复制，旧版只保存哈希的授权码无法还原完整内容。">
         <LicenseCodeGenerator />
       </Panel>
 
@@ -175,7 +290,7 @@ export default async function AdminPage({
               <span>授权码</span>
               <span>客户</span>
               <span>状态</span>
-              <span>激活</span>
+              <span>绑定</span>
               <span>设备</span>
               <span>时间</span>
               <span>最近来源</span>
@@ -197,6 +312,10 @@ export default async function AdminPage({
                   </div>
                   <div>
                     <strong>{license.customerName || "未填写"}</strong>
+                    <div className="license-code-cell muted">
+                      <span>客户 ID：{compactId(license.id)}</span>
+                      <CopyButton value={license.id} label="复制ID" />
+                    </div>
                     <div className="muted">{license.customerContact || "无联系方式"}</div>
                   </div>
                   <div>
@@ -205,7 +324,9 @@ export default async function AdminPage({
                     </span>
                   </div>
                   <div>
-                    <strong>{license.activationCount}/{license.maxActivations}</strong>
+                    <span className={`pill ${bindingStatusClass(license)}`}>
+                      {bindingStatusName(license)}
+                    </span>
                     {license.expiresAt ? <div className="muted">到期 {formatTime(license.expiresAt)}</div> : null}
                   </div>
                   <div>
@@ -230,6 +351,14 @@ export default async function AdminPage({
                     )}
                   </div>
                   <div className="license-actions">
+                    <ApiButton
+                      endpoint="/api/admin/licenses"
+                      method="PATCH"
+                      body={{ licenseId: license.id, action: "resetMachine" }}
+                      label="解绑设备"
+                      className="button"
+                      confirmMessage="确定解除这个授权码的设备绑定吗？解除后客户可用原授权码在新设备重新激活。"
+                    />
                     <ApiButton
                       endpoint="/api/admin/licenses"
                       method="PATCH"

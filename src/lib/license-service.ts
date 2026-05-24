@@ -47,6 +47,11 @@ function now() {
   return new Date().toISOString();
 }
 
+function getLicenseStatusRefreshIntervalMs() {
+  const configured = Number(process.env.LICENSE_STATUS_REFRESH_INTERVAL_MS ?? "");
+  return Number.isFinite(configured) && configured >= 0 ? configured : 60_000;
+}
+
 export function normalizeActivationCode(value: string) {
   return value.trim().replace(/\s+/g, "").toUpperCase();
 }
@@ -145,6 +150,7 @@ function getConfiguredActivationCodeHashes() {
 
 const ROUTINE_LICENSE_CHECK_CLIENT = "本地客户端状态校验";
 const ROUTINE_LICENSE_LOG_WINDOW_MS = 10 * 60 * 1000;
+const DEFAULT_OFFLINE_GRACE_DAYS = 7;
 
 function isRoutineLicenseCheck(clientName?: string) {
   return normalizeLicenseText(clientName) === ROUTINE_LICENSE_CHECK_CLIENT;
@@ -226,6 +232,54 @@ function compactRoutineLicenseLogs(logs: StoredLicenseActivationLog[]) {
   }
 
   return compacted;
+}
+
+function getOfflineGraceMs() {
+  const days = Number(process.env.LICENSE_OFFLINE_GRACE_DAYS ?? DEFAULT_OFFLINE_GRACE_DAYS);
+  const safeDays = Number.isFinite(days) ? Math.max(0, Math.min(30, days)) : DEFAULT_OFFLINE_GRACE_DAYS;
+  return safeDays * 24 * 60 * 60 * 1000;
+}
+
+function isTransientLicenseCenterError(message: string) {
+  return [
+    "无法连接授权中心",
+    "连接授权中心超时",
+    "fetch failed",
+    "ECONN",
+    "ENOTFOUND",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "socket hang up"
+  ].some((keyword) => message.includes(keyword));
+}
+
+function resolveOfflineGraceState(
+  store: AppStore,
+  user: StoredUser,
+  fallbackState: DesktopLicenseState,
+  message: string
+): DesktopLicenseState | null {
+  if (fallbackState.status !== "active" || !isTransientLicenseCenterError(message)) {
+    return null;
+  }
+
+  const license = user.licenseCodeHash
+    ? store.licenseCodes.find((item) => item.codeHash === user.licenseCodeHash)
+    : null;
+  const verifiedAt = license?.lastVerifiedAt ?? user.licenseActivatedAt ?? license?.activatedAt ?? "";
+  const verifiedTime = verifiedAt ? Date.parse(verifiedAt) : NaN;
+  const graceMs = getOfflineGraceMs();
+
+  if (!Number.isFinite(verifiedTime) || graceMs <= 0 || Date.now() - verifiedTime > graceMs) {
+    return null;
+  }
+
+  return {
+    ...fallbackState,
+    status: "active",
+    message: `暂时无法连接授权中心，已进入离线宽限期。上次校验：${new Date(verifiedAt).toLocaleString("zh-CN")}`,
+    changed: false
+  };
 }
 
 export function isValidActivationCode(code: string) {
@@ -456,6 +510,7 @@ export async function verifyLicenseViaRemoteCenter(input: LicenseVerificationInp
 export function getDesktopLicenseCandidate(store: AppStore) {
   const candidates = store.users
     .filter((item) => Boolean(item.licenseCustomerId || item.licenseCodeHash))
+    .filter((item) => !item.licenseSignedOutAt)
     .slice()
     .sort((a, b) => {
       const left = a.licenseActivatedAt ?? a.updatedAt ?? a.createdAt;
@@ -490,6 +545,15 @@ export function getDesktopLicenseCandidate(store: AppStore) {
 
 export function resolveDesktopLicenseState(store: AppStore, user: StoredUser): DesktopLicenseState {
   const timestamp = now();
+
+  if (user.licenseSignedOutAt) {
+    return {
+      status: "inactive",
+      message: "已退出本机授权，请重新输入激活码",
+      changed: false
+    };
+  }
+
   const codeHash = user.licenseCodeHash?.trim() ?? "";
 
   if (!codeHash) {
@@ -574,6 +638,19 @@ export async function refreshDesktopLicenseStateFromRemoteCenter(
     return fallbackState;
   }
 
+  if (fallbackState.status === "active") {
+    const license = user.licenseCodeHash
+      ? store.licenseCodes.find((item) => item.codeHash === user.licenseCodeHash)
+      : null;
+    const lastVerifiedAt = license?.lastVerifiedAt ?? user.licenseActivatedAt ?? "";
+    const lastVerifiedTime = lastVerifiedAt ? Date.parse(lastVerifiedAt) : NaN;
+    const refreshIntervalMs = getLicenseStatusRefreshIntervalMs();
+
+    if (refreshIntervalMs > 0 && Number.isFinite(lastVerifiedTime) && Date.now() - lastVerifiedTime < refreshIntervalMs) {
+      return fallbackState;
+    }
+  }
+
   try {
     const license = await verifyLicenseViaRemoteCenter({
       licenseId: user.licenseCustomerId,
@@ -607,6 +684,12 @@ export async function refreshDesktopLicenseStateFromRemoteCenter(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "授权中心状态校验失败";
+    const graceState = resolveOfflineGraceState(store, user, fallbackState, message);
+
+    if (graceState) {
+      return graceState;
+    }
+
     const status: DesktopLicenseState["status"] =
       message.includes("禁用")
         ? "disabled"
@@ -746,19 +829,60 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
   }
 
   if (license.status !== "unused" || license.activationCount > 0) {
+    if (license.status === "used" && license.machineHash && license.machineHash === machineHash) {
+      license.lastVerifiedAt = timestamp;
+      license.updatedAt = timestamp;
+      log("success", "verified");
+      await writeStore(store);
+
+      return {
+        licenseId: license.id,
+        customerId: license.id,
+        codePreview: license.codePreview,
+        status: license.status,
+        activatedAt: license.activatedAt ?? timestamp,
+        expiresAt: license.expiresAt,
+        isTrial: Boolean(license.expiresAt),
+        customerName: license.customerName,
+        customerContact: license.customerContact
+      };
+    }
+
+    if (license.status === "used" && license.machineHash && license.machineHash !== machineHash) {
+      log("failed", "already_bound_other_machine");
+      await writeStore(store);
+      throw new Error("该授权已绑定其他设备，请联系管理员解绑后再激活");
+    }
+
+    if (license.status === "used" && !license.machineHash) {
+      license.machineHash = machineHash;
+      license.activationCount = 1;
+      license.activatedAt = license.activatedAt ?? timestamp;
+      license.lastVerifiedAt = timestamp;
+      license.updatedAt = timestamp;
+      log("success", "activated");
+      await writeStore(store);
+
+      return {
+        licenseId: license.id,
+        customerId: license.id,
+        codePreview: license.codePreview,
+        status: license.status,
+        activatedAt: license.activatedAt,
+        expiresAt: license.expiresAt,
+        isTrial: Boolean(license.expiresAt),
+        customerName: license.customerName,
+        customerContact: license.customerContact
+      };
+    }
+
     log("failed", "already_used");
     await writeStore(store);
-    throw new Error("该授权码已使用过，不能重复激活");
-  }
-
-  if (license.activationCount >= license.maxActivations) {
-    log("failed", "activation_limit_reached");
-    await writeStore(store);
-    throw new Error("该授权码已达到可激活次数");
+    throw new Error("该授权码已绑定设备，请联系管理员解绑后再激活");
   }
 
   license.status = "used";
-  license.activationCount += 1;
+  license.activationCount = 1;
   license.machineHash = machineHash;
   license.activatedAt = license.activatedAt ?? timestamp;
   license.lastVerifiedAt = timestamp;
@@ -845,6 +969,10 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
     log("failed", "already_bound_other_machine");
     await writeStore(store);
     throw new Error("该授权已绑定其他设备");
+  }
+
+  if (!license.machineHash && machineHash) {
+    license.machineHash = machineHash;
   }
 
   license.lastVerifiedAt = timestamp;

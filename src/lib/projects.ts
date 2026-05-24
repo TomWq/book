@@ -22,7 +22,12 @@ import {
   type ProjectCreationAssistAction,
   type ProjectCreationAssistInput
 } from "@/lib/ai/project-creation";
-import { novelTaxonomy, type TargetReader } from "@/lib/novel-taxonomy";
+import {
+  generateWritingAssistantReply,
+  streamWritingAssistantReply,
+  type WritingAssistantChatMessage
+} from "@/lib/ai/writing-assistant";
+import { novelTaxonomy, qidianTaxonomyByReader, type TargetReader } from "@/lib/novel-taxonomy";
 import {
   assertEditedTextComplete,
   countDraftCharacters,
@@ -77,6 +82,7 @@ import {
 } from "@/lib/auth-service";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
+import { clearDesktopActivationStatusCache } from "@/lib/desktop-license-status";
 import {
   activationEmail,
   activateLicenseViaRemoteCenter,
@@ -97,7 +103,7 @@ import {
   type LicenseActivationInput
 } from "@/lib/license-service";
 import { splitNovelText } from "@/lib/chapters";
-import { readStore, writeStore } from "@/lib/project-store";
+import { backupStoreSnapshot, readStore, writeStore } from "@/lib/project-store";
 import type {
   PleasurePoint,
   EntityRelation,
@@ -128,6 +134,8 @@ import type {
   ReviewIssue,
   StoredReviewReport,
   StoredEditReport,
+  StoredAssistantThread,
+  StoredAssistantMessage,
   StoredUser,
   StoredCreditTransaction,
   StoredLicenseCode,
@@ -173,6 +181,8 @@ export type {
   ReviewIssue,
   StoredReviewReport,
   StoredEditReport,
+  StoredAssistantThread,
+  StoredAssistantMessage,
   StoredUser,
   StoredCreditTransaction,
   StoredLicenseCode,
@@ -404,37 +414,6 @@ export async function getCurrentUserOrThrow() {
   return toAuthUser(user);
 }
 
-export async function getSubscriptionActivationStatus() {
-  const store = await readStore();
-  const currentUser = await getCurrentUserFromStore(store);
-  const candidate = currentUser
-    ? { user: currentUser, state: resolveDesktopLicenseState(store, currentUser), changed: false }
-    : getDesktopLicenseCandidate(store);
-  const candidateUser = candidate.user;
-  const licenseState: DesktopLicenseState = candidateUser
-    ? await refreshDesktopLicenseStateFromRemoteCenter(store, candidateUser, candidate.state)
-    : candidate.state;
-
-  if (candidate.changed || licenseState.changed) {
-    await writeStore(store);
-  }
-
-  return {
-    billingMode: getBillingMode(),
-    activated: licenseState.status === "active",
-    expired: licenseState.status === "expired" || licenseState.status === "disabled",
-    licenseStatus: licenseState.status,
-    licenseExpiresAt: licenseState.expiresAt,
-    licenseActivatedAt: candidateUser?.licenseActivatedAt ?? "",
-    message: licenseState.status === "expired" || licenseState.status === "disabled"
-      ? licenseState.message ?? ""
-      : "",
-    currentUser: currentUser ? toAuthUser(currentUser) : null,
-    customerId: currentUser?.licenseCustomerId ?? candidateUser?.licenseCustomerId ?? "",
-    serverNow: now()
-  };
-}
-
 export async function restoreSubscriptionSession() {
   if (!isDesktopRuntime() || !isSubscriptionBillingMode()) {
     return { user: null, reason: "inactive" as const };
@@ -481,10 +460,14 @@ export async function restoreSubscriptionSession() {
 
   await writeStore(store);
   await setSessionCookie(token);
+  clearDesktopActivationStatusCache();
   return { user: toAuthUser(user) };
 }
 
-export async function activateSubscriptionLicense(input: LicenseActivationInput) {
+export async function activateSubscriptionLicense(
+  input: LicenseActivationInput,
+  options?: { replaceExisting?: boolean }
+) {
   if (!isSubscriptionBillingMode()) {
     throw new Error("当前不是一次性授权模式");
   }
@@ -502,7 +485,9 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
   const codeHash = hashActivationCode(normalizedCode);
   const machineHash = normalizeMachineHash(input.machineHash);
   syncLocalLicenseSnapshot(store, { license, codeHash, machineHash });
-  let user = store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId);
+  const currentUser = options?.replaceExisting ? await getCurrentUserFromStore(store) : null;
+  const reusableUser = options?.replaceExisting ? currentUser ?? getDesktopLicenseCandidate(store).user : null;
+  let user = reusableUser ?? store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId);
 
   if (!user) {
     const { salt, hash } = hashPassword(randomUUID());
@@ -526,17 +511,19 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
     };
     store.users.push(user);
   } else {
-    user.licenseCustomerId = user.licenseCustomerId || license.customerId;
-    user.licenseCodeHash = user.licenseCodeHash || codeHash;
-    user.licenseMachineHash = user.licenseMachineHash || machineHash;
-    user.licenseActivatedAt = user.licenseActivatedAt || license.activatedAt || timestamp;
-    user.licenseExpiresAt = user.licenseExpiresAt || license.expiresAt || undefined;
+    user.licenseCustomerId = options?.replaceExisting ? license.customerId : user.licenseCustomerId || license.customerId;
+    user.licenseCodeHash = options?.replaceExisting ? codeHash : user.licenseCodeHash || codeHash;
+    user.licenseMachineHash = options?.replaceExisting ? machineHash : user.licenseMachineHash || machineHash;
+    user.licenseActivatedAt = options?.replaceExisting ? license.activatedAt || timestamp : user.licenseActivatedAt || license.activatedAt || timestamp;
+    user.licenseExpiresAt = license.expiresAt || undefined;
     if (license.customerName) {
       user.name = license.customerName;
     }
     user.plan = user.plan ?? "studio";
     user.updatedAt = timestamp;
   }
+
+  user.licenseSignedOutAt = undefined;
 
   if (store.projects.every((item) => !item.ownerUserId)) {
     claimLegacyWorkspace(store, user.id);
@@ -555,7 +542,68 @@ export async function activateSubscriptionLicense(input: LicenseActivationInput)
 
   await writeStore(store);
   await setSessionCookie(token);
+  clearDesktopActivationStatusCache();
   return toAuthUser(user);
+}
+
+export async function clearLocalLicenseSession() {
+  if (!isDesktopRuntime()) {
+    return { ok: false, reason: "cloud" as const };
+  }
+
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+  const timestamp = now();
+
+  if (currentUser) {
+    store.sessions = store.sessions.filter((item) => item.userId !== currentUser.id);
+    currentUser.licenseSignedOutAt = timestamp;
+    currentUser.updatedAt = timestamp;
+  } else {
+    store.sessions = [];
+    store.users.forEach((user) => {
+      if (user.licenseCustomerId || user.licenseCodeHash) {
+        user.licenseSignedOutAt = timestamp;
+        user.updatedAt = timestamp;
+      }
+    });
+  }
+
+  await writeStore(store);
+  await clearSessionCookie();
+  clearDesktopActivationStatusCache();
+  return { ok: true as const };
+}
+
+function normalizePenName(value: string) {
+  return value.replace(/\s+/g, "").trim();
+}
+
+export async function updateCurrentUserPenName(input: { penName: string }) {
+  const penName = normalizePenName(input.penName);
+
+  if (!penName) {
+    throw new Error("请先给自己起一个笔名");
+  }
+
+  if (penName.length < 2 || penName.length > 16) {
+    throw new Error("笔名建议 2-16 个字");
+  }
+
+  if (!/^[\p{Script=Han}A-Za-z0-9_·]+$/u.test(penName)) {
+    throw new Error("笔名只能包含中文、字母、数字、下划线或间隔号");
+  }
+
+  const store = await readStore();
+  const user = await requireCurrentUser(store);
+  const timestamp = now();
+
+  user.penName = penName;
+  user.penNameSetAt = user.penNameSetAt || timestamp;
+  user.updatedAt = timestamp;
+  await writeStore(store);
+
+  return { user: toAuthUser(user) };
 }
 
 export async function registerUser(input: { email: string; password: string; name: string }) {
@@ -573,7 +621,14 @@ export async function logoutUser() {
 export async function getAccountOverview(options?: { creditTransactionLimit?: number; creditTransactionOffset?: number }) {
   const store = await readStore();
   const user = await requireCurrentUser(store);
-  const overview = createDomainReadRepository(store).getAccountOverviewForUser(user.id, options);
+  const localLicenseState = resolveDesktopLicenseState(store, user);
+  const licenseState = await refreshDesktopLicenseStateFromRemoteCenter(store, user, localLicenseState);
+
+  if (localLicenseState.changed || licenseState.changed) {
+    await writeStore(store);
+  }
+
+  const overview = buildAccountOverview(store, user, options, licenseState);
 
   if (!overview) {
     throw new Error("用户不存在");
@@ -602,6 +657,131 @@ export async function exportCurrentUserData() {
   }
 
   return payload;
+}
+
+function arrayFromBackup<T>(payload: Record<string, unknown>, key: string): T[] {
+  const value = payload[key];
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function removeUserWorkspaceData(store: AppStore, userId: string) {
+  const ownedProjectIds = getOwnedProjectIds(store, userId);
+  const ownedTemplateIds = store.templates
+    .filter((template) => !template.ownerUserId || template.ownerUserId === userId)
+    .map((template) => template.id);
+  const removedAssistantThreadIds = new Set(
+    (store.assistantThreads ?? [])
+      .filter((thread) => thread.ownerUserId === userId || (thread.projectId && ownedProjectIds.has(thread.projectId)))
+      .map((thread) => thread.id)
+  );
+
+  store.sourceTexts = store.sourceTexts.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.chapters = store.chapters.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.chapterAnalyses = store.chapterAnalyses.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.storyAnalyses = store.storyAnalyses.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.writingBibles = store.writingBibles.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.characterProfiles = store.characterProfiles.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.foreshadowings = store.foreshadowings.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.plotStates = store.plotStates.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => !ownedProjectIds.has(item.projectId));
+  store.writingTaskCards = store.writingTaskCards.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.chapterDrafts = store.chapterDrafts.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.chapterLedgers = store.chapterLedgers.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.reviewReports = store.reviewReports.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.editReports = store.editReports.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.assistantThreads = (store.assistantThreads ?? []).filter((item) => !removedAssistantThreadIds.has(item.id));
+  store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !removedAssistantThreadIds.has(item.threadId));
+  store.outlines = store.outlines.filter((item) => !ownedTemplateIds.includes(item.templateId));
+  store.templates = store.templates.filter(
+    (item) => item.ownerUserId !== userId && (!item.sourceProjectId || !ownedProjectIds.has(item.sourceProjectId))
+  );
+  store.projects = store.projects.filter((item) => !ownedProjectIds.has(item.id));
+  store.aiJobs = store.aiJobs.filter((item) => item.userId !== userId && !(item.projectId && ownedProjectIds.has(item.projectId)));
+  store.creditTransactions = store.creditTransactions.filter((item) => item.userId !== userId);
+  store.aiSettings = normalizeStoredAiSettings(store.aiSettings).filter((item) => item.userId !== userId);
+}
+
+export async function restoreCurrentUserDataFromBackup(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("备份文件格式不正确");
+  }
+
+  const data = payload as Record<string, unknown>;
+  const projects = arrayFromBackup<StoredProject>(data, "projects");
+
+  if (!Array.isArray(projects)) {
+    throw new Error("备份文件缺少项目数据");
+  }
+
+  const store = await readStore();
+  const user = await requireCurrentUser(store);
+  const backupPath = await backupStoreSnapshot(store, "before-restore");
+
+  removeUserWorkspaceData(store, user.id);
+
+  const importedProjectIds = new Set(projects.map((project) => project.id));
+  const templates = arrayFromBackup<StoredTemplate>(data, "templates");
+  const importedTemplateIds = new Set(templates.map((template) => template.id));
+  const assistantThreads = arrayFromBackup<StoredAssistantThread>(data, "assistantThreads")
+    .filter((thread) => !thread.projectId || importedProjectIds.has(thread.projectId))
+    .map((thread) => ({ ...thread, ownerUserId: user.id }));
+  const importedAssistantThreadIds = new Set(assistantThreads.map((thread) => thread.id));
+
+  store.projects.push(...projects.map((project) => ({ ...project, ownerUserId: user.id })));
+  store.sourceTexts.push(...arrayFromBackup<StoredSourceText>(data, "sourceTexts").filter((item) => importedProjectIds.has(item.projectId)));
+  store.chapters.push(...arrayFromBackup<StoredChapter>(data, "chapters").filter((item) => importedProjectIds.has(item.projectId)));
+  store.chapterAnalyses.push(...arrayFromBackup<StoredChapterAnalysis>(data, "chapterAnalyses").filter((item) => importedProjectIds.has(item.projectId)));
+  store.storyAnalyses.push(...arrayFromBackup<StoredStoryAnalysis>(data, "storyAnalyses").filter((item) => importedProjectIds.has(item.projectId)));
+  store.writingBibles.push(...arrayFromBackup<StoredWritingBible>(data, "writingBibles").filter((item) => importedProjectIds.has(item.projectId)));
+  store.characterProfiles.push(...arrayFromBackup<StoredCharacterProfile>(data, "characterProfiles").filter((item) => importedProjectIds.has(item.projectId)));
+  store.foreshadowings.push(...arrayFromBackup<StoredForeshadowing>(data, "foreshadowings").filter((item) => importedProjectIds.has(item.projectId)));
+  store.plotStates.push(...arrayFromBackup<StoredPlotState>(data, "plotStates").filter((item) => importedProjectIds.has(item.projectId)));
+  store.customRelationGraphs = [
+    ...(store.customRelationGraphs ?? []),
+    ...arrayFromBackup<StoredCustomRelationGraph>(data, "customRelationGraphs").filter((item) => importedProjectIds.has(item.projectId))
+  ];
+  store.writingTaskCards.push(...arrayFromBackup<StoredWritingTaskCard>(data, "writingTaskCards").filter((item) => importedProjectIds.has(item.projectId)));
+  store.chapterDrafts.push(...arrayFromBackup<StoredChapterDraft>(data, "chapterDrafts").filter((item) => importedProjectIds.has(item.projectId)));
+  store.chapterLedgers.push(...arrayFromBackup<StoredChapterLedger>(data, "chapterLedgers").filter((item) => importedProjectIds.has(item.projectId)));
+  store.reviewReports.push(...arrayFromBackup<StoredReviewReport>(data, "reviewReports").filter((item) => importedProjectIds.has(item.projectId)));
+  store.editReports.push(...arrayFromBackup<StoredEditReport>(data, "editReports").filter((item) => importedProjectIds.has(item.projectId)));
+  store.assistantThreads.push(...assistantThreads);
+  store.assistantMessages.push(
+    ...arrayFromBackup<StoredAssistantMessage>(data, "assistantMessages").filter((item) =>
+      importedAssistantThreadIds.has(item.threadId)
+    )
+  );
+  store.templates.push(...templates.map((template) => ({ ...template, ownerUserId: user.id })));
+  store.outlines.push(...arrayFromBackup<StoredOutline>(data, "outlines").filter((item) => importedTemplateIds.has(item.templateId)));
+  store.aiJobs.push(
+    ...arrayFromBackup<StoredAiJob>(data, "aiJobs")
+      .filter((item) => !item.projectId || importedProjectIds.has(item.projectId))
+      .map((item) => ({ ...item, userId: user.id }))
+  );
+  store.creditTransactions.push(
+    ...arrayFromBackup<StoredCreditTransaction>(data, "creditTransactions").map((item) => ({ ...item, userId: user.id }))
+  );
+
+  const aiSettings = data.aiSettings && typeof data.aiSettings === "object"
+    ? { ...(data.aiSettings as StoredAiSettings), userId: user.id, updatedAt: now() }
+    : null;
+
+  if (aiSettings) {
+    store.aiSettings = [...normalizeStoredAiSettings(store.aiSettings), aiSettings];
+  }
+
+  await writeStore(store);
+
+  return {
+    restoredAt: now(),
+    backupPath,
+    counts: {
+      projects: projects.length,
+      templates: templates.length,
+      chapters: arrayFromBackup<StoredChapter>(data, "chapters").length,
+      drafts: arrayFromBackup<StoredChapterDraft>(data, "chapterDrafts").length
+    }
+  };
 }
 
 function projectCounts(store: AppStore, projectId: string) {
@@ -1441,14 +1621,30 @@ function buildAdminAiUsageSummary(jobs: StoredAiJob[]): AdminAiUsageSummary {
 function buildAccountOverview(
   store: AppStore,
   user: StoredUser,
-  options?: { creditTransactionLimit?: number; creditTransactionOffset?: number }
+  options?: { creditTransactionLimit?: number; creditTransactionOffset?: number },
+  resolvedLicenseState?: DesktopLicenseState
 ) {
   const limits = getPlanLimitsForUser(user);
   const usage = getUserUsage(store, user);
+  const license = user.licenseCodeHash
+    ? store.licenseCodes.find((item) => item.codeHash === user.licenseCodeHash)
+    : null;
+  const licenseState = resolvedLicenseState ?? resolveDesktopLicenseState(store, user);
   void options;
 
   return {
     user: toAuthUser(user),
+    license: {
+      status: licenseState.status,
+      message: licenseState.message ?? "",
+      customerId: user.licenseCustomerId ?? "",
+      codePreview: license?.codePreview ?? "",
+      machineHash: user.licenseMachineHash ?? license?.machineHash ?? "",
+      activatedAt: user.licenseActivatedAt ?? license?.activatedAt ?? "",
+      lastVerifiedAt: license?.lastVerifiedAt ?? "",
+      expiresAt: licenseState.expiresAt ?? user.licenseExpiresAt ?? license?.expiresAt ?? "",
+      isTrial: Boolean(licenseState.expiresAt ?? user.licenseExpiresAt ?? license?.expiresAt)
+    },
     billingMode: getBillingMode(),
     planName: limits.name,
     usage,
@@ -1555,7 +1751,6 @@ export async function generateAdminLicenseCodes(input: {
   quantity: number;
   customerName?: string;
   customerContact?: string;
-  maxActivations?: number;
   durationMinutes?: number;
   durationHours?: number;
   expiresAt?: string;
@@ -1566,7 +1761,6 @@ export async function generateAdminLicenseCodes(input: {
   syncLegacyConfiguredCodes(store);
 
   const quantity = Math.max(1, Math.min(50, Math.floor(Number(input.quantity) || 1)));
-  const maxActivations = Math.max(1, Math.min(10, Math.floor(Number(input.maxActivations) || 1)));
   const timestamp = now();
   const generated: string[] = [];
   const existingHashes = new Set(store.licenseCodes.map((item) => item.codeHash));
@@ -1600,7 +1794,7 @@ export async function generateAdminLicenseCodes(input: {
       customerName: normalizeLicenseText(input.customerName),
       customerContact: normalizeLicenseText(input.customerContact),
       status: "unused",
-      maxActivations,
+      maxActivations: 1,
       activationCount: 0,
       expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt.toISOString() : undefined,
       notes: normalizeLicenseText(input.notes),
@@ -1617,7 +1811,7 @@ export async function generateAdminLicenseCodes(input: {
 
 export async function updateAdminLicenseCode(input: {
   licenseId: string;
-  action: "disable" | "delete";
+  action: "disable" | "delete" | "resetMachine";
 }) {
   const store = await readStore();
   await requireAdminUser(store);
@@ -1640,6 +1834,39 @@ export async function updateAdminLicenseCode(input: {
   if (input.action === "disable") {
     license.status = "disabled";
     license.disabledAt = timestamp;
+  }
+
+  if (input.action === "resetMachine") {
+    if (license.status === "disabled") {
+      throw new Error("授权码已作废，不能重置设备");
+    }
+
+    if (license.status === "expired" || (license.expiresAt && Date.parse(license.expiresAt) <= Date.now())) {
+      license.status = "expired";
+      license.updatedAt = timestamp;
+      throw new Error("授权码已过期，不能重置设备");
+    }
+
+    license.status = "unused";
+    license.activationCount = 0;
+    license.machineHash = undefined;
+    license.activatedAt = undefined;
+    license.lastVerifiedAt = undefined;
+    store.licenseActivationLogs.unshift({
+      id: randomUUID(),
+      licenseCodeId: license.id,
+      codeHash: license.codeHash,
+      machineHash: "",
+      result: "success",
+      reason: "machine_reset",
+      clientName: "管理员重置设备",
+      createdAt: timestamp
+    });
+    store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
+  }
+
+  if (!["disable", "delete", "resetMachine"].includes(input.action)) {
+    throw new Error("未知授权码操作");
   }
 
   license.updatedAt = timestamp;
@@ -1709,6 +1936,10 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
   const ownedTemplateIds = store.templates
     .filter((template) => !template.ownerUserId || template.ownerUserId === user.id)
     .map((template) => template.id);
+  const assistantThreads = (store.assistantThreads ?? []).filter(
+    (item) => item.ownerUserId === user.id && (!item.projectId || ownedProjectIds.has(item.projectId))
+  );
+  const assistantThreadIds = new Set(assistantThreads.map((thread) => thread.id));
 
   return {
     exportedAt: now(),
@@ -1732,6 +1963,8 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     chapterLedgers: store.chapterLedgers.filter((item) => ownedProjectIds.has(item.projectId)),
     reviewReports: store.reviewReports.filter((item) => ownedProjectIds.has(item.projectId)),
     editReports: store.editReports.filter((item) => ownedProjectIds.has(item.projectId)),
+    assistantThreads,
+    assistantMessages: (store.assistantMessages ?? []).filter((item) => assistantThreadIds.has(item.threadId)),
     creditTransactions: store.creditTransactions.filter((item) => item.userId === user.id),
     creditsBalance: getUserCreditBalance(user),
     aiSettings: getPrimaryAiSettings(store, user.id)
@@ -1744,6 +1977,11 @@ async function purgeUserAccount(store: AppStore, userId: string) {
   const ownedTemplateIds = store.templates
     .filter((template) => !template.ownerUserId || template.ownerUserId === userId)
     .map((template) => template.id);
+  const removedAssistantThreadIds = new Set(
+    (store.assistantThreads ?? [])
+      .filter((thread) => thread.ownerUserId === userId || (thread.projectId && ownedProjectIds.has(thread.projectId)))
+      .map((thread) => thread.id)
+  );
 
   store.sourceTexts = store.sourceTexts.filter((item) => !ownedProjectIds.has(item.projectId));
   store.chapters = store.chapters.filter((item) => !ownedProjectIds.has(item.projectId));
@@ -1759,6 +1997,8 @@ async function purgeUserAccount(store: AppStore, userId: string) {
   store.chapterLedgers = store.chapterLedgers.filter((item) => !ownedProjectIds.has(item.projectId));
   store.reviewReports = store.reviewReports.filter((item) => !ownedProjectIds.has(item.projectId));
   store.editReports = store.editReports.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.assistantThreads = (store.assistantThreads ?? []).filter((item) => !removedAssistantThreadIds.has(item.id));
+  store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !removedAssistantThreadIds.has(item.threadId));
   store.outlines = store.outlines.filter((item) => !ownedTemplateIds.includes(item.templateId));
   store.templates = store.templates.filter(
     (item) => item.ownerUserId !== userId && (!item.sourceProjectId || !ownedProjectIds.has(item.sourceProjectId))
@@ -1884,11 +2124,15 @@ function resolveTargetReader(value: string): TargetReader | null {
   return value === "男频" || value === "女频" ? value : null;
 }
 
-function getCategoryDescription(targetReader: string, genre: string) {
+function getCategoryDescription(targetReader: string, genre: string, tagTaxonomyStyle?: string) {
   const reader = resolveTargetReader(targetReader);
 
   if (!reader) {
     return "";
+  }
+
+  if (tagTaxonomyStyle === "qidian") {
+    return qidianTaxonomyByReader[reader].find((category) => category.name === genre)?.description ?? "";
   }
 
   return novelTaxonomy[reader].mainCategories.find((category) => category.name === genre)?.description ?? "";
@@ -2045,7 +2289,8 @@ function applyInitialProjectState(
   const foreshadowingPlan = cleanList(input.foreshadowingPlan).slice(0, 12);
   const pleasureDistribution = input.pleasureDistribution?.trim() ?? "";
   const targetReader = input.targetReader?.trim() ?? "";
-  const categoryDescription = getCategoryDescription(targetReader, project.genre);
+  const tagTaxonomyStyle = input.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie";
+  const categoryDescription = getCategoryDescription(targetReader, project.genre, tagTaxonomyStyle);
   const genreBoundaryRules = buildGenreBoundaryRules({
     targetReader,
     genre: project.genre,
@@ -4851,6 +5096,336 @@ export async function getProjectWritingState(projectId: string) {
   };
 }
 
+function ensureAssistantCollections(store: AppStore) {
+  store.assistantThreads ??= [];
+  store.assistantMessages ??= [];
+}
+
+function titleFromAssistantQuestion(question: string) {
+  const title = question
+    .replace(/\s+/g, " ")
+    .replace(/[《》「」“”"'`]+/g, "")
+    .trim();
+
+  return title ? (title.length > 24 ? `${title.slice(0, 24)}...` : title) : "新对话";
+}
+
+function formatWritingAssistantReply(reply: Awaited<ReturnType<typeof generateWritingAssistantReply>>) {
+  const answer = reply.answer.trim() || "我暂时没有生成有效回答。";
+  const suggestions = reply.suggestions.map((item) => item.trim()).filter(Boolean).slice(0, 3);
+
+  return suggestions.length
+    ? `${answer}\n\n可以继续问：\n${suggestions.map((item) => `- ${item}`).join("\n")}`
+    : answer;
+}
+
+function getAssistantMessagesForThread(store: AppStore, threadId: string) {
+  return (store.assistantMessages ?? [])
+    .filter((message) => message.threadId === threadId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function getAssistantProjectContext(store: AppStore, userId: string, projectId?: string) {
+  if (!projectId) {
+    return null;
+  }
+
+  const repo = createDomainReadRepository(store);
+  const project = repo.getProjectRecordForUser(projectId, userId);
+
+  if (!project) {
+    throw new Error("项目不存在");
+  }
+
+  ensureDefaultWritingState(store, project);
+  sanitizeLegacyStatePlacement(store, project);
+
+  const state = repo.getProjectWritingStateForUser(projectId, userId);
+
+  if (!state) {
+    return null;
+  }
+
+  return {
+    project: state.project,
+    bible: state.bible,
+    plotState: state.plotState,
+    characters: state.characters,
+    foreshadowings: state.foreshadowings,
+    ledgers: state.ledgers
+  };
+}
+
+export async function listWritingAssistantThreads(projectId?: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  ensureAssistantCollections(store);
+
+  const normalizedProjectId = projectId?.trim();
+
+  if (normalizedProjectId) {
+    createDomainWriteRepository(store).requireProjectForUser(normalizedProjectId, currentUser.id);
+  }
+
+  return store.assistantThreads
+    .filter((thread) => {
+      if (thread.ownerUserId !== currentUser.id) {
+        return false;
+      }
+
+      return normalizedProjectId ? thread.projectId === normalizedProjectId : !thread.projectId;
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 12);
+}
+
+export async function getWritingAssistantThread(threadId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  ensureAssistantCollections(store);
+
+  const thread = store.assistantThreads.find((item) => item.id === threadId && item.ownerUserId === currentUser.id);
+
+  if (!thread) {
+    throw new Error("对话不存在");
+  }
+
+  return {
+    thread,
+    messages: getAssistantMessagesForThread(store, thread.id)
+  };
+}
+
+export async function deleteWritingAssistantThread(threadId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  ensureAssistantCollections(store);
+
+  const thread = store.assistantThreads.find((item) => item.id === threadId && item.ownerUserId === currentUser.id);
+
+  if (!thread) {
+    throw new Error("对话不存在");
+  }
+
+  store.assistantThreads = store.assistantThreads.filter((item) => item.id !== thread.id);
+  store.assistantMessages = store.assistantMessages.filter((item) => item.threadId !== thread.id);
+  await writeStore(store);
+
+  return { threadId: thread.id };
+}
+
+export async function updateWritingAssistantThreadTitle(input: { threadId: string; title: string }) {
+  const title = input.title.replace(/\s+/g, " ").trim();
+
+  if (!title) {
+    throw new Error("对话标题不能为空");
+  }
+
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  ensureAssistantCollections(store);
+
+  const thread = store.assistantThreads.find((item) => item.id === input.threadId && item.ownerUserId === currentUser.id);
+
+  if (!thread) {
+    throw new Error("对话不存在");
+  }
+
+  thread.title = title.length > 36 ? `${title.slice(0, 36)}...` : title;
+  thread.updatedAt = now();
+  await writeStore(store);
+
+  return { thread };
+}
+
+export async function chatWithWritingAssistant(input: {
+  question: string;
+  projectId?: string;
+  threadId?: string;
+}) {
+  const question = input.question.trim();
+
+  if (!question) {
+    throw new Error("请输入要咨询的小说创作问题");
+  }
+
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  ensureAssistantCollections(store);
+
+  const timestamp = now();
+  let thread = input.threadId
+    ? store.assistantThreads.find((item) => item.id === input.threadId && item.ownerUserId === currentUser.id)
+    : undefined;
+
+  if (input.threadId && !thread) {
+    throw new Error("对话不存在");
+  }
+
+  const normalizedProjectId = input.projectId?.trim() || undefined;
+  const projectId = thread?.projectId ?? normalizedProjectId;
+
+  if (!thread) {
+    if (projectId) {
+      createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+    }
+
+    thread = {
+      id: randomUUID(),
+      ownerUserId: currentUser.id,
+      projectId,
+      title: titleFromAssistantQuestion(question),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.assistantThreads.push(thread);
+  }
+
+  const history: WritingAssistantChatMessage[] = getAssistantMessagesForThread(store, thread.id)
+    .slice(-8)
+    .map((message) => ({ role: message.role, content: message.content }));
+  const projectContext = getAssistantProjectContext(store, currentUser.id, projectId);
+  const reply = await generateWritingAssistantReply({
+    question,
+    history,
+    projectContext
+  });
+  const userMessage: StoredAssistantMessage = {
+    id: randomUUID(),
+    threadId: thread.id,
+    role: "user",
+    content: question,
+    createdAt: timestamp
+  };
+  const assistantMessage: StoredAssistantMessage = {
+    id: randomUUID(),
+    threadId: thread.id,
+    role: "assistant",
+    content: formatWritingAssistantReply(reply),
+    createdAt: now()
+  };
+
+  thread.updatedAt = assistantMessage.createdAt;
+  store.assistantMessages.push(userMessage, assistantMessage);
+  await writeStore(store);
+
+  return {
+    thread,
+    messages: getAssistantMessagesForThread(store, thread.id),
+    reply
+  };
+}
+
+export async function prepareWritingAssistantStream(input: {
+  question: string;
+  projectId?: string;
+  threadId?: string;
+}) {
+  const question = input.question.trim();
+
+  if (!question) {
+    throw new Error("请输入要咨询的小说创作问题");
+  }
+
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  ensureAssistantCollections(store);
+
+  const timestamp = now();
+  let thread = input.threadId
+    ? store.assistantThreads.find((item) => item.id === input.threadId && item.ownerUserId === currentUser.id)
+    : undefined;
+
+  if (input.threadId && !thread) {
+    throw new Error("对话不存在");
+  }
+
+  const normalizedProjectId = input.projectId?.trim() || undefined;
+  const projectId = thread?.projectId ?? normalizedProjectId;
+
+  if (!thread) {
+    if (projectId) {
+      createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+    }
+
+    thread = {
+      id: randomUUID(),
+      ownerUserId: currentUser.id,
+      projectId,
+      title: titleFromAssistantQuestion(question),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.assistantThreads.push(thread);
+  }
+
+  const history: WritingAssistantChatMessage[] = getAssistantMessagesForThread(store, thread.id)
+    .slice(-8)
+    .map((message) => ({ role: message.role, content: message.content }));
+  const projectContext = getAssistantProjectContext(store, currentUser.id, projectId);
+  const userMessage: StoredAssistantMessage = {
+    id: randomUUID(),
+    threadId: thread.id,
+    role: "user",
+    content: question,
+    createdAt: timestamp
+  };
+
+  thread.updatedAt = timestamp;
+  store.assistantMessages.push(userMessage);
+  await writeStore(store);
+
+  return {
+    thread,
+    ownerUserId: currentUser.id,
+    stream: streamWritingAssistantReply({
+      question,
+      history,
+      projectContext
+    })
+  };
+}
+
+export async function saveWritingAssistantStreamReply(input: {
+  threadId: string;
+  ownerUserId: string;
+  content: string;
+}) {
+  const content = input.content.trim();
+
+  if (!content) {
+    return null;
+  }
+
+  const store = await readStore();
+  ensureAssistantCollections(store);
+
+  const thread = store.assistantThreads.find(
+    (item) => item.id === input.threadId && item.ownerUserId === input.ownerUserId
+  );
+
+  if (!thread) {
+    return null;
+  }
+
+  const assistantMessage: StoredAssistantMessage = {
+    id: randomUUID(),
+    threadId: thread.id,
+    role: "assistant",
+    content,
+    createdAt: now()
+  };
+
+  thread.updatedAt = assistantMessage.createdAt;
+  store.assistantMessages.push(assistantMessage);
+  await writeStore(store);
+
+  return {
+    thread,
+    message: assistantMessage
+  };
+}
+
 export async function updateProjectMetadata(
   projectId: string,
   input: {
@@ -7014,6 +7589,11 @@ export async function deleteProject(projectId: string) {
   store.chapterLedgers = store.chapterLedgers.filter((item) => item.projectId !== projectId);
   store.reviewReports = store.reviewReports.filter((item) => item.projectId !== projectId);
   store.editReports = store.editReports.filter((item) => item.projectId !== projectId);
+  const removedAssistantThreadIds = new Set(
+    (store.assistantThreads ?? []).filter((item) => item.projectId === projectId).map((item) => item.id)
+  );
+  store.assistantThreads = (store.assistantThreads ?? []).filter((item) => item.projectId !== projectId);
+  store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !removedAssistantThreadIds.has(item.threadId));
   store.aiJobs = store.aiJobs.filter((item) => item.projectId !== projectId);
   store.templates.forEach((template) => {
     if (template.sourceProjectId === projectId) {

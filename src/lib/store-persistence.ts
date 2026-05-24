@@ -382,6 +382,26 @@ function ensureSqliteSchema() {
       CONSTRAINT "AiJob_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS "AssistantThread" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "ownerUserId" TEXT NOT NULL,
+      "projectId" TEXT,
+      "title" TEXT NOT NULL,
+      "createdAt" DATETIME NOT NULL,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "AssistantThread_ownerUserId_fkey" FOREIGN KEY ("ownerUserId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT "AssistantThread_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS "AssistantMessage" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "threadId" TEXT NOT NULL,
+      "role" TEXT NOT NULL,
+      "content" TEXT NOT NULL,
+      "createdAt" DATETIME NOT NULL,
+      CONSTRAINT "AssistantMessage_threadId_fkey" FOREIGN KEY ("threadId") REFERENCES "AssistantThread" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS "AiSetting" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "userId" TEXT,
@@ -397,6 +417,8 @@ function ensureSqliteSchema() {
       "id" TEXT NOT NULL PRIMARY KEY,
       "email" TEXT NOT NULL UNIQUE,
       "name" TEXT NOT NULL,
+      "penName" TEXT,
+      "penNameSetAt" DATETIME,
       "passwordSalt" TEXT NOT NULL,
       "passwordHash" TEXT NOT NULL,
       "role" TEXT NOT NULL,
@@ -410,6 +432,7 @@ function ensureSqliteSchema() {
       "licenseMachineHash" TEXT,
       "licenseActivatedAt" DATETIME,
       "licenseExpiresAt" DATETIME,
+      "licenseSignedOutAt" DATETIME,
       "onboardingCompletedAt" DATETIME,
       "createdAt" DATETIME NOT NULL,
       "updatedAt" DATETIME NOT NULL
@@ -473,6 +496,8 @@ function ensureSqliteSchema() {
     'ALTER TABLE "Project" ADD COLUMN "ownerUserId" TEXT',
     'ALTER TABLE "Project" ADD COLUMN "coverImageUrl" TEXT',
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "penName" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "penNameSetAt" DATETIME',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" REAL',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER',
     'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
@@ -481,6 +506,7 @@ function ensureSqliteSchema() {
     'ALTER TABLE "User" ADD COLUMN "licenseMachineHash" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseActivatedAt" DATETIME',
     'ALTER TABLE "User" ADD COLUMN "licenseExpiresAt" DATETIME',
+    'ALTER TABLE "User" ADD COLUMN "licenseSignedOutAt" DATETIME',
     'ALTER TABLE "LicenseCode" ADD COLUMN "plainCode" TEXT',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
@@ -595,6 +621,8 @@ function syncCoreTables(store: unknown) {
   const reviewReports = asRecordArray(store, "reviewReports");
   const editReports = asRecordArray(store, "editReports");
   const aiJobs = asRecordArray(store, "aiJobs");
+  const assistantThreads = asRecordArray(store, "assistantThreads");
+  const assistantMessages = asRecordArray(store, "assistantMessages");
   const creditTransactions = asRecordArray(store, "creditTransactions");
   const licenseCodes = asRecordArray(store, "licenseCodes");
   const licenseActivationLogs = asRecordArray(store, "licenseActivationLogs");
@@ -620,6 +648,8 @@ function syncCoreTables(store: unknown) {
     db.prepare('DELETE FROM "SourceText"').run();
     db.prepare('DELETE FROM "AiJob"').run();
     db.prepare('DELETE FROM "EditReport"').run();
+    db.prepare('DELETE FROM "AssistantMessage"').run();
+    db.prepare('DELETE FROM "AssistantThread"').run();
     db.prepare('DELETE FROM "Project"').run();
     db.prepare('DELETE FROM "AiSetting"').run();
     db.prepare('DELETE FROM "CreditTransaction"').run();
@@ -630,9 +660,9 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "email", "name", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "email", "name", "penName", "penNameSetAt", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "licenseSignedOutAt", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @email, @name, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @email, @name, @penName, @penNameSetAt, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @licenseSignedOutAt, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
@@ -641,6 +671,8 @@ function syncCoreTables(store: unknown) {
         id: text(user.id),
         email: text(user.email),
         name: text(user.name),
+        penName: nullableText(user.penName),
+        penNameSetAt: user.penNameSetAt ? dateText(user.penNameSetAt) : null,
         passwordSalt: text(user.passwordSalt),
         passwordHash: text(user.passwordHash),
         role: text(user.role),
@@ -655,6 +687,7 @@ function syncCoreTables(store: unknown) {
         licenseMachineHash: nullableText(user.licenseMachineHash),
         licenseActivatedAt: user.licenseActivatedAt ? dateText(user.licenseActivatedAt) : null,
         licenseExpiresAt: user.licenseExpiresAt ? dateText(user.licenseExpiresAt) : null,
+        licenseSignedOutAt: user.licenseSignedOutAt ? dateText(user.licenseSignedOutAt) : null,
         onboardingCompletedAt: user.onboardingCompletedAt ? dateText(user.onboardingCompletedAt) : null,
         createdAt: dateText(user.createdAt),
         updatedAt: dateText(user.updatedAt)
@@ -700,6 +733,50 @@ function syncCoreTables(store: unknown) {
         status: text(project.status),
         createdAt: dateText(project.createdAt),
         updatedAt: dateText(project.updatedAt)
+      });
+    });
+
+    const insertAssistantThread = db.prepare(`
+      INSERT INTO "AssistantThread" (
+        "id", "ownerUserId", "projectId", "title", "createdAt", "updatedAt"
+      ) VALUES (
+        @id, @ownerUserId, @projectId, @title, @createdAt, @updatedAt
+      )
+    `);
+
+    assistantThreads.forEach((thread) => {
+      insertAssistantThread.run({
+        id: text(thread.id),
+        ownerUserId: text(thread.ownerUserId),
+        projectId: existingText(thread.projectId, projectIds),
+        title: text(thread.title) || "新对话",
+        createdAt: dateText(thread.createdAt),
+        updatedAt: dateText(thread.updatedAt)
+      });
+    });
+
+    const threadIds = new Set(assistantThreads.map((thread) => text(thread.id)));
+    const insertAssistantMessage = db.prepare(`
+      INSERT INTO "AssistantMessage" (
+        "id", "threadId", "role", "content", "createdAt"
+      ) VALUES (
+        @id, @threadId, @role, @content, @createdAt
+      )
+    `);
+
+    assistantMessages.forEach((message) => {
+      const threadId = existingText(message.threadId, threadIds);
+
+      if (!threadId) {
+        return;
+      }
+
+      insertAssistantMessage.run({
+        id: text(message.id),
+        threadId,
+        role: text(message.role) === "assistant" ? "assistant" : "user",
+        content: text(message.content),
+        createdAt: dateText(message.createdAt)
       });
     });
 
@@ -1402,6 +1479,8 @@ function readCoreStoreFromDb<T>(fallback: T) {
       "ReviewReport",
       "EditReport",
       "AiJob",
+      "AssistantThread",
+      "AssistantMessage",
       "AiSetting",
       "User",
       "Session",
@@ -1701,6 +1780,21 @@ function readCoreStoreFromDb<T>(fallback: T) {
         startedAt: item.startedAt ? dateText(item.startedAt) : undefined,
         finishedAt: item.finishedAt ? dateText(item.finishedAt) : undefined
       })),
+      assistantThreads: rows(db, "AssistantThread").map((item) => ({
+        id: text(item.id),
+        ownerUserId: text(item.ownerUserId),
+        projectId: maybeString(item.projectId),
+        title: text(item.title),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      })),
+      assistantMessages: rows(db, "AssistantMessage").map((item) => ({
+        id: text(item.id),
+        threadId: text(item.threadId),
+        role: text(item.role) === "assistant" ? "assistant" : "user",
+        content: text(item.content),
+        createdAt: dateText(item.createdAt)
+      })),
       aiSettings: aiSettingRows.map((aiSetting) => ({
         id: maybeString(aiSetting.id),
         userId: maybeString(aiSetting.userId),
@@ -1718,6 +1812,8 @@ function readCoreStoreFromDb<T>(fallback: T) {
         id: text(item.id),
         email: text(item.email),
         name: text(item.name),
+        penName: maybeString(item.penName),
+        penNameSetAt: maybeString(item.penNameSetAt),
         passwordSalt: text(item.passwordSalt),
         passwordHash: text(item.passwordHash),
         role: text(item.role),
@@ -1734,6 +1830,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
         licenseMachineHash: maybeString(item.licenseMachineHash),
         licenseActivatedAt: maybeString(item.licenseActivatedAt),
         licenseExpiresAt: maybeString(item.licenseExpiresAt),
+        licenseSignedOutAt: maybeString(item.licenseSignedOutAt),
         onboardingCompletedAt: maybeString(item.onboardingCompletedAt),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)

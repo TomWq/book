@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { novelTaxonomy, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
+import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
-const tagSections = [
+const fanqieTagSections = [
   { key: "mainCategories", label: "主分类" },
   { key: "themes", label: "主题" },
   { key: "roles", label: "角色" }
+] as const;
+
+const qidianTagSections = [
+  { key: "mainCategories", label: "主分类" },
+  { key: "subCategories", label: "子类" }
 ] as const;
 
 const creationSteps = [
@@ -19,10 +24,11 @@ const creationSteps = [
 
 const maxSelectedTagsPerGroup = 2;
 
-type TagSectionKey = (typeof tagSections)[number]["key"];
 type TitleNamingStyle = "fanqie" | "qidian";
+type TagTaxonomyStyle = "fanqie" | "qidian";
 type DescriptionWritingStyle = "fanqie" | "qidian";
 type CreationStepId = (typeof creationSteps)[number]["id"];
+type TagSectionKey = (typeof fanqieTagSections)[number]["key"] | (typeof qidianTagSections)[number]["key"];
 
 function asText(value: FormDataEntryValue | null) {
   return String(value ?? "").trim();
@@ -40,6 +46,7 @@ export function ProjectForm() {
   const [authorName, setAuthorName] = useState("");
   const [coverImageUrl, setCoverImageUrl] = useState("");
   const [titleNamingStyle, setTitleNamingStyle] = useState<TitleNamingStyle>("fanqie");
+  const [tagTaxonomyStyle, setTagTaxonomyStyle] = useState<TagTaxonomyStyle>("fanqie");
   const [descriptionWritingStyle, setDescriptionWritingStyle] = useState<DescriptionWritingStyle>("fanqie");
   const [description, setDescription] = useState("");
   const [protagonist1, setProtagonist1] = useState("");
@@ -56,33 +63,64 @@ export function ProjectForm() {
   const coverTitle = name || "书本名称";
   const coverAuthor = authorName.trim() || "作者名称";
   const taxonomy = novelTaxonomy[targetReader];
-  const currentCategory = taxonomy.mainCategories.find((item) => item.name === genre) ?? null;
+  const qidianTaxonomy = qidianTaxonomyByReader[targetReader];
+  const currentFanqieCategory = taxonomy.mainCategories.find((item) => item.name === genre) ?? null;
+  const currentQidianCategory = qidianTaxonomy.find((item) => item.name === genre) ?? null;
+  const currentCategory = tagTaxonomyStyle === "qidian" ? currentQidianCategory : currentFanqieCategory;
+  const tagSections = tagTaxonomyStyle === "qidian" ? qidianTagSections : fanqieTagSections;
   const selectedTagText = useMemo(
-    () => [genre, ...selectedTags].filter(Boolean).slice(0, 5).join(" / "),
-    [genre, selectedTags]
+    () => [tagTaxonomyStyle === "qidian" ? "起点" : "番茄", genre, ...selectedTags].filter(Boolean).slice(0, 5).join(" / "),
+    [genre, selectedTags, tagTaxonomyStyle]
   );
   const selectedTagSet = useMemo(() => new Set(selectedTags), [selectedTags]);
   const themeTagSet = useMemo(() => new Set(taxonomy.themes), [taxonomy.themes]);
   const roleTagSet = useMemo(() => new Set(taxonomy.roles), [taxonomy.roles]);
   const selectedThemeCount = selectedTags.filter((tag) => themeTagSet.has(tag)).length;
   const selectedRoleCount = selectedTags.filter((tag) => roleTagSet.has(tag)).length;
+  const currentSubCategories = currentQidianCategory?.subCategories ?? [];
+  const selectedSubCategory = selectedTags.find((tag) => currentSubCategories.includes(tag)) ?? "";
+
+  function updateTagTaxonomyStyle(nextStyle: TagTaxonomyStyle) {
+    setTagTaxonomyStyle(nextStyle);
+    setGenre("");
+    setSelectedTags([]);
+    setActiveTagSection("mainCategories");
+  }
+
   function updateTargetReader(nextReader: TargetReader) {
     const nextTaxonomy = novelTaxonomy[nextReader];
     const nextThemeTags = new Set(nextTaxonomy.themes);
     const nextRoleTags = new Set(nextTaxonomy.roles);
 
     setTargetReader(nextReader);
-    setGenre("");
-    setSelectedTags((current) => {
-      const keptThemes = current.filter((tag) => nextThemeTags.has(tag)).slice(0, maxSelectedTagsPerGroup);
-      const keptRoles = current.filter((tag) => nextRoleTags.has(tag)).slice(0, maxSelectedTagsPerGroup);
-      return [...keptThemes, ...keptRoles];
-    });
+    if (tagTaxonomyStyle === "fanqie") {
+      setGenre("");
+      setSelectedTags((current) => {
+        const keptThemes = current.filter((tag) => nextThemeTags.has(tag)).slice(0, maxSelectedTagsPerGroup);
+        const keptRoles = current.filter((tag) => nextRoleTags.has(tag)).slice(0, maxSelectedTagsPerGroup);
+        return [...keptThemes, ...keptRoles];
+      });
+    } else {
+      setGenre("");
+      setSelectedTags([]);
+    }
     setActiveTagSection("mainCategories");
+  }
+
+  function updateGenre(nextGenre: string) {
+    setGenre(nextGenre);
+    if (tagTaxonomyStyle === "qidian") {
+      setSelectedTags([]);
+      setActiveTagSection("subCategories");
+    }
   }
 
   function toggleTag(tag: string) {
     setSelectedTags((current) => {
+      if (tagTaxonomyStyle === "qidian") {
+        return current.includes(tag) ? [] : [tag];
+      }
+
       if (current.includes(tag)) {
         return current.filter((item) => item !== tag);
       }
@@ -166,6 +204,7 @@ export function ProjectForm() {
       genre,
       targetReader,
       titleNamingStyle,
+      tagTaxonomyStyle,
       descriptionWritingStyle,
       titleConcept,
       avoidTitles: titleSuggestions,
@@ -253,6 +292,12 @@ export function ProjectForm() {
       return;
     }
 
+    if (tagTaxonomyStyle === "qidian" && selectedTags.length === 0) {
+      setError("请先在第二步选择起点子类");
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       const response = await fetch("/api/projects", {
         method: "POST",
@@ -264,6 +309,7 @@ export function ProjectForm() {
           description: asText(formData.get("description")),
           coverImageUrl,
           targetReader,
+          tagTaxonomyStyle,
           tags: selectedTags,
           protagonistNames,
           coreSellingPoint: asText(formData.get("coreSellingPoint")),
@@ -326,21 +372,6 @@ export function ProjectForm() {
       </aside>
 
       <div className="book-create-main">
-        <nav className="book-step-nav" aria-label="新书创建步骤">
-          {creationSteps.map((step) => (
-            <button
-              key={step.id}
-              type="button"
-              className={activeStep === step.id ? "active" : ""}
-              aria-current={activeStep === step.id ? "step" : undefined}
-              onClick={() => scrollToStep(step.id)}
-            >
-              <span>{step.index}</span>
-              <strong>{step.label}</strong>
-            </button>
-          ))}
-        </nav>
-
         <div className="book-create-section" id="book-step-identity">
           <div className="section-head compact">
             <div>
@@ -454,7 +485,41 @@ export function ProjectForm() {
               <div className="mini-label">第二步</div>
               <h3>读者与标签</h3>
             </div>
-            <span className="muted">主分类必选，主题最多 2 个，角色最多 2 个</span>
+            <span className="muted">
+              {tagTaxonomyStyle === "qidian" ? "起点：主分类必选，子类选 1 个" : "番茄：主分类必选，主题最多 2 个，角色最多 2 个"}
+            </span>
+          </div>
+
+          <div className="field">
+            <div className="field-label">标签体系</div>
+            <div className="title-style-picker" aria-label="读者与标签体系">
+              <label>
+                <input
+                  type="radio"
+                  name="tagTaxonomyStyle"
+                  value="fanqie"
+                  checked={tagTaxonomyStyle === "fanqie"}
+                  onChange={() => updateTagTaxonomyStyle("fanqie")}
+                />
+                <span>
+                  <strong>番茄体系</strong>
+                  <small>先选主分类，再选主题和角色标签</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="tagTaxonomyStyle"
+                  value="qidian"
+                  checked={tagTaxonomyStyle === "qidian"}
+                  onChange={() => updateTagTaxonomyStyle("qidian")}
+                />
+                <span>
+                  <strong>起点体系</strong>
+                  <small>先选大类，再选对应子类</small>
+                </span>
+              </label>
+            </div>
           </div>
 
           <div className="split-panels">
@@ -486,7 +551,12 @@ export function ProjectForm() {
                 <span className="category-summary-icon" aria-hidden="true">{currentCategory?.name.slice(0, 1) ?? "选"}</span>
                 <span>
                   <strong>{currentCategory?.name ?? "请选择主分类"}</strong>
-                  <small>{currentCategory?.description ?? "主分类不默认选中，打开作品标签后从当前读者频道下选择。"}</small>
+                  <small>
+                    {currentCategory?.description ??
+                      (tagTaxonomyStyle === "qidian"
+                        ? "起点体系不按男频女频拆分，打开作品标签后选择大类。"
+                        : "主分类不默认选中，打开作品标签后从当前读者频道下选择。")}
+                  </small>
                 </span>
               </button>
             </div>
@@ -494,15 +564,19 @@ export function ProjectForm() {
 
           <div className="selected-tag-panel">
             <div>
-              <div className="field-label">主题与角色</div>
-              <div className="muted">主题 {selectedThemeCount}/{maxSelectedTagsPerGroup}，角色 {selectedRoleCount}/{maxSelectedTagsPerGroup}</div>
+              <div className="field-label">{tagTaxonomyStyle === "qidian" ? "子类" : "主题与角色"}</div>
+              <div className="muted">
+                {tagTaxonomyStyle === "qidian"
+                  ? `子类 ${selectedSubCategory ? "1" : "0"}/1`
+                  : `主题 ${selectedThemeCount}/${maxSelectedTagsPerGroup}，角色 ${selectedRoleCount}/${maxSelectedTagsPerGroup}`}
+              </div>
             </div>
             <div className="selected-tag-list">
               {selectedTags.length > 0 ? selectedTags.map((tag) => (
                 <button key={tag} className="selected-tag-chip" type="button" onClick={() => toggleTag(tag)}>
                   {tag}
                 </button>
-              )) : <span className="muted">暂未选择主题或角色</span>}
+              )) : <span className="muted">{tagTaxonomyStyle === "qidian" ? "暂未选择子类" : "暂未选择主题或角色"}</span>}
             </div>
             <button className="button tag-dialog-trigger" type="button" onClick={() => setIsTagDialogOpen(true)}>
               打开作品标签
@@ -540,12 +614,12 @@ export function ProjectForm() {
                   </nav>
 
                   <div className="tag-dialog-options">
-                    {activeTagSection === "mainCategories" ? taxonomy.mainCategories.map((category) => (
+                    {activeTagSection === "mainCategories" && tagTaxonomyStyle === "fanqie" ? taxonomy.mainCategories.map((category) => (
                       <button
                         key={category.name}
-                        className={`taxonomy-card ${genre === category.name ? "selected" : ""}`}
+                        className={`taxonomy-card taxonomy-card-main ${genre === category.name ? "selected" : ""}`}
                         type="button"
-                        onClick={() => setGenre(category.name)}
+                        onClick={() => updateGenre(category.name)}
                       >
                         <span className="taxonomy-card-icon" aria-hidden="true">{category.name.slice(0, 1)}</span>
                         <span>
@@ -555,7 +629,22 @@ export function ProjectForm() {
                       </button>
                     )) : null}
 
-                    {activeTagSection === "themes" ? taxonomy.themes.map((tag) => (
+                    {activeTagSection === "mainCategories" && tagTaxonomyStyle === "qidian" ? qidianTaxonomy.map((category) => (
+                      <button
+                        key={category.name}
+                        className={`taxonomy-card taxonomy-card-main ${genre === category.name ? "selected" : ""}`}
+                        type="button"
+                        onClick={() => updateGenre(category.name)}
+                      >
+                        <span className="taxonomy-card-icon" aria-hidden="true">{category.name.slice(0, 1)}</span>
+                        <span>
+                          <strong>{category.name}</strong>
+                          <small>{category.description}</small>
+                        </span>
+                      </button>
+                    )) : null}
+
+                    {activeTagSection === "themes" && tagTaxonomyStyle === "fanqie" ? taxonomy.themes.map((tag) => (
                       <button
                         key={tag}
                         className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
@@ -568,7 +657,7 @@ export function ProjectForm() {
                       </button>
                     )) : null}
 
-                    {activeTagSection === "roles" ? taxonomy.roles.map((tag) => (
+                    {activeTagSection === "roles" && tagTaxonomyStyle === "fanqie" ? taxonomy.roles.map((tag) => (
                       <button
                         key={tag}
                         className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
@@ -580,11 +669,34 @@ export function ProjectForm() {
                         <strong>{tag}</strong>
                       </button>
                     )) : null}
+
+                    {activeTagSection === "subCategories" && tagTaxonomyStyle === "qidian" ? (
+                      currentSubCategories.length > 0 ? currentSubCategories.map((tag) => (
+                        <button
+                          key={tag}
+                          className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
+                          type="button"
+                          onClick={() => toggleTag(tag)}
+                        >
+                          <span className="taxonomy-card-icon alt" aria-hidden="true">{tag.slice(0, 1)}</span>
+                          <strong>{tag}</strong>
+                        </button>
+                      )) : (
+                        <div className="taxonomy-empty">
+                          <strong>先选择主分类</strong>
+                          <span>起点体系需要先选玄幻、奇幻、都市等大类，再选择对应子类。</span>
+                        </div>
+                      )
+                    ) : null}
                   </div>
                 </div>
 
                 <div className="tag-dialog-foot">
-                  <span>主分类必选且只能选一个，主题最多可选 2 个，角色最多可选 2 个</span>
+                  <span>
+                    {tagTaxonomyStyle === "qidian"
+                      ? "起点体系：主分类只能选一个，子类最多选一个"
+                      : "番茄体系：主分类必选且只能选一个，主题最多可选 2 个，角色最多可选 2 个"}
+                  </span>
                   <div className="hero-actions">
                     <button className="button" type="button" onClick={() => setIsTagDialogOpen(false)}>
                       取消
@@ -757,23 +869,20 @@ export function ProjectForm() {
       </div>
 
       <aside className="book-create-side">
-        <div className="task-block">
-          <div className="task-title">创建后写入</div>
-          <div className="muted">作品信息、目标读者、核心爽点、金手指、开局钩子和主角档案。</div>
-        </div>
-        <div className="task-block">
-          <div className="task-title">创作项目下一步</div>
-          <div className="muted">进入状态页检查创作圣经，再去创作页生成章节任务卡。</div>
-        </div>
-        <div className="task-block">
-          <div className="task-title">拆书项目下一步</div>
-          <div className="muted">拆书项目已独立成轻量入口，只需要项目名、题材和分析目标。</div>
-          <div className="hero-actions">
-            <Link href="/projects/new/analysis" className="button">
-              去新建拆书
-            </Link>
-          </div>
-        </div>
+        <nav className="book-step-nav book-step-nav-vertical" aria-label="新书创建步骤">
+          {creationSteps.map((step) => (
+            <button
+              key={step.id}
+              type="button"
+              className={activeStep === step.id ? "active" : ""}
+              aria-current={activeStep === step.id ? "step" : undefined}
+              onClick={() => scrollToStep(step.id)}
+            >
+              <span>{step.index}</span>
+              <strong>{step.label}</strong>
+            </button>
+          ))}
+        </nav>
       </aside>
     </form>
   );

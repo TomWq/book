@@ -11,20 +11,7 @@ import {
 } from "@/lib/projects";
 import { Panel } from "@/components/panel";
 import { ProjectCover } from "@/components/project-cover";
-
-function countTextCharacters(value: string) {
-  return value.replace(/\s/g, "").length;
-}
-
-function isSameLocalDay(value: string, date: Date) {
-  const target = new Date(value);
-
-  return (
-    target.getFullYear() === date.getFullYear() &&
-    target.getMonth() === date.getMonth() &&
-    target.getDate() === date.getDate()
-  );
-}
+import { countTextCharacters, isSameLocalDay } from "@/lib/writing-stats";
 
 function ProjectListItem({
   project,
@@ -92,17 +79,13 @@ export default async function HomePage() {
         label: "拆书项目",
         title: "把别人的爆款拆成可复用结构",
         description: "适合先研究样本，沉淀公式、模板和爽点节奏。",
-        steps: ["导入原文", "自动分章", "逐章拆解", "整书节奏", "保存模板"],
-        href: "/login?next=/projects/new/analysis",
-        action: "开始拆书"
+        steps: ["导入原文", "自动分章", "逐章拆解", "整书节奏", "保存模板"]
       },
       {
         label: "创作新书",
         title: "把自己的新书按状态持续写下去",
         description: "适合已经有题材方向，直接建立作品、设定和章节台账。",
-        steps: ["新建作品", "完善设定", "生成任务卡", "生成正文", "更新状态"],
-        href: "/register",
-        action: "创建新书"
+        steps: ["新建作品", "完善设定", "生成任务卡", "生成正文", "更新状态"]
       }
     ];
     const audiences = [
@@ -150,18 +133,20 @@ export default async function HomePage() {
             <p>
               拆章节节奏、爽点和主循环，沉淀可迁移模板，再用任务卡、章节台账和项目状态管理持续推进连载。
             </p>
+            <div className="public-privacy-note">
+              <strong>本地优先，保护创作隐私</strong>
+              <span>作品、草稿、设定和项目数据保存在你的电脑里，不上传到我们的服务器。</span>
+            </div>
             <div className="hero-actions">
-              <Link href="/register" className="button primary">
-                免费开始
-              </Link>
-              <Link href="/login?next=/projects/new/analysis" className="button hero-secondary">
-                先拆一本书
+              <Link href="/download" className="button primary">
+                下载客户端
               </Link>
             </div>
             <div className="public-proof">
               <span><strong>30 章</strong>拆书验收链路</span>
               <span><strong>前 100 章</strong>节奏规划</span>
               <span><strong>人物 / 伏笔 / 地图</strong>长篇状态管理</span>
+              <span><strong>本地数据</strong>隐私保护</span>
             </div>
           </div>
         </section>
@@ -188,9 +173,6 @@ export default async function HomePage() {
                     </li>
                   ))}
                 </ol>
-                <Link href={workflow.href} className="public-track-action">
-                  {workflow.action}
-                </Link>
               </div>
             ))}
           </div>
@@ -280,9 +262,14 @@ export default async function HomePage() {
             title="创作工作区"
             description="只看长篇创作进度：正文、任务卡、台账和审稿。"
             action={
-              <Link href={writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new"} className="button primary">
-                {writingProject ? "继续创作" : "新建创作项目"}
-              </Link>
+              <div className="panel-action-row">
+                <Link href="/stats" className="button">
+                  创作统计
+                </Link>
+                <Link href={writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new"} className="button primary">
+                  {writingProject ? "继续创作" : "新建创作项目"}
+                </Link>
+              </div>
             }
           >
             <div className="grid stats" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>

@@ -34,6 +34,7 @@ export type StoredProject = {
 
 export type InitialProjectStateInput = {
   targetReader?: string;
+  tagTaxonomyStyle?: "fanqie" | "qidian";
   tags?: string[];
   protagonistNames?: string[];
   coreSellingPoint?: string;
@@ -394,10 +395,29 @@ export type StoredEditReport = {
   updatedAt: string;
 };
 
+export type StoredAssistantThread = {
+  id: string;
+  ownerUserId: string;
+  projectId?: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StoredAssistantMessage = {
+  id: string;
+  threadId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+};
+
 export type StoredUser = {
   id: string;
   email: string;
   name: string;
+  penName?: string;
+  penNameSetAt?: string;
   passwordSalt: string;
   passwordHash: string;
   role: "user" | "admin";
@@ -411,6 +431,7 @@ export type StoredUser = {
   licenseMachineHash?: string;
   licenseActivatedAt?: string;
   licenseExpiresAt?: string;
+  licenseSignedOutAt?: string;
   onboardingCompletedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -489,6 +510,8 @@ export type AppStore = {
   chapterLedgers: StoredChapterLedger[];
   reviewReports: StoredReviewReport[];
   editReports: StoredEditReport[];
+  assistantThreads: StoredAssistantThread[];
+  assistantMessages: StoredAssistantMessage[];
   creditTransactions: StoredCreditTransaction[];
   licenseCodes: StoredLicenseCode[];
   licenseActivationLogs: StoredLicenseActivationLog[];

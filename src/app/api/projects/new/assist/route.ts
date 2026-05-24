@@ -34,6 +34,7 @@ export async function POST(request: Request) {
       openingHook: String(body.openingHook ?? ""),
       description: String(body.description ?? ""),
       titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie",
+      tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",
       descriptionWritingStyle: body.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie",
       avoidTitles: list(body.avoidTitles)
     });

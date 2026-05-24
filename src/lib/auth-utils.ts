@@ -5,6 +5,8 @@ export type AuthUserView = {
   id: string;
   email: string;
   name: string;
+  penName?: string;
+  penNameSetAt?: string;
   role: "user" | "admin";
   plan: "trial" | "creator" | "studio";
   licenseCustomerId?: string;
@@ -34,6 +36,8 @@ export function toAuthUser(user: StoredUser): AuthUserView {
     id: user.id,
     email: user.email,
     name: user.name,
+    penName: user.penName,
+    penNameSetAt: user.penNameSetAt,
     role: user.role,
     plan: user.plan ?? "trial",
     licenseCustomerId: user.licenseCustomerId,

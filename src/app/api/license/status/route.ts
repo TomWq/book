@@ -1,4 +1,4 @@
-import { getSubscriptionActivationStatus } from "@/lib/projects";
+import { getSubscriptionActivationStatus } from "@/lib/desktop-license-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

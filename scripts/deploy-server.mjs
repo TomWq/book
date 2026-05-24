@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import os from "node:os";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = resolve(rootDir, "deploy.config.json");
@@ -86,6 +87,10 @@ async function main() {
   const remoteService = shellQuote(config.service);
   const remotePm2Name = shellQuote(config.pm2Name);
   const remotePort = String(config.port);
+  const sshKeepAlive = ["-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=6"];
+  const sshArgs = ["-p", remotePort, ...sshKeepAlive];
+  const scpArgs = ["-P", remotePort, ...sshKeepAlive];
+  const rsyncSsh = ["ssh", "-p", remotePort, ...sshKeepAlive].join(" ");
 
   console.log(`部署目标: ${target}:${config.path}`);
   console.log("同步代码...");
@@ -93,6 +98,8 @@ async function main() {
   await run("rsync", [
     "-az",
     "--delete",
+    "-e",
+    rsyncSsh,
     "--exclude",
     ".git",
     "--exclude",
@@ -103,6 +110,12 @@ async function main() {
     ".env",
     "--exclude",
     ".env.*",
+    "--exclude",
+    "public/downloads",
+    "--exclude",
+    "release",
+    "--exclude",
+    "release/***",
     "--exclude",
     "dev.db",
     "--exclude",
@@ -129,25 +142,79 @@ async function main() {
     `${target}:${config.path}/`
   ]);
 
-  const remoteScript = `set -e
+  const remoteScript = `set -eo pipefail
+trap 'echo "[deploy] 失败：第 $LINENO 行，退出码 $?" >&2' ERR
+echo "[deploy] 进入目录"
 cd ${remotePath}
+echo "[deploy] 当前目录：$(pwd)"
+if [ -f /etc/profile ]; then . /etc/profile; fi
+if [ -f "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"; fi
+if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi
+if [ -f "$HOME/.profile" ]; then . "$HOME/.profile"; fi
+if ! command -v npm >/dev/null 2>&1; then
+  for npm_bin in /usr/local/bin/npm /usr/bin/npm /www/server/nodejs/*/bin/npm "$HOME"/.nvm/versions/node/*/bin/npm; do
+    if [ -x "$npm_bin" ]; then
+      export PATH="$(dirname "$npm_bin"):$PATH"
+      break
+    fi
+  done
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "[deploy] 找不到 npm。请在服务器安装 Node.js，或把 npm 所在目录加入 PATH。" >&2
+  exit 127
+fi
+echo "[deploy] Node：$(node -v 2>/dev/null || echo 未找到)"
+echo "[deploy] npm：$(npm -v)"
+needs_install=0
 if [ ${forceInstall ? 1 : 0} -eq 1 ] || [ ! -x node_modules/.bin/next ]; then
+  needs_install=1
+fi
+if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+  needs_install=1
+fi
+if ! node -e "require.resolve('react-markdown'); require.resolve('remark-gfm')" >/dev/null 2>&1; then
+  needs_install=1
+fi
+if [ "$needs_install" -eq 1 ]; then
+  echo "[deploy] 安装/更新依赖"
   npm install --no-audit --no-fund
+else
+  echo "[deploy] 依赖已存在，跳过 npm install"
 fi
 if [ ! -f node_modules/better-sqlite3/build/Release/better_sqlite3.node ]; then
+  echo "[deploy] 重建 better-sqlite3"
   npm rebuild better-sqlite3 --build-from-source --no-audit --no-fund
 fi
+echo "[deploy] 构建 Next"
 npm run build
 if systemctl status ${remoteService} >/dev/null 2>&1; then
+  echo "[deploy] 重启 systemd 服务：${config.service}"
   systemctl restart ${remoteService}
 elif command -v pm2 >/dev/null 2>&1; then
+  echo "[deploy] 重启 PM2 服务：${config.pm2Name}"
   pm2 restart ${remotePm2Name} || pm2 start npm --name ${remotePm2Name} -- start
 else
+  echo "[deploy] 后台启动 npm start"
   nohup npm start >/tmp/book-license-center.log 2>&1 &
-fi`;
+fi
+echo "[deploy] 远端完成"`;
 
   console.log("远端构建并重启...");
-  await run("ssh", ["-p", remotePort, target, `bash -lc ${shellQuote(remoteScript)}`]);
+  const tempDir = mkdtempSync(join(os.tmpdir(), "book-deploy-"));
+  const localScriptPath = join(tempDir, "deploy-remote.sh");
+  const remoteScriptPath = `/tmp/book-deploy-${Date.now()}.sh`;
+
+  try {
+    writeFileSync(localScriptPath, remoteScript, "utf8");
+    await run("scp", [...scpArgs, localScriptPath, `${target}:${remoteScriptPath}`]);
+    await run("ssh", [
+      ...sshArgs,
+      target,
+      `bash -lc ${shellQuote(`bash ${shellQuote(remoteScriptPath)}; status=$?; rm -f ${shellQuote(remoteScriptPath)}; exit $status`)}`
+    ]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 
   console.log("部署完成");
 }

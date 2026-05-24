@@ -36,6 +36,7 @@ export async function POST(request: Request) {
     coverImageUrl: String(body.coverImageUrl ?? ""),
     initialState: {
       targetReader: String(body.targetReader ?? ""),
+      tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",
       tags: list(body.tags),
       protagonistNames: list(body.protagonistNames),
       coreSellingPoint: String(body.coreSellingPoint ?? ""),

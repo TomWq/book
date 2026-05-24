@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
+import { isDesktopRuntime } from "@/lib/app-runtime";
 
 export const metadata: Metadata = {
   title: "AI 网文写作助手",
@@ -15,6 +16,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const desktopRuntime = isDesktopRuntime();
+
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
@@ -24,7 +27,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>
+      <body className={desktopRuntime ? "desktop-runtime" : undefined}>
         <AppShell>{children}</AppShell>
       </body>
     </html>

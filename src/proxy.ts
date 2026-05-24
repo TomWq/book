@@ -1,19 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { getAdminLoginPath } from "@/lib/admin-login-path";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 
 const SESSION_COOKIE = "nw_session";
 
-type DesktopLicenseStatus = {
-  currentUser?: { id: string } | null;
-  activated?: boolean;
-  expired?: boolean;
-  message?: string;
-};
-
-function nextWithPath(request: NextRequest) {
+function nextWithPath(request: NextRequest, pathname = request.nextUrl.pathname) {
   const requestHeaders = new Headers(request.headers);
-  requestHeaders.set("x-nw-pathname", request.nextUrl.pathname);
+  requestHeaders.set("x-nw-pathname", pathname);
   return NextResponse.next({
+    request: {
+      headers: requestHeaders
+    }
+  });
+}
+
+function rewriteWithPath(request: NextRequest, pathname: string, headerPath = pathname) {
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nw-pathname", headerPath);
+
+  const url = request.nextUrl.clone();
+  url.pathname = pathname;
+
+  return NextResponse.rewrite(url, {
     request: {
       headers: requestHeaders
     }
@@ -23,8 +31,10 @@ function nextWithPath(request: NextRequest) {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
+  const adminLoginPath = getAdminLoginPath();
   const isAsset =
     pathname.startsWith("/_next") ||
+    pathname.startsWith("/downloads/") ||
     pathname === "/favicon.ico";
 
   if (isAsset) {
@@ -34,10 +44,15 @@ export async function proxy(request: NextRequest) {
   if (isDesktopRuntime()) {
     const isLicenseExemptPath =
       pathname === "/activate" ||
+      pathname === "/download" ||
+      pathname === "/downloads" ||
       pathname === "/api/license/activate" ||
       pathname === "/api/license/restore" ||
       pathname === "/api/license/status" ||
       pathname === "/api/license/verify" ||
+      pathname === "/api/app/update/manifest" ||
+      pathname === "/api/app/update/check" ||
+      pathname.startsWith("/api/download/") ||
       pathname === "/api/health" ||
       pathname === "/api/jobs/worker";
 
@@ -45,27 +60,7 @@ export async function proxy(request: NextRequest) {
       return nextWithPath(request);
     }
 
-    const statusUrl = new URL("/api/license/status", request.url);
-    let status: DesktopLicenseStatus | null = null;
-
-    try {
-      const response = await fetch(statusUrl, {
-        headers: {
-          cookie: request.headers.get("cookie") ?? ""
-        },
-        cache: "no-store"
-      });
-
-      if (response.ok) {
-        status = (await response.json().catch(() => null)) as DesktopLicenseStatus | null;
-      }
-    } catch {
-      status = null;
-    }
-
-    const currentUser = status?.currentUser ?? null;
-
-    if (currentUser) {
+    if (hasSession) {
       if (pathname === "/login" || pathname === "/register") {
         return NextResponse.redirect(new URL("/", request.url));
       }
@@ -76,7 +71,7 @@ export async function proxy(request: NextRequest) {
     if (pathname.startsWith("/api")) {
       return NextResponse.json(
         {
-          error: status?.message || "请先输入激活码"
+          error: "请先输入激活码"
         },
         { status: 401 }
       );
@@ -87,18 +82,18 @@ export async function proxy(request: NextRequest) {
     if (pathname !== "/") {
       url.searchParams.set("next", pathname);
     }
-    if (status?.message) {
-      url.searchParams.set("error", status.message);
-    }
     return NextResponse.redirect(url);
   }
 
   const publicPaths = new Set([
     "/",
-    "/login",
-    "/register",
+    "/download",
+    "/downloads",
     "/legal",
     "/api/health",
+    "/api/app/update/manifest",
+    "/api/app/update/check",
+    "/api/download",
     "/api/jobs/worker",
     "/api/license/activate",
     "/api/license/restore",
@@ -106,19 +101,31 @@ export async function proxy(request: NextRequest) {
   ]);
   const isAuthApi = pathname.startsWith("/api/auth");
 
+  if (pathname === "/api/auth/register") {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   if (isAuthApi) {
     return nextWithPath(request);
   }
 
+  if (pathname === "/login" || pathname === "/register") {
+    return NextResponse.redirect(new URL("/download", request.url));
+  }
+
   if (hasSession) {
-    if (pathname === "/login" || pathname === "/register") {
-      return NextResponse.redirect(new URL("/", request.url));
+    if (pathname === adminLoginPath) {
+      return NextResponse.redirect(new URL("/admin", request.url));
     }
 
     return nextWithPath(request);
   }
 
-  if (publicPaths.has(pathname)) {
+  if (pathname === adminLoginPath) {
+    return rewriteWithPath(request, "/login", "/login");
+  }
+
+  if (publicPaths.has(pathname) || pathname.startsWith("/api/download/")) {
     return nextWithPath(request);
   }
 
@@ -131,7 +138,7 @@ export async function proxy(request: NextRequest) {
   }
 
   const url = request.nextUrl.clone();
-  url.pathname = "/login";
+  url.pathname = adminLoginPath;
   url.searchParams.set("next", pathname);
   return NextResponse.redirect(url);
 }
