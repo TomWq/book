@@ -75,7 +75,7 @@ npm run release:tauri:status
 npm run release:download
 ```
 
-然后把 `release/` 里的三个安装包上传到 COS，最后发布下载清单：
+然后把 `release/packages/v版本号/` 里的三个安装包上传到 COS，最后发布下载清单：
 
 ```bash
 DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest

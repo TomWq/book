@@ -10,6 +10,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const configPath = path.resolve(rootDir, "deploy.config.json");
 const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
 const version = String(packageJson.version ?? "").trim();
+const releasePackageDir = path.join(rootDir, "release", "packages", `v${version}`);
 const args = new Set(process.argv.slice(2));
 const localOnly = args.has("--local-only");
 const manifestOnly = args.has("--manifest-only");
@@ -111,10 +112,10 @@ function assertReleasePackageFresh(filePath) {
 }
 
 function releaseFile(fileName) {
-  const filePath = path.join(rootDir, "release", fileName);
+  const filePath = path.join(releasePackageDir, fileName);
 
   if (!existsSync(filePath)) {
-    throw new Error(`缺少发布包：release/${fileName}。请先执行 npm run release:download。`);
+    throw new Error(`缺少发布包：release/packages/v${version}/${fileName}。请先执行 npm run release:download。`);
   }
 
   assertReleasePackageFresh(filePath);
@@ -123,14 +124,14 @@ function releaseFile(fileName) {
 }
 
 function releaseFileIfManifestOnly(fileName) {
-  const filePath = path.join(rootDir, "release", fileName);
+  const filePath = path.join(releasePackageDir, fileName);
 
   if (!manifestOnly) {
     return releaseFile(fileName);
   }
 
   if (!existsSync(filePath)) {
-    throw new Error(`缺少发布包：release/${fileName}。请先执行 npm run release:download。`);
+    throw new Error(`缺少发布包：release/packages/v${version}/${fileName}。请先执行 npm run release:download。`);
   }
 
   return filePath;
@@ -218,7 +219,9 @@ async function main() {
     writeFileSync(path.join(tempDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
     writeFileSync(path.join(localDownloadsDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
     mkdirSync(path.join(rootDir, "release"), { recursive: true });
+    mkdirSync(releasePackageDir, { recursive: true });
     writeFileSync(path.join(rootDir, "release", "download-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    writeFileSync(path.join(releasePackageDir, "download-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 
     if (localOnly) {
       console.log("[publish-downloads] 已生成本地下载中心预览：public/downloads/");

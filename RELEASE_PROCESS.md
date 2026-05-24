@@ -83,7 +83,7 @@ GitHub Release 里的文件名可能会被简化，所以不要直接拿它的�
 npm run release:download
 ```
 
-它会下载并整理到 `release/`：
+它会下载并整理到当前版本专用目录，例如 `release/packages/v1.0.1/`：
 
 ```text
 AI网文写作助手-Setup-版本号-x64.exe
@@ -100,7 +100,9 @@ ai-novel-downloads-1253439621
 ap-beijing
 ```
 
-把 `release/` 里的三个安装包上传到 COS。
+把 `release/packages/v版本号/` 里的三个安装包上传到 COS。
+
+这个目录里会有一个 `UPLOAD_THESE_FILES.txt` 说明文件，不需要上传它。
 
 旧包不要马上删除，建议至少保留最近 2 到 3 个版本，方便回滚。
 
@@ -159,7 +161,7 @@ npm run release:tauri:status
 npm run release:download
 ```
 
-然后上传 `release/` 里的三个安装包到 COS，最后：
+然后上传 `release/packages/v版本号/` 里的三个安装包到 COS，最后：
 
 ```bash
 DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest

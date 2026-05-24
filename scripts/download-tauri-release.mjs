@@ -1,4 +1,4 @@
-import { mkdir, rm, rename } from "node:fs/promises";
+import { mkdir, rm, rename, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -9,6 +9,7 @@ const releaseDir = path.join(root, "release");
 const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 const version = String(packageJson.version ?? "").trim();
 const tag = `app-v${version}`;
+const packageDir = path.join(releaseDir, "packages", `v${version}`);
 
 const assets = [
   {
@@ -47,8 +48,8 @@ function run(command, args) {
 }
 
 async function downloadAsset(asset) {
-  const tempPath = path.join(releaseDir, `.tauri-${asset.output}`);
-  const outputPath = path.join(releaseDir, asset.output);
+  const tempPath = path.join(packageDir, `.tauri-${asset.output}`);
+  const outputPath = path.join(packageDir, asset.output);
 
   await rm(tempPath, { force: true });
   await rm(outputPath, { force: true });
@@ -70,7 +71,7 @@ async function downloadAsset(asset) {
   }
 
   await rename(tempPath, outputPath);
-  console.log(`[release-download] 已保存：release/${asset.output}`);
+  console.log(`[release-download] 已保存：release/packages/v${version}/${asset.output}`);
 }
 
 async function main() {
@@ -78,13 +79,29 @@ async function main() {
     throw new Error(`package.json 版本号异常：${version || "未设置"}`);
   }
 
-  await mkdir(releaseDir, { recursive: true });
+  await rm(packageDir, { recursive: true, force: true });
+  await mkdir(packageDir, { recursive: true });
 
   for (const asset of assets) {
     await downloadAsset(asset);
   }
 
-  console.log("[release-download] 三端安装包已下载到 release/。");
+  await writeFile(
+    path.join(packageDir, "UPLOAD_THESE_FILES.txt"),
+    [
+      "上传 COS 时只上传本目录里的三个安装包：",
+      "",
+      `AI网文写作助手-Setup-${version}-x64.exe`,
+      `AI网文写作助手-${version}-arm64-mac.dmg`,
+      `AI网文写作助手-${version}-x64-mac.dmg`,
+      "",
+      "不要上传这个说明文件。",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+
+  console.log(`[release-download] 三端安装包已下载到 release/packages/v${version}/。`);
 }
 
 main().catch((error) => {
