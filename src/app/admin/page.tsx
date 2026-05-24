@@ -267,7 +267,7 @@ export default async function AdminPage({
             ) : (
               <div className="empty-state">
                 <strong>暂无安装包清单</strong>
-                <span>先执行 desktop:publish 上传安装包。</span>
+                <span>先执行 downloads:manifest 发布安装包清单。</span>
               </div>
             )}
           </div>

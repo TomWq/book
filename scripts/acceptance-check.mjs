@@ -50,7 +50,7 @@ const requiredRoutes = [
   "src/app/api/jobs/worker/route.ts",
   "scripts/run-worker.mjs",
   "scripts/main-flow-check.mjs",
-  "scripts/desktop-release.mjs",
+  "scripts/download-tauri-release.mjs",
   "scripts/publish-downloads.mjs"
 ];
 
@@ -98,7 +98,7 @@ assertIncludes("src/lib/projects.ts", [
   "getProjectAnalysisForUser",
   "getProjectWritingStateForUser"
 ]);
-assertIncludes("package.json", ["acceptance:flow", "desktop:dist:release", "desktop:publish", "desktop:publish:local"]);
+assertIncludes("package.json", ["acceptance:flow", "release:tauri", "release:download", "downloads:manifest"]);
 assertIncludes("src/lib/app-update.ts", [
   "APP_LATEST_VERSION",
   "APP_UPDATE_DOWNLOAD_WIN_URL",

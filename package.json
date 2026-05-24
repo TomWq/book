@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "description": "面向网文作者的爆款拆解、模板迁移和长篇创作工作台",
   "author": "AI 网文写作助手",
-  "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev",
     "dev:public": "APP_RUNTIME=cloud NEXT_PUBLIC_APP_RUNTIME=cloud next dev",
@@ -12,38 +11,22 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "desktop:icons": "node scripts/generate-desktop-icons.mjs",
-    "desktop:clean": "node scripts/clean-desktop-build.mjs",
-    "desktop:dev": "node scripts/electron-dev.mjs",
-    "desktop:preview": "node scripts/desktop-preview-build.mjs",
-    "desktop:dist": "node scripts/desktop-build.mjs",
-    "desktop:dist:mac": "node scripts/desktop-build.mjs --mac",
-    "desktop:dist:mac:arm64": "node scripts/desktop-build.mjs --mac --arm64",
-    "desktop:dist:mac:x64": "node scripts/desktop-build.mjs --mac --x64",
-    "desktop:dist:mac:dir": "node scripts/desktop-build.mjs --mac --dir",
-    "desktop:dist:mac:arm64:dir": "node scripts/desktop-build.mjs --mac --arm64 --dir",
-    "desktop:dist:mac:x64:dir": "node scripts/desktop-build.mjs --mac --x64 --dir",
-    "desktop:dist:win": "node scripts/desktop-build.mjs --win --x64",
-    "desktop:dist:release": "node scripts/desktop-release.mjs",
-    "desktop:dist:all": "node scripts/desktop-release.mjs",
-    "desktop:publish": "node scripts/publish-downloads.mjs",
-    "desktop:publish:local": "node scripts/publish-downloads.mjs --local-only",
-    "desktop:publish:manifest": "node scripts/publish-downloads.mjs --manifest-only",
+    "icons:generate": "node scripts/generate-desktop-icons.mjs",
     "tauri:prepare": "node scripts/tauri-prepare.mjs",
     "tauri:dev": "npm run tauri:prepare && tauri dev",
     "tauri:build": "node scripts/tauri-build.mjs",
     "tauri:build:mac:arm64": "node scripts/tauri-build.mjs --mac --arm64",
     "tauri:build:mac:x64": "node scripts/tauri-build.mjs --mac --x64",
     "tauri:build:win:x64": "node scripts/tauri-build.mjs --win --x64",
+    "release:tauri": "gh workflow run \"Tauri Release\" --ref main",
+    "release:tauri:status": "gh run list --workflow \"Tauri Release\" --limit 5",
+    "release:download": "node scripts/download-tauri-release.mjs",
+    "downloads:publish": "node scripts/publish-downloads.mjs",
+    "downloads:local": "node scripts/publish-downloads.mjs --local-only",
+    "downloads:manifest": "node scripts/publish-downloads.mjs --manifest-only",
     "deploy:server": "node scripts/deploy-server.mjs",
     "acceptance": "node scripts/acceptance-check.mjs",
     "acceptance:flow": "node scripts/main-flow-check.mjs",
-    "release:check": "node scripts/release-check.mjs --win",
-    "release:check:win": "node scripts/release-check.mjs --win",
-    "release:check:mac": "node scripts/release-check.mjs --mac",
-    "release:check:mac:arm64": "node scripts/release-check.mjs --mac --arm64",
-    "release:check:mac:x64": "node scripts/release-check.mjs --mac --x64",
-    "release:check:all": "node scripts/release-check.mjs --win && node scripts/release-check.mjs --mac --arm64 && node scripts/release-check.mjs --mac --x64",
     "worker": "node scripts/run-worker.mjs",
     "activation:reset": "node scripts/reset-local-activation.mjs"
   },
@@ -64,76 +47,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "electron": "^42.2.0",
-    "electron-builder": "^26.8.1",
     "sharp": "^0.34.5",
     "typescript": "^5.0.0"
-  },
-  "build": {
-    "appId": "com.ai-novel-workbench.desktop",
-    "productName": "AI 网文写作助手",
-    "copyright": "Copyright © 2026 AI 网文写作助手",
-    "asar": false,
-    "npmRebuild": false,
-    "buildDependenciesFromSource": false,
-    "afterPack": "scripts/after-pack.mjs",
-    "directories": {
-      "buildResources": "build",
-      "output": "release"
-    },
-    "files": [
-      "electron/**/*",
-      "build/icon.png",
-      ".next/standalone/**/*",
-      ".next/static/**/*",
-      "next.config.mjs",
-      "package.json",
-      "!node_modules/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "build/node-runtime",
-        "to": "node-runtime"
-      }
-    ],
-    "extraMetadata": {
-      "main": "electron/main.cjs"
-    },
-    "mac": {
-      "category": "public.app-category.productivity",
-      "icon": "build/icon.icns",
-      "artifactName": "AI网文写作助手-${version}-${arch}-mac.${ext}",
-      "identity": null,
-      "hardenedRuntime": false,
-      "target": [
-        "zip"
-      ]
-    },
-    "dmg": {
-      "title": "AI 网文写作助手 ${version}",
-      "artifactName": "AI网文写作助手-${version}-${arch}.${ext}"
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        "nsis"
-      ],
-      "artifactName": "AI网文写作助手-Setup-${version}-${arch}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "AI 网文写作助手"
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "target": [
-        "AppImage"
-      ],
-      "artifactName": "AI网文写作助手-${version}-${arch}.${ext}"
-    }
   }
 }

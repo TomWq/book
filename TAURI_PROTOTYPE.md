@@ -1,6 +1,6 @@
 # Tauri 桌面壳说明
 
-这个目录是用来验证并推进“方案 1”的 Tauri 桌面壳：
+这个目录是当前正式桌面端的 Tauri 外壳：
 
 ```text
 Tauri 负责桌面窗口、启动页和进程生命周期
@@ -8,7 +8,7 @@ Tauri 负责桌面窗口、启动页和进程生命周期
 本地 SQLite、授权、页面和业务逻辑继续复用现有代码
 ```
 
-它暂时不会替代当前 Electron 发布流程，也不会影响 `desktop:*` 命令。等 macOS / Windows 都验证稳定后，再决定是否切换正式发布渠道。
+当前发布流程已经切到 GitHub Actions 构建 Tauri 三端安装包。正式发版步骤见 `RELEASE_PROCESS.md`。
 
 ## 当前目标
 

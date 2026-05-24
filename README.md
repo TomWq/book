@@ -61,7 +61,7 @@
 
 项目现在按运行端拆分，通过环境变量 `APP_RUNTIME` 控制：
 
-1. `desktop`：Electron 客户端。首次启动输入授权码，数据默认保存在本机，用户在 AI 设置页填写自己的请求地址、API Key 和模型名。
+1. `desktop`：Tauri 客户端。首次启动输入授权码，数据默认保存在本机，用户在 AI 设置页填写自己的请求地址、API Key 和模型名。
 2. `cloud`：云端授权中心和管理员后台。部署到 Vercel/服务器，用来生成授权码、校验客户端激活、管理客户和版本发布。
 
 桌面客户端建议设置：
@@ -91,22 +91,23 @@ ADMIN_EMAILS="你的管理员邮箱"
 /download
 ```
 
-本地打好 Windows x64、macOS arm64、macOS x64 三个安装包后，可以执行：
+GitHub Actions 打好 Windows x64、macOS arm64、macOS x64 三个安装包后，可以执行：
 
 ```bash
-npm run desktop:publish
+npm run release:download
+DOWNLOAD_BASE_URL="https://你的下载域名" npm run downloads:manifest
 ```
 
-脚本会把安装包上传到服务器 `public/downloads/`，并生成 `manifest.json`，下载中心页面和客户端“检查更新”都会读取这份发布清单。
+脚本会整理安装包并生成 `manifest.json`，下载中心页面和客户端“检查更新”都会读取这份发布清单。
 
 ## 作者端客户端
 
-作者端采用 Electron 承载现有 Next 工作台，管理端继续部署在云端授权中心。
+作者端采用 Tauri 承载现有 Next 工作台，管理端继续部署在云端授权中心。
 
 ```bash
-npm run desktop:dev      # 本地开发
-npm run desktop:preview  # 构建后用 Electron 预览
-npm run desktop:dist     # 打安装包
+npm run tauri:dev             # 本地客户端开发
+npm run tauri:build:mac:arm64 # 本机打 Apple 芯片 Mac 包
+npm run release:tauri         # GitHub Actions 打三端发布包
 ```
 
 详细说明见 [DESKTOP.md](./DESKTOP.md)。
@@ -590,7 +591,7 @@ Web 前端
 当前最应该先做的是：
 
 1. 跑完整体验收闭环，把“拆书 → 模板 → 大纲 → 创作 → 审稿”真正串通。
-2. 完成 Electron 客户端打包、自动更新和本地数据库路径迁移。
+2. 完成 Tauri 客户端打包、更新发布和本地数据库路径迁移。
 3. 补齐自动化测试和错误提示，让真实用户不容易卡住。
 
 现在已经不是搭骨架的阶段，而是把整套工作流磨顺的阶段。

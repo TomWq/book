@@ -104,7 +104,7 @@ function assertReleasePackageFresh(filePath) {
         `发布包比桌面图标资源旧：${path.relative(rootDir, filePath)}`,
         `发布包时间：${packageTime}`,
         `图标时间：${iconTime}`,
-        "请先重新打包：npm run desktop:dist:release，然后再执行 npm run desktop:publish 或 npm run desktop:publish:local。"
+        "请先重新下载最新发布包：npm run release:download，然后再执行 npm run downloads:manifest 或 npm run downloads:local。"
       ].join("\n")
     );
   }
@@ -114,7 +114,7 @@ function releaseFile(fileName) {
   const filePath = path.join(rootDir, "release", fileName);
 
   if (!existsSync(filePath)) {
-    throw new Error(`缺少发布包：release/${fileName}。请先执行 npm run desktop:dist:release。`);
+    throw new Error(`缺少发布包：release/${fileName}。请先执行 npm run release:download。`);
   }
 
   assertReleasePackageFresh(filePath);
@@ -130,7 +130,7 @@ function releaseFileIfManifestOnly(fileName) {
   }
 
   if (!existsSync(filePath)) {
-    throw new Error(`缺少发布包：release/${fileName}。请先执行 npm run desktop:dist:release。`);
+    throw new Error(`缺少发布包：release/${fileName}。请先执行 npm run release:download。`);
   }
 
   return filePath;
@@ -168,13 +168,13 @@ async function main() {
     },
     darwinArm64: {
       label: "macOS Apple 芯片",
-      fileName: `AI网文写作助手-${version}-arm64-mac.zip`,
+      fileName: `AI网文写作助手-${version}-arm64-mac.dmg`,
       platform: "darwin",
       arch: "arm64"
     },
     darwinX64: {
       label: "macOS Intel",
-      fileName: `AI网文写作助手-${version}-x64-mac.zip`,
+      fileName: `AI网文写作助手-${version}-x64-mac.dmg`,
       platform: "darwin",
       arch: "x64"
     }
