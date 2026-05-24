@@ -10,8 +10,27 @@ permissions:
   contents: write
 
 jobs:
+  cleanup-draft-release:
+    name: Clean draft release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Delete existing draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="app-v$(node -p "require('./package.json').version")"
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q true; then
+            gh release delete "$TAG" --yes
+          else
+            echo "No existing draft release for $TAG."
+          fi
+
   build-tauri:
     name: Build ${{ matrix.name }}
+    needs: cleanup-draft-release
     runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false
