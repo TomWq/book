@@ -4,8 +4,8 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import type DatabaseConstructor from "better-sqlite3";
 
-const require = createRequire(import.meta.url);
-const loadSqlite = () => require("better-sqlite3") as typeof DatabaseConstructor;
+const runtimeRequire = createRequire(path.resolve(/*turbopackIgnore: true*/ process.cwd(), "server.js"));
+const loadSqlite = () => runtimeRequire("better-sqlite3") as typeof DatabaseConstructor;
 
 const DEFAULT_STATE_ID = "default";
 
