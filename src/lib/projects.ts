@@ -90,6 +90,7 @@ import {
   buildAdminLicenseCenter,
   createActivationCode,
   getDesktopLicenseCandidate,
+  getLicenseServerUrl,
   hashActivationCode,
   normalizeActivationCode,
   normalizeLicenseText,
@@ -478,7 +479,16 @@ export async function activateSubscriptionLicense(
     throw new Error("请填写激活码");
   }
 
-  const license = (await activateLicenseViaRemoteCenter(input)) ?? (await activateLicenseWithCenter(input));
+  let license = await activateLicenseViaRemoteCenter(input);
+
+  if (!license) {
+    if (isDesktopRuntime()) {
+      const hint = getLicenseServerUrl() ? "请检查网络后重试" : "请检查打包配置是否写入授权中心地址";
+      throw new Error(`客户端未连接授权中心，${hint}`);
+    }
+
+    license = await activateLicenseWithCenter(input);
+  }
 
   const store = await readStore();
   const timestamp = now();
