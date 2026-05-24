@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 网文写作助手</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #111827;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        user-select: none;
+      }
+
+      .shell {
+        width: min(430px, calc(100vw - 48px));
+        min-height: 320px;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 18px;
+        overflow: hidden;
+        position: relative;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 28px;
+        background:
+          linear-gradient(135deg, rgba(24, 31, 47, 0.9), rgba(9, 13, 24, 0.95)),
+          linear-gradient(145deg, #273047 0%, #121a2b 48%, #0c111d 100%);
+        box-shadow: 0 34px 96px rgba(0, 0, 0, 0.42);
+      }
+
+      .shell::before {
+        content: "";
+        position: absolute;
+        inset: -30%;
+        background:
+          linear-gradient(120deg, transparent 20%, rgba(93, 171, 255, 0.16) 44%, transparent 58%),
+          radial-gradient(circle at 70% 24%, rgba(107, 244, 194, 0.22), transparent 32%),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 76px);
+        animation: drift 5.8s ease-in-out infinite alternate;
+      }
+
+      .halo {
+        width: 190px;
+        height: 190px;
+        position: absolute;
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.2);
+        filter: blur(18px);
+        animation: pulse 1.8s ease-in-out infinite;
+      }
+
+      .mark {
+        width: 92px;
+        height: 92px;
+        display: grid;
+        place-items: center;
+        position: relative;
+        border-radius: 24px;
+        background:
+          radial-gradient(circle at 72% 24%, rgba(185, 255, 232, 0.32), transparent 36%),
+          linear-gradient(135deg, #25314a, #1f5eff 52%, #15d68f);
+        box-shadow: 0 20px 42px rgba(31, 94, 255, 0.34);
+        color: #fff;
+        font-size: 42px;
+        font-weight: 900;
+        animation: float 2.4s ease-in-out infinite;
+      }
+
+      h1 {
+        position: relative;
+        margin: 6px 0 0;
+        font-size: 24px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      p,
+      small {
+        position: relative;
+        margin: 0;
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      small {
+        max-width: 310px;
+        text-align: center;
+        line-height: 1.7;
+        color: rgba(255, 255, 255, 0.46);
+      }
+
+      .loader {
+        width: 180px;
+        height: 4px;
+        overflow: hidden;
+        position: relative;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .loader::after {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 44%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #72f0c3, #7aa5ff);
+        animation: loading 1.15s ease-in-out infinite;
+      }
+
+      .error {
+        padding: 42px;
+        text-align: center;
+      }
+
+      @keyframes drift {
+        from { transform: translate3d(-2%, -1%, 0) rotate(-4deg); }
+        to { transform: translate3d(2%, 1%, 0) rotate(4deg); }
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 0.6; transform: scale(0.92); }
+        50% { opacity: 1; transform: scale(1.04); }
+      }
+
+      @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-8px); }
+      }
+
+      @keyframes loading {
+        0% { transform: translateX(-105%); }
+        52% { transform: translateX(82%); }
+        100% { transform: translateX(235%); }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="halo"></div>
+      <div class="mark">书</div>
+      <h1>AI 网文写作助手</h1>
+      <p>正在启动创作工作台</p>
+      <div class="loader" aria-hidden="true"></div>
+    </main>
+  </body>
+</html>

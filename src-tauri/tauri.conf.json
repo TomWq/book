@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI 网文写作助手",
+  "version": "1.0.0",
+  "identifier": "com.ai-novel-workbench.tauri",
+  "build": {
+    "frontendDist": "../public/tauri-placeholder",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../build/icon.png",
+      "../build/icon.icns",
+      "../build/icon.ico"
+    ],
+    "resources": {
+      "../.next/standalone": "app/.next/standalone",
+      "../.next/static": "app/.next/static",
+      "node-server-wrapper.cjs": "node-server-wrapper.cjs",
+      "../build/tauri-node-runtime": "node-runtime",
+      "../build/icon.png": "build/icon.png"
+    }
+  }
+}

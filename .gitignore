@@ -9,6 +9,8 @@ out/
 dist/
 build/
 release/
+src-tauri/target/
+src-tauri/gen/
 .vercel/
 public/downloads/
 !build/

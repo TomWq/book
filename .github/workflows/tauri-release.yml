@@ -55,7 +55,7 @@ jobs:
         run: node scripts/tauri-build.mjs --prepare-only ${{ matrix.prepareArgs }}
 
       - name: Build and upload Tauri bundles
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
