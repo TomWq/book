@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::{
     env,
     fs::{self, OpenOptions},
@@ -28,6 +30,8 @@ use url::Url;
 
 const APP_NAME: &str = "AI 网文写作助手";
 const DEFAULT_PORT: u16 = 3131;
+const DEFAULT_LICENSE_SERVER_URL: &str = "http://62.234.205.107";
+const DEFAULT_LICENSE_SERVER_TIMEOUT_MS: &str = "30000";
 const MENU_OPEN_LOGS: &str = "open_logs_dir";
 const SPLASH_WINDOW: &str = "splash";
 const MAIN_WINDOW: &str = "main";
@@ -166,6 +170,13 @@ fn node_binary_name() -> &'static str {
 
 fn first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|path| path.exists()).cloned()
+}
+
+fn env_or_default(name: &str, default_value: &str) -> String {
+    env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_value.to_string())
 }
 
 fn is_packaged_build() -> bool {
@@ -310,11 +321,21 @@ fn start_next_server(app: &AppHandle) -> Result<(Child, String), String> {
     append_log(&log_path, format!("server={}", server.display()));
 
     let machine_hash = read_or_create_machine_hash(&data_dir)?;
+    let license_server_url = env_or_default("LICENSE_SERVER_URL", DEFAULT_LICENSE_SERVER_URL);
+    let license_server_timeout_ms = env_or_default(
+        "LICENSE_SERVER_TIMEOUT_MS",
+        DEFAULT_LICENSE_SERVER_TIMEOUT_MS,
+    );
     let app_store_path = data_dir.join("app-db.json");
     let sqlite_path = data_dir.join("license-center.db");
     let cwd = server
         .parent()
         .ok_or_else(|| "Next standalone 服务路径无效".to_string())?;
+
+    append_log(
+        &log_path,
+        format!("license_server_url={}", license_server_url),
+    );
 
     let mut command = Command::new(node);
     command
@@ -329,6 +350,8 @@ fn start_next_server(app: &AppHandle) -> Result<(Child, String), String> {
         .env("AUTH_COOKIE_SECURE", "false")
         .env("APP_STORE_PATH", app_store_path)
         .env("DATABASE_URL", format!("file:{}", sqlite_path.display()))
+        .env("LICENSE_SERVER_URL", license_server_url)
+        .env("LICENSE_SERVER_TIMEOUT_MS", license_server_timeout_ms)
         .env("DESKTOP_MACHINE_HASH", machine_hash)
         .env("DESKTOP_LOG_PATH", &log_path)
         .env("ELECTRON_APP_ROOT", app_root)
