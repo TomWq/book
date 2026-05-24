@@ -8,6 +8,7 @@ const ssrChunksDir = path.join(standaloneDir, ".next", "server", "chunks", "ssr"
 const nodeModulesDir = path.join(standaloneDir, "node_modules");
 const sourceStaticDir = path.join(root, ".next", "static");
 const targetStaticDir = path.join(standaloneDir, ".next", "static");
+const forcedRuntimePackages = ["better-sqlite3", "bindings", "file-uri-to-path"];
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -86,6 +87,27 @@ function writeBetterSqliteAlias(alias) {
   );
 }
 
+function copyRuntimePackage(packageName) {
+  const source = path.join(root, "node_modules", packageName);
+  const target = path.join(nodeModulesDir, packageName);
+
+  if (!existsSync(source)) {
+    throw new Error(`缺少运行时依赖 ${packageName}，请先执行 npm install。`);
+  }
+
+  rmSync(target, { recursive: true, force: true });
+  mkdirSync(path.dirname(target), { recursive: true });
+  cpSync(source, target, { recursive: true });
+}
+
+function syncNativeRuntimePackages() {
+  for (const packageName of forcedRuntimePackages) {
+    copyRuntimePackage(packageName);
+  }
+
+  console.log(`[tauri-prepare] 已补齐原生运行时依赖：${forcedRuntimePackages.join(", ")}`);
+}
+
 function syncStaticAssets() {
   if (!existsSync(sourceStaticDir)) {
     throw new Error("缺少 .next/static，Next 构建可能未完整生成。");
@@ -100,6 +122,7 @@ function syncStaticAssets() {
 async function main() {
   await run("next", ["build"]);
   syncStaticAssets();
+  syncNativeRuntimePackages();
 
   const aliases = findBetterSqliteAliases();
 

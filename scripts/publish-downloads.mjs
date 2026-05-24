@@ -34,7 +34,8 @@ function getConfig() {
     host: process.env.DEPLOY_HOST || fileConfig.host || "62.234.205.107",
     user: process.env.DEPLOY_USER || fileConfig.user || "root",
     path: process.env.DEPLOY_PATH || fileConfig.path || "/root/book",
-    port: Number(process.env.DEPLOY_PORT || fileConfig.port || 22)
+    port: Number(process.env.DEPLOY_PORT || fileConfig.port || 22),
+    downloadBaseUrl: process.env.DOWNLOAD_BASE_URL || process.env.APP_DOWNLOAD_BASE_URL || fileConfig.downloadBaseUrl || ""
   };
 }
 
@@ -63,7 +64,7 @@ function run(command, args, options = {}) {
 }
 
 function normalizeBaseUrl(config) {
-  const configured = String(process.env.DOWNLOAD_BASE_URL || process.env.APP_DOWNLOAD_BASE_URL || "").trim();
+  const configured = String(config.downloadBaseUrl || "").trim();
   if (!configured && localOnly) {
     return "/downloads";
   }

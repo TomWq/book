@@ -22,7 +22,7 @@
     "release:tauri:status": "gh run list --workflow \"Tauri Release\" --limit 5",
     "release:download": "node scripts/download-tauri-release.mjs",
     "downloads:publish": "node scripts/publish-downloads.mjs",
-    "downloads:local": "node scripts/publish-downloads.mjs --local-only",
+    "downloads:local": "node scripts/publish-downloads.mjs --local-only", 
     "downloads:manifest": "node scripts/publish-downloads.mjs --manifest-only",
     "deploy:server": "node scripts/deploy-server.mjs",
     "acceptance": "node scripts/acceptance-check.mjs",

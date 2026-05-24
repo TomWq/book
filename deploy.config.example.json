@@ -3,6 +3,7 @@
   "user": "root",
   "path": "/root/book",
   "port": 22,
+  "downloadBaseUrl": "https://你的 COS 或 CDN 下载域名",
   "service": "myapp.service",
   "pm2Name": "book-license-center"
 }

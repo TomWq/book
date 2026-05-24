@@ -4,8 +4,36 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import type DatabaseConstructor from "better-sqlite3";
 
-const runtimeRequire = createRequire(path.resolve(/*turbopackIgnore: true*/ process.cwd(), "server.js"));
-const loadSqlite = () => runtimeRequire("better-sqlite3") as typeof DatabaseConstructor;
+function createRuntimeRequireCandidates() {
+  const cwd = path.resolve(/*turbopackIgnore: true*/ process.cwd());
+  const candidates = [
+    process.env.NEXT_STANDALONE_ROOT,
+    cwd,
+    path.join(cwd, ".next", "standalone"),
+    process.env.ELECTRON_APP_ROOT
+      ? path.join(process.env.ELECTRON_APP_ROOT, ".next", "standalone")
+      : "",
+  ];
+
+  return candidates
+    .map((candidate) => String(candidate ?? "").trim())
+    .filter(Boolean)
+    .map((candidate) => createRequire(path.join(candidate, "server.js")));
+}
+
+const loadSqlite = () => {
+  const errors: string[] = [];
+
+  for (const runtimeRequire of createRuntimeRequireCandidates()) {
+    try {
+      return runtimeRequire("better-sqlite3") as typeof DatabaseConstructor;
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  throw new Error(`无法加载本地 SQLite 运行时依赖 better-sqlite3：${errors.join(" | ")}`);
+};
 
 const DEFAULT_STATE_ID = "default";
 
@@ -473,6 +501,7 @@ function ensureSqliteSchema() {
       "machineHash" TEXT,
       "activatedAt" DATETIME,
       "lastVerifiedAt" DATETIME,
+      "durationMinutes" INTEGER,
       "expiresAt" DATETIME,
       "disabledAt" DATETIME,
       "notes" TEXT,
@@ -508,6 +537,7 @@ function ensureSqliteSchema() {
     'ALTER TABLE "User" ADD COLUMN "licenseExpiresAt" DATETIME',
     'ALTER TABLE "User" ADD COLUMN "licenseSignedOutAt" DATETIME',
     'ALTER TABLE "LicenseCode" ADD COLUMN "plainCode" TEXT',
+    'ALTER TABLE "LicenseCode" ADD COLUMN "durationMinutes" INTEGER',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "profileName" TEXT',
@@ -1282,9 +1312,9 @@ function syncCoreTables(store: unknown) {
 
     const insertLicenseCode = db.prepare(`
       INSERT INTO "LicenseCode" (
-        "id", "codeHash", "plainCode", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
+        "id", "codeHash", "plainCode", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "durationMinutes", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @codeHash, @plainCode, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
+        @id, @codeHash, @plainCode, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @durationMinutes, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
       )
     `);
 
@@ -1302,6 +1332,7 @@ function syncCoreTables(store: unknown) {
         machineHash: nullableText(licenseCode.machineHash),
         activatedAt: licenseCode.activatedAt ? dateText(licenseCode.activatedAt) : null,
         lastVerifiedAt: licenseCode.lastVerifiedAt ? dateText(licenseCode.lastVerifiedAt) : null,
+        durationMinutes: integer(licenseCode.durationMinutes) || null,
         expiresAt: licenseCode.expiresAt ? dateText(licenseCode.expiresAt) : null,
         disabledAt: licenseCode.disabledAt ? dateText(licenseCode.disabledAt) : null,
         notes: nullableText(licenseCode.notes),
@@ -1867,6 +1898,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
         machineHash: maybeString(item.machineHash),
         activatedAt: item.activatedAt ? dateText(item.activatedAt) : undefined,
         lastVerifiedAt: item.lastVerifiedAt ? dateText(item.lastVerifiedAt) : undefined,
+        durationMinutes: integer(item.durationMinutes) || undefined,
         expiresAt: item.expiresAt ? dateText(item.expiresAt) : undefined,
         disabledAt: item.disabledAt ? dateText(item.disabledAt) : undefined,
         notes: maybeString(item.notes),

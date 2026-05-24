@@ -1776,14 +1776,15 @@ export async function generateAdminLicenseCodes(input: {
   const existingHashes = new Set(store.licenseCodes.map((item) => item.codeHash));
   const durationMinutes = Number(input.durationMinutes);
   const durationHours = Number(input.durationHours);
-  const expiresAt =
+  const activationDurationMinutes =
     Number.isFinite(durationMinutes) && durationMinutes > 0
-      ? new Date(Date.now() + durationMinutes * 60 * 1000)
+      ? Math.floor(durationMinutes)
       : Number.isFinite(durationHours) && durationHours > 0
-        ? new Date(Date.now() + durationHours * 60 * 60 * 1000)
-      : input.expiresAt
-        ? new Date(input.expiresAt)
-        : null;
+        ? Math.floor(durationHours * 60)
+        : 0;
+  const expiresAt = activationDurationMinutes <= 0 && input.expiresAt
+    ? new Date(input.expiresAt)
+    : null;
 
   for (let index = 0; index < quantity; index += 1) {
     let code = createActivationCode();
@@ -1806,6 +1807,7 @@ export async function generateAdminLicenseCodes(input: {
       status: "unused",
       maxActivations: 1,
       activationCount: 0,
+      durationMinutes: activationDurationMinutes > 0 ? activationDurationMinutes : undefined,
       expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt.toISOString() : undefined,
       notes: normalizeLicenseText(input.notes),
       createdAt: timestamp,

@@ -23,6 +23,7 @@ const creationSteps = [
 ] as const;
 
 const maxSelectedTagsPerGroup = 2;
+const draftStorageKey = "ai-novel-workbench:new-writing-project-draft:v1";
 
 type TitleNamingStyle = "fanqie" | "qidian";
 type TagTaxonomyStyle = "fanqie" | "qidian";
@@ -30,13 +31,120 @@ type DescriptionWritingStyle = "fanqie" | "qidian";
 type CreationStepId = (typeof creationSteps)[number]["id"];
 type TagSectionKey = (typeof fanqieTagSections)[number]["key"] | (typeof qidianTagSections)[number]["key"];
 
+type ProjectFormDraft = {
+  name: string;
+  titleConcept: string;
+  authorName: string;
+  coverImageUrl: string;
+  titleNamingStyle: TitleNamingStyle;
+  tagTaxonomyStyle: TagTaxonomyStyle;
+  descriptionWritingStyle: DescriptionWritingStyle;
+  description: string;
+  protagonist1: string;
+  protagonist2: string;
+  targetReader: TargetReader;
+  genre: string;
+  selectedTags: string[];
+  activeTagSection: TagSectionKey;
+  activeStep: CreationStepId;
+  coreSellingPoint: string;
+  goldenFinger: string;
+  openingHook: string;
+  writingGoal: string;
+};
+
+const defaultDraft: ProjectFormDraft = {
+  name: "",
+  titleConcept: "",
+  authorName: "",
+  coverImageUrl: "",
+  titleNamingStyle: "fanqie",
+  tagTaxonomyStyle: "fanqie",
+  descriptionWritingStyle: "fanqie",
+  description: "",
+  protagonist1: "",
+  protagonist2: "",
+  targetReader: "男频",
+  genre: "",
+  selectedTags: [],
+  activeTagSection: "mainCategories",
+  activeStep: "book-step-identity",
+  coreSellingPoint: "",
+  goldenFinger: "",
+  openingHook: "",
+  writingGoal: ""
+};
+
 function asText(value: FormDataEntryValue | null) {
   return String(value ?? "").trim();
+}
+
+function isTargetReader(value: unknown): value is TargetReader {
+  return readerOptions.includes(value as TargetReader);
+}
+
+function isTitleNamingStyle(value: unknown): value is TitleNamingStyle {
+  return value === "fanqie" || value === "qidian";
+}
+
+function isTagTaxonomyStyle(value: unknown): value is TagTaxonomyStyle {
+  return value === "fanqie" || value === "qidian";
+}
+
+function isDescriptionWritingStyle(value: unknown): value is DescriptionWritingStyle {
+  return value === "fanqie" || value === "qidian";
+}
+
+function isCreationStepId(value: unknown): value is CreationStepId {
+  return creationSteps.some((step) => step.id === value);
+}
+
+function isTagSectionKey(value: unknown): value is TagSectionKey {
+  return [...fanqieTagSections, ...qidianTagSections].some((section) => section.key === value);
+}
+
+function stringValue(value: unknown, maxLength = 1000) {
+  return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function normalizeDraft(value: unknown): ProjectFormDraft {
+  if (!value || typeof value !== "object") {
+    return defaultDraft;
+  }
+
+  const raw = value as Partial<Record<keyof ProjectFormDraft, unknown>>;
+
+  return {
+    name: stringValue(raw.name, 60),
+    titleConcept: stringValue(raw.titleConcept, 240),
+    authorName: stringValue(raw.authorName, 20),
+    coverImageUrl: stringValue(raw.coverImageUrl, 1_200_000),
+    titleNamingStyle: isTitleNamingStyle(raw.titleNamingStyle) ? raw.titleNamingStyle : defaultDraft.titleNamingStyle,
+    tagTaxonomyStyle: isTagTaxonomyStyle(raw.tagTaxonomyStyle) ? raw.tagTaxonomyStyle : defaultDraft.tagTaxonomyStyle,
+    descriptionWritingStyle: isDescriptionWritingStyle(raw.descriptionWritingStyle)
+      ? raw.descriptionWritingStyle
+      : defaultDraft.descriptionWritingStyle,
+    description: stringValue(raw.description, 500),
+    protagonist1: stringValue(raw.protagonist1, 8),
+    protagonist2: stringValue(raw.protagonist2, 8),
+    targetReader: isTargetReader(raw.targetReader) ? raw.targetReader : defaultDraft.targetReader,
+    genre: stringValue(raw.genre, 40),
+    selectedTags: Array.isArray(raw.selectedTags)
+      ? raw.selectedTags.map((item) => stringValue(item, 40)).filter(Boolean).slice(0, 4)
+      : [],
+    activeTagSection: isTagSectionKey(raw.activeTagSection) ? raw.activeTagSection : defaultDraft.activeTagSection,
+    activeStep: isCreationStepId(raw.activeStep) ? raw.activeStep : defaultDraft.activeStep,
+    coreSellingPoint: stringValue(raw.coreSellingPoint, 160),
+    goldenFinger: stringValue(raw.goldenFinger, 160),
+    openingHook: stringValue(raw.openingHook, 160),
+    writingGoal: stringValue(raw.writingGoal, 500)
+  };
 }
 
 export function ProjectForm() {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
+  const draftRestoredRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [assistLoading, setAssistLoading] = useState<"" | "titles" | "protagonists" | "description">("");
   const [error, setError] = useState("");
@@ -59,6 +167,10 @@ export function ProjectForm() {
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [protagonistSuggestions, setProtagonistSuggestions] = useState<string[]>([]);
   const [activeStep, setActiveStep] = useState<CreationStepId>("book-step-identity");
+  const [coreSellingPoint, setCoreSellingPoint] = useState("");
+  const [goldenFinger, setGoldenFinger] = useState("");
+  const [openingHook, setOpeningHook] = useState("");
+  const [writingGoal, setWritingGoal] = useState("");
 
   const coverTitle = name || "书本名称";
   const coverAuthor = authorName.trim() || "作者名称";
@@ -79,6 +191,102 @@ export function ProjectForm() {
   const selectedRoleCount = selectedTags.filter((tag) => roleTagSet.has(tag)).length;
   const currentSubCategories = currentQidianCategory?.subCategories ?? [];
   const selectedSubCategory = selectedTags.find((tag) => currentSubCategories.includes(tag)) ?? "";
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(draftStorageKey);
+
+      if (stored) {
+        const draft = normalizeDraft(JSON.parse(stored));
+
+        setName(draft.name);
+        setTitleConcept(draft.titleConcept);
+        setAuthorName(draft.authorName);
+        setCoverImageUrl(draft.coverImageUrl);
+        setTitleNamingStyle(draft.titleNamingStyle);
+        setTagTaxonomyStyle(draft.tagTaxonomyStyle);
+        setDescriptionWritingStyle(draft.descriptionWritingStyle);
+        setDescription(draft.description);
+        setProtagonist1(draft.protagonist1);
+        setProtagonist2(draft.protagonist2);
+        setTargetReader(draft.targetReader);
+        setGenre(draft.genre);
+        setSelectedTags(draft.selectedTags);
+        setActiveTagSection(draft.activeTagSection);
+        setActiveStep(draft.activeStep);
+        setCoreSellingPoint(draft.coreSellingPoint);
+        setGoldenFinger(draft.goldenFinger);
+        setOpeningHook(draft.openingHook);
+        setWritingGoal(draft.writingGoal);
+
+        window.setTimeout(() => {
+          document.getElementById(draft.activeStep)?.scrollIntoView({ block: "start" });
+        }, 0);
+      }
+    } catch {
+      window.localStorage.removeItem(draftStorageKey);
+    }
+
+    draftRestoredRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!draftRestoredRef.current) {
+      return;
+    }
+
+    const draft: ProjectFormDraft = {
+      name,
+      titleConcept,
+      authorName,
+      coverImageUrl,
+      titleNamingStyle,
+      tagTaxonomyStyle,
+      descriptionWritingStyle,
+      description,
+      protagonist1,
+      protagonist2,
+      targetReader,
+      genre,
+      selectedTags,
+      activeTagSection,
+      activeStep,
+      coreSellingPoint,
+      goldenFinger,
+      openingHook,
+      writingGoal
+    };
+
+    try {
+      window.localStorage.setItem(draftStorageKey, JSON.stringify(draft));
+    } catch {
+      try {
+        window.localStorage.setItem(draftStorageKey, JSON.stringify({ ...draft, coverImageUrl: "" }));
+      } catch {
+        // Ignore storage quota errors; the form still works during the current session.
+      }
+    }
+  }, [
+    activeStep,
+    activeTagSection,
+    authorName,
+    coreSellingPoint,
+    coverImageUrl,
+    description,
+    descriptionWritingStyle,
+    genre,
+    goldenFinger,
+    name,
+    openingHook,
+    protagonist1,
+    protagonist2,
+    selectedTags,
+    tagTaxonomyStyle,
+    targetReader,
+    titleConcept,
+    titleNamingStyle,
+    writingGoal
+  ]);
 
   function updateTagTaxonomyStyle(nextStyle: TagTaxonomyStyle) {
     setTagTaxonomyStyle(nextStyle);
@@ -197,8 +405,6 @@ export function ProjectForm() {
   }
 
   function getCurrentContext() {
-    const formData = formRef.current ? new FormData(formRef.current) : new FormData();
-
     return {
       name,
       genre,
@@ -210,9 +416,9 @@ export function ProjectForm() {
       avoidTitles: titleSuggestions,
       tags: selectedTags,
       protagonistNames: [protagonist1, protagonist2].map((item) => item.trim()).filter(Boolean),
-      coreSellingPoint: asText(formData.get("coreSellingPoint")),
-      goldenFinger: asText(formData.get("goldenFinger")),
-      openingHook: asText(formData.get("openingHook")),
+      coreSellingPoint,
+      goldenFinger,
+      openingHook,
       description
     };
   }
@@ -331,6 +537,7 @@ export function ProjectForm() {
         throw new Error("创建成功但未返回项目 ID");
       }
 
+      window.localStorage.removeItem(draftStorageKey);
       router.push(`/projects/${projectId}/writing`);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "创建作品失败");
@@ -775,17 +982,32 @@ export function ProjectForm() {
           <div className="split-panels">
             <div className="field">
               <div className="field-label">核心卖点</div>
-              <input name="coreSellingPoint" placeholder="例如：被误判的废柴，用系统反打所有人" />
+              <input
+                name="coreSellingPoint"
+                value={coreSellingPoint}
+                onChange={(event) => setCoreSellingPoint(event.target.value)}
+                placeholder="例如：被误判的废柴，用系统反打所有人"
+              />
             </div>
             <div className="field">
               <div className="field-label">金手指 / 关键机制</div>
-              <input name="goldenFinger" placeholder="例如：情绪值系统 / 旧神契约 / 重生记忆" />
+              <input
+                name="goldenFinger"
+                value={goldenFinger}
+                onChange={(event) => setGoldenFinger(event.target.value)}
+                placeholder="例如：情绪值系统 / 旧神契约 / 重生记忆"
+              />
             </div>
           </div>
 
           <div className="field">
             <div className="field-label">开局钩子</div>
-            <input name="openingHook" placeholder="例如：退婚当天，主角觉醒隐藏身份，但必须先装废物" />
+            <input
+              name="openingHook"
+              value={openingHook}
+              onChange={(event) => setOpeningHook(event.target.value)}
+              placeholder="例如：退婚当天，主角觉醒隐藏身份，但必须先装废物"
+            />
           </div>
 
           <div className="field">
@@ -850,6 +1072,8 @@ export function ProjectForm() {
             <div className="field-label">本项目目标</div>
             <textarea
               name="writingGoal"
+              value={writingGoal}
+              onChange={(event) => setWritingGoal(event.target.value)}
               placeholder="例如：先跑通前 30 章爽点节奏；或拆一本爆款的开局公式，再迁移成新书。"
             />
           </div>

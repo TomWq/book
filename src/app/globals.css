@@ -10659,12 +10659,21 @@ body.desktop-runtime .workspace-topbar {
   z-index: 160;
   min-width: var(--desktop-shell-min);
   min-height: var(--workspace-topbar-height);
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--desktop-gap);
   padding: calc(var(--desktop-main-pad-y) - 2px) var(--desktop-main-pad-x);
 }
 
 body.desktop-runtime .workspace-brand {
+  flex: 0 0 auto;
   min-width: 210px;
+}
+
+body.desktop-runtime .workspace-nav {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 body.desktop-runtime .workspace-topbar .side-nav {
@@ -10672,6 +10681,7 @@ body.desktop-runtime .workspace-topbar .side-nav {
 }
 
 body.desktop-runtime .workspace-actions {
+  flex: 0 0 auto;
   gap: calc(var(--desktop-gap) - 2px);
 }
 
@@ -10699,6 +10709,84 @@ body.desktop-runtime .app-shell-auth .app-main:has(.assistant-page) {
   gap: 0;
   min-height: 0;
   padding: 0;
+}
+
+body.desktop-runtime .auth-immersive {
+  min-height: 100dvh;
+}
+
+@media (max-height: 780px) {
+  body.desktop-runtime .auth-immersive {
+    grid-template-columns: minmax(280px, 0.82fr) minmax(340px, 408px);
+    grid-template-rows: auto minmax(0, 1fr);
+    column-gap: clamp(28px, 6vw, 82px);
+    align-items: center;
+    padding: 22px clamp(22px, 5vw, 72px);
+  }
+
+  body.desktop-runtime .auth-immersive-footer {
+    display: none;
+  }
+
+  body.desktop-runtime .auth-slogan {
+    min-height: 0;
+    gap: 26px;
+    align-self: center;
+    overflow: hidden;
+  }
+
+  body.desktop-runtime .auth-calligraphy {
+    font-size: clamp(38px, 5.2vw, 58px);
+    line-height: 1.16;
+  }
+
+  body.desktop-runtime .auth-slogan-side {
+    gap: 5px;
+    font-size: 16px;
+  }
+
+  body.desktop-runtime .auth-slogan-side strong {
+    font-size: 21px;
+  }
+
+  body.desktop-runtime .auth-immersive .license-card {
+    align-self: center;
+    padding: 24px;
+    gap: 18px;
+  }
+
+  body.desktop-runtime .license-card .auth-card-head h2 {
+    font-size: 22px;
+  }
+
+  body.desktop-runtime .license-card .auth-card-head p {
+    line-height: 1.5;
+  }
+
+  body.desktop-runtime .auth-immersive .license-card .auth-field input,
+  body.desktop-runtime .auth-immersive .license-card .auth-submit {
+    min-height: 44px;
+  }
+}
+
+@media (max-height: 660px) {
+  body.desktop-runtime .auth-immersive {
+    grid-template-columns: minmax(220px, 0.65fr) minmax(320px, 388px);
+    padding-block: 16px;
+  }
+
+  body.desktop-runtime .auth-calligraphy {
+    font-size: clamp(30px, 4.8vw, 44px);
+  }
+
+  body.desktop-runtime .auth-slogan-side {
+    display: none;
+  }
+
+  body.desktop-runtime .auth-immersive .license-card {
+    padding: 20px;
+    gap: 14px;
+  }
 }
 
 body.desktop-runtime .assistant-page,

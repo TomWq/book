@@ -354,6 +354,7 @@ fn start_next_server(app: &AppHandle) -> Result<(Child, String), String> {
         .env("LICENSE_SERVER_TIMEOUT_MS", license_server_timeout_ms)
         .env("DESKTOP_MACHINE_HASH", machine_hash)
         .env("DESKTOP_LOG_PATH", &log_path)
+        .env("NEXT_STANDALONE_ROOT", cwd)
         .env("ELECTRON_APP_ROOT", app_root)
         .env("TAURI_PARENT_PID", std::process::id().to_string())
         .stdout(Stdio::piped())

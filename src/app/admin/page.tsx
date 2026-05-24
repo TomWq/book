@@ -22,6 +22,24 @@ function formatTime(value?: string) {
   return value ? new Date(value).toLocaleString("zh-CN") : "-";
 }
 
+function formatDurationMinutes(value?: number) {
+  const minutes = Number(value ?? 0);
+
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return "";
+  }
+
+  if (minutes % (24 * 60) === 0) {
+    return `${minutes / 24 / 60} 天`;
+  }
+
+  if (minutes % 60 === 0) {
+    return `${minutes / 60} 小时`;
+  }
+
+  return `${minutes} 分钟`;
+}
+
 function numberParam(value: string | string[] | undefined) {
   const raw = Array.isArray(value) ? value[0] : value;
   const parsed = Number(raw ?? 1);
@@ -328,6 +346,9 @@ export default async function AdminPage({
                       {bindingStatusName(license)}
                     </span>
                     {license.expiresAt ? <div className="muted">到期 {formatTime(license.expiresAt)}</div> : null}
+                    {!license.expiresAt && license.durationMinutes ? (
+                      <div className="muted">首次激活后 {formatDurationMinutes(license.durationMinutes)} 到期</div>
+                    ) : null}
                   </div>
                   <div>
                     <span className="chip">{compactMachine(license.machineHash)}</span>

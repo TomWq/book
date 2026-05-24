@@ -68,6 +68,24 @@ export function normalizeLicenseText(value?: string) {
   return String(value ?? "").trim().slice(0, 240);
 }
 
+function getActivationDurationMinutes(license: StoredLicenseCode) {
+  const durationMinutes = Number(license.durationMinutes);
+  return Number.isFinite(durationMinutes) && durationMinutes > 0 ? Math.floor(durationMinutes) : 0;
+}
+
+function ensureLicenseExpiryStarted(license: StoredLicenseCode, activatedAt: string) {
+  const durationMinutes = getActivationDurationMinutes(license);
+
+  if (durationMinutes <= 0 || license.expiresAt) {
+    return false;
+  }
+
+  const activatedTime = Date.parse(activatedAt);
+  const baseTime = Number.isFinite(activatedTime) ? activatedTime : Date.now();
+  license.expiresAt = new Date(baseTime + durationMinutes * 60 * 1000).toISOString();
+  return true;
+}
+
 export function createActivationCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = randomBytes(16);
@@ -820,6 +838,10 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
     throw new Error("该授权码已被禁用");
   }
 
+  if (license.status === "used" && ensureLicenseExpiryStarted(license, license.activatedAt ?? timestamp)) {
+    license.updatedAt = timestamp;
+  }
+
   if (license.expiresAt && Date.parse(license.expiresAt) <= Date.now()) {
     license.status = "expired";
     license.updatedAt = timestamp;
@@ -858,6 +880,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
       license.machineHash = machineHash;
       license.activationCount = 1;
       license.activatedAt = license.activatedAt ?? timestamp;
+      ensureLicenseExpiryStarted(license, license.activatedAt);
       license.lastVerifiedAt = timestamp;
       license.updatedAt = timestamp;
       log("success", "activated");
@@ -885,6 +908,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
   license.activationCount = 1;
   license.machineHash = machineHash;
   license.activatedAt = license.activatedAt ?? timestamp;
+  ensureLicenseExpiryStarted(license, license.activatedAt);
   license.lastVerifiedAt = timestamp;
   license.updatedAt = timestamp;
   log("success", "activated");
@@ -949,6 +973,10 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
     log("failed", "disabled");
     await writeStore(store);
     throw new Error("授权已被管理员禁用");
+  }
+
+  if (license.status === "used" && ensureLicenseExpiryStarted(license, license.activatedAt ?? timestamp)) {
+    license.updatedAt = timestamp;
   }
 
   if (license.expiresAt && Date.parse(license.expiresAt) <= Date.now()) {
@@ -1025,6 +1053,7 @@ export function buildAdminLicenseCenter(
       machineHash: license.machineHash,
       activatedAt: license.activatedAt,
       lastVerifiedAt: license.lastVerifiedAt,
+      durationMinutes: license.durationMinutes,
       expiresAt: license.expiresAt,
       disabledAt: license.disabledAt,
       notes: license.notes,

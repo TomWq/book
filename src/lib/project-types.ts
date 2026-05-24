@@ -462,6 +462,7 @@ export type StoredLicenseCode = {
   machineHash?: string;
   activatedAt?: string;
   lastVerifiedAt?: string;
+  durationMinutes?: number;
   expiresAt?: string;
   disabledAt?: string;
   notes?: string;
@@ -619,6 +620,7 @@ export type AdminLicenseSummary = {
   machineHash?: string;
   activatedAt?: string;
   lastVerifiedAt?: string;
+  durationMinutes?: number;
   expiresAt?: string;
   disabledAt?: string;
   notes?: string;
