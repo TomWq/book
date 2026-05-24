@@ -1,0 +1,70 @@
+name: Tauri Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-tauri:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            platform: macos-latest
+            rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
+            prepareArgs: --mac --arm64
+            tauriArgs: --target aarch64-apple-darwin
+          - name: macOS x64
+            platform: macos-latest
+            rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
+            prepareArgs: --mac --x64
+            tauriArgs: --target x86_64-apple-darwin
+          - name: Windows x64
+            platform: windows-latest
+            rustTargets: x86_64-pc-windows-msvc
+            prepareArgs: --win --x64
+            tauriArgs: --target x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rustTargets }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Prepare Tauri target resources
+        run: node scripts/tauri-build.mjs --prepare-only ${{ matrix.prepareArgs }}
+
+      - name: Build and upload Tauri bundles
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: npx tauri
+          args: ${{ matrix.tauriArgs }}
+          tagName: app-v__VERSION__
+          releaseName: "AI 网文写作助手 v__VERSION__"
+          releaseBody: "自动构建的桌面端安装包，请在 Assets 中下载对应系统版本。"
+          releaseDraft: true
+          prerelease: false
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: ${{ matrix.name }}-__VERSION__

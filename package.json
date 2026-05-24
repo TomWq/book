@@ -29,6 +29,12 @@
     "desktop:publish": "node scripts/publish-downloads.mjs",
     "desktop:publish:local": "node scripts/publish-downloads.mjs --local-only",
     "desktop:publish:manifest": "node scripts/publish-downloads.mjs --manifest-only",
+    "tauri:prepare": "node scripts/tauri-prepare.mjs",
+    "tauri:dev": "npm run tauri:prepare && tauri dev",
+    "tauri:build": "node scripts/tauri-build.mjs",
+    "tauri:build:mac:arm64": "node scripts/tauri-build.mjs --mac --arm64",
+    "tauri:build:mac:x64": "node scripts/tauri-build.mjs --mac --x64",
+    "tauri:build:win:x64": "node scripts/tauri-build.mjs --win --x64",
     "deploy:server": "node scripts/deploy-server.mjs",
     "acceptance": "node scripts/acceptance-check.mjs",
     "acceptance:flow": "node scripts/main-flow-check.mjs",
@@ -53,6 +59,7 @@
     "socks-proxy-agent": "^10.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
