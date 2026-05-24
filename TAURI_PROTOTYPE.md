@@ -124,27 +124,22 @@ node scripts/tauri-build.mjs --prepare-only ...
 src-tauri/target/release/bundle/
 ```
 
-打包后重点对比：
+GitHub Actions 成功后，再执行 `npm run release:download`，会把三端安装包整理到：
 
 ```text
-Electron Windows 安装包：release/AI网文写作助手-Setup-*.exe
-Tauri Windows 安装包：src-tauri/target/release/bundle/nsis/
-Electron Mac zip：release/*-mac.zip
-Tauri Mac 包：src-tauri/target/release/bundle/
+release/packages/v版本号/
 ```
 
-当前在 macOS arm64 上的实测结果：
+当前在 macOS arm64 上的 Tauri 实测结果：
 
 ```text
 Tauri arm64 .app：184MB
 Tauri arm64 DMG：60MB
 Tauri x64 .app：187MB
 Tauri x64 DMG：61MB
-Electron arm64 .app：514MB
-Electron arm64 zip：175MB
 ```
 
-这个结果说明“只换外壳”对压缩安装包体积有明显帮助，尤其是 DMG/安装包大小。
+最终给用户下载的就是 `release/packages/v版本号/` 里的三个文件。
 
 ## 启动与日志
 
@@ -204,7 +199,7 @@ Next standalone
 better-sqlite3 原生模块
 ```
 
-所以它不会小到几 MB。它主要减少的是 Electron/Chromium 这一大块。
+所以它不会小到几 MB，主要体积来自本地 Node runtime、Next standalone 和原生模块。
 
 当前已经支持在 Apple Silicon Mac 上分别构建 macOS arm64 和 macOS x64 Tauri 包。Windows Tauri 包建议走 GitHub Actions，或者在 Windows 环境执行：
 

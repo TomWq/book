@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 const root = process.cwd();
-const cacheDir = path.join(root, "node_modules", ".cache", "desktop-build");
+const cacheDir = path.join(root, "node_modules", ".cache", "tauri-build");
 const npmVersion = "11.6.2";
 const nodeVersion = "22.18.0";
 const npmMirror = process.env.NPM_TARBALL_URL || `https://registry.npmmirror.com/npm/-/npm-${npmVersion}.tgz`;

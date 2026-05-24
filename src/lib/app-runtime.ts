@@ -13,7 +13,7 @@ export function getAppRuntime(): AppRuntime {
     return "cloud";
   }
 
-  if (["desktop", "electron", "client", "local"].includes(configured)) {
+  if (["desktop", "client", "local"].includes(configured)) {
     return "desktop";
   }
 

@@ -134,7 +134,7 @@ fn resolve_node(resources: &Path) -> Result<PathBuf, String> {
     }
 
     if is_packaged_build() {
-        Err("未找到随包携带的 Node runtime，请先执行 Electron/Tauri 构建准备。".to_string())
+        Err("未找到随包携带的 Node runtime，请先执行 Tauri 构建准备。".to_string())
     } else {
         Ok(PathBuf::from("node"))
     }
