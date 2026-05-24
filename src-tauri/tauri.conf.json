@@ -6,7 +6,8 @@
   "build": {
     "frontendDist": "../public/tauri-placeholder",
     "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeBuildCommand": "",
+    "removeUnusedCommands": true
   },
   "app": {
     "windows": [],
