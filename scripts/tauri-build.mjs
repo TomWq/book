@@ -323,6 +323,11 @@ async function main() {
   const platform = targetPlatform(targetArgs);
   const arch = targetArch(targetArgs);
   const triple = rustTargetTriple(platform, arch);
+  const iconFiles = [
+    path.join(root, "build", "icon.png"),
+    path.join(root, "build", "icon.ico"),
+    path.join(root, "build", "icon.icns")
+  ];
 
   if (platform === "darwin" && process.platform !== "darwin") {
     throw new Error("Tauri macOS 包需要在 macOS 上执行。");
@@ -341,9 +346,14 @@ async function main() {
     process.env.PATH ?? ""
   ].filter(Boolean).join(path.delimiter);
 
-  await run(projectNode, ["scripts/generate-desktop-icons.mjs"], {
-    env: { PATH: toolPath }
-  });
+  if (iconFiles.every((file) => existsSync(file))) {
+    log("桌面端图标已存在，跳过重新生成。");
+  } else {
+    await run(projectNode, ["scripts/generate-desktop-icons.mjs"], {
+      env: { PATH: toolPath }
+    });
+  }
+
   await run(projectNode, ["scripts/tauri-prepare.mjs"], {
     env: { PATH: toolPath }
   });

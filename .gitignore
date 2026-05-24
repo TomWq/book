@@ -7,19 +7,16 @@ node_modules/
 .next/
 out/
 dist/
-build/
 release/
 src-tauri/target/
 src-tauri/gen/
 .vercel/
 public/downloads/
-!build/
+build/*
 !build/icon.svg
 !build/icon.png
 !build/icon.ico
 !build/icon.icns
-!build/icon-*.png
-build
 # logs
 logs/
 *.log
