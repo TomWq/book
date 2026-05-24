@@ -8254,16 +8254,17 @@ form[aria-busy="true"] button[type="submit"] {
 .tag-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 260;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: clamp(12px, 2vw, 24px);
   background: rgba(18, 26, 44, 0.58);
 }
 
 .tag-dialog {
-  width: min(960px, calc(100vw - 56px));
-  max-height: min(780px, calc(100vh - 56px));
+  width: min(1040px, calc(100dvw - 48px));
+  height: min(780px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
@@ -8307,14 +8308,17 @@ form[aria-busy="true"] button[type="submit"] {
   min-height: 0;
   display: grid;
   grid-template-columns: 124px minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .tag-dialog-tabs {
+  min-height: 0;
   display: grid;
   align-content: start;
   gap: 8px;
   padding: 26px 0 26px 24px;
   border-right: 1px solid #eef2f7;
+  overflow: auto;
 }
 
 .tag-dialog-tabs button {
@@ -8411,10 +8415,18 @@ form[aria-busy="true"] button[type="submit"] {
 }
 
 .tag-dialog-foot {
+  position: relative;
+  z-index: 1;
+  flex-wrap: wrap;
   border-top: 1px solid #eef2f7;
   border-bottom: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.tag-dialog-foot .hero-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
 }
 
 .field-hint {
@@ -10279,7 +10291,9 @@ form[aria-busy="true"] button[type="submit"] {
   }
 
   .tag-dialog {
-    max-height: calc(100vh - 24px);
+    width: calc(100dvw - 24px);
+    height: calc(100dvh - 24px);
+    max-height: calc(100dvh - 24px);
   }
 
   .tag-dialog-body {
@@ -10318,6 +10332,14 @@ form[aria-busy="true"] button[type="submit"] {
   .tag-dialog-foot {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .tag-dialog-foot .hero-actions {
+    width: 100%;
+  }
+
+  .tag-dialog-foot .hero-actions .button {
+    flex: 1 1 0;
   }
 
   .topbar {
@@ -10967,6 +10989,52 @@ body.desktop-runtime .taxonomy-card {
   padding: calc(var(--desktop-field-pad) + 2px);
 }
 
+body.desktop-runtime .tag-dialog-backdrop {
+  padding: 14px;
+}
+
+body.desktop-runtime .tag-dialog {
+  width: min(1020px, calc(100dvw - 28px));
+  height: min(720px, calc(100dvh - 28px));
+  max-height: calc(100dvh - 28px);
+  border-radius: 14px;
+}
+
+body.desktop-runtime .tag-dialog-head,
+body.desktop-runtime .tag-dialog-foot {
+  padding: 12px 18px;
+}
+
+body.desktop-runtime .tag-dialog-head h3 {
+  font-size: var(--desktop-section-font);
+}
+
+body.desktop-runtime .tag-dialog-close {
+  width: calc(var(--desktop-control-height) + 2px);
+  height: calc(var(--desktop-control-height) + 2px);
+  font-size: 22px;
+}
+
+body.desktop-runtime .tag-dialog-body {
+  grid-template-columns: 116px minmax(0, 1fr);
+}
+
+body.desktop-runtime .tag-dialog-tabs {
+  gap: 6px;
+  padding: 18px 0 18px 16px;
+}
+
+body.desktop-runtime .tag-dialog-tabs button {
+  min-height: calc(var(--desktop-control-height) + 6px);
+  padding: 0 12px;
+  font-size: var(--desktop-font);
+}
+
+body.desktop-runtime .tag-dialog-options {
+  gap: 10px;
+  padding: 18px;
+}
+
 body.desktop-runtime .taxonomy-card-main {
   min-height: calc(var(--desktop-control-height) * 2.45);
 }
@@ -11045,6 +11113,77 @@ body.desktop-runtime .assist-suggestion {
 body.desktop-runtime .book-create-actions {
   gap: calc(var(--desktop-gap) - 2px);
   padding-top: calc(var(--desktop-gap) - 4px);
+}
+
+@media (max-height: 760px) {
+  body.desktop-runtime .tag-dialog-backdrop {
+    padding: 10px;
+  }
+
+  body.desktop-runtime .tag-dialog {
+    width: min(980px, calc(100dvw - 20px));
+    height: calc(100dvh - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  body.desktop-runtime .tag-dialog-head,
+  body.desktop-runtime .tag-dialog-foot {
+    padding: 10px 16px;
+  }
+
+  body.desktop-runtime .tag-dialog-tabs {
+    padding: 14px 0 14px 14px;
+  }
+
+  body.desktop-runtime .tag-dialog-options {
+    gap: 9px;
+    padding: 14px;
+  }
+
+  body.desktop-runtime .taxonomy-card {
+    min-height: calc(var(--desktop-control-height) * 1.85);
+    padding: var(--desktop-field-pad);
+  }
+
+  body.desktop-runtime .taxonomy-card-main {
+    min-height: calc(var(--desktop-control-height) * 2.15);
+  }
+
+  body.desktop-runtime .taxonomy-card-icon {
+    width: calc(var(--desktop-control-height) - 2px);
+    height: calc(var(--desktop-control-height) - 2px);
+    flex-basis: calc(var(--desktop-control-height) - 2px);
+  }
+}
+
+@media (max-height: 620px) {
+  body.desktop-runtime .tag-dialog {
+    height: calc(100dvh - 14px);
+    max-height: calc(100dvh - 14px);
+  }
+
+  body.desktop-runtime .tag-dialog-head,
+  body.desktop-runtime .tag-dialog-foot {
+    padding: 8px 14px;
+  }
+
+  body.desktop-runtime .tag-dialog-body {
+    grid-template-columns: 104px minmax(0, 1fr);
+  }
+
+  body.desktop-runtime .tag-dialog-tabs {
+    padding: 10px 0 10px 10px;
+  }
+
+  body.desktop-runtime .tag-dialog-tabs button {
+    min-height: var(--desktop-control-height);
+  }
+
+  body.desktop-runtime .tag-dialog-options {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    gap: 8px;
+    padding: 10px;
+  }
 }
 
 body.desktop-runtime .stat-card {
