@@ -1,8 +1,8 @@
 use std::{
     env,
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Write},
-    net::TcpListener,
+    io::{BufRead, BufReader, Read, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -16,6 +16,9 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
     webview::PageLoadEvent,
@@ -28,6 +31,8 @@ const DEFAULT_PORT: u16 = 3131;
 const MENU_OPEN_LOGS: &str = "open_logs_dir";
 const SPLASH_WINDOW: &str = "splash";
 const MAIN_WINDOW: &str = "main";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn append_log(log_path: &Path, message: impl AsRef<str>) {
     if let Some(parent) = log_path.parent() {
@@ -66,6 +71,68 @@ fn wait_for_port(port: u16) -> Result<(), String> {
 
         if started_at.elapsed().unwrap_or_default() > Duration::from_secs(45) {
             return Err("本地 Next 服务启动超时".to_string());
+        }
+
+        thread::sleep(Duration::from_millis(300));
+    }
+}
+
+fn request_http_status(port: u16, path: &str) -> Result<u16, String> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .map_err(|error| format!("连接本地服务失败：{}", error))?;
+
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        path, port
+    );
+
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("请求本地服务失败：{}", error))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("读取本地服务响应失败：{}", error))?;
+
+    let status_line = response.lines().next().unwrap_or_default();
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| format!("本地服务响应异常：{}", status_line))?;
+
+    Ok(status)
+}
+
+fn wait_for_http_route(port: u16, path: &str, log_path: &Path) -> Result<u16, String> {
+    let started_at = SystemTime::now();
+
+    loop {
+        match request_http_status(port, path) {
+            Ok(status) if status < 500 => {
+                append_log(log_path, format!("startup route {} => {}", path, status));
+                return Ok(status);
+            }
+            Ok(status) => {
+                append_log(log_path, format!("startup route {} => {}", path, status));
+                return Err(format!(
+                    "启动页渲染失败：{} 返回 HTTP {}。请通过“帮助 > 打开日志目录”把 tauri.log 发给开发者。",
+                    path, status
+                ));
+            }
+            Err(error) => {
+                if started_at.elapsed().unwrap_or_default() > Duration::from_secs(30) {
+                    append_log(
+                        log_path,
+                        format!("startup route {} failed: {}", path, error),
+                    );
+                    return Err(format!("启动页检查失败：{}，{}", path, error));
+                }
+            }
         }
 
         thread::sleep(Duration::from_millis(300));
@@ -272,6 +339,9 @@ fn start_next_server(app: &AppHandle) -> Result<(Child, String), String> {
     #[cfg(unix)]
     command.process_group(0);
 
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
     let mut child = command
         .spawn()
         .map_err(|error| format!("启动本地 Next 服务失败：{}", error))?;
@@ -287,6 +357,8 @@ fn start_next_server(app: &AppHandle) -> Result<(Child, String), String> {
     append_log(&log_path, format!("waiting for port {}", port));
     wait_for_port(port)?;
     append_log(&log_path, format!("ready on port {}", port));
+    let _ = wait_for_http_route(port, "/api/health", &log_path)?;
+    let _ = wait_for_http_route(port, "/activate", &log_path)?;
 
     Ok((child, format!("http://127.0.0.1:{}", port)))
 }

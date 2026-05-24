@@ -3,6 +3,14 @@ const path = require("node:path");
 const serverPath = process.argv[2];
 const parentPid = Number(process.env.TAURI_PARENT_PID || "0");
 
+process.on("uncaughtException", (error) => {
+  console.error("[tauri-wrapper] uncaught exception", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[tauri-wrapper] unhandled rejection", reason);
+});
+
 if (!serverPath) {
   console.error("[tauri-wrapper] missing Next server path");
   process.exit(1);
