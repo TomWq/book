@@ -43,7 +43,10 @@ jobs:
             prepareArgs: --mac --arm64
             tauriArgs: --target aarch64-apple-darwin
             artifactName: macos-arm64
-            artifactPath: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*aarch64.dmg
+            artifactPath: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*aarch64.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - name: macOS x64
             platform: macos-latest
             rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -51,7 +54,10 @@ jobs:
             prepareArgs: --mac --x64
             tauriArgs: --target x86_64-apple-darwin
             artifactName: macos-x64
-            artifactPath: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*x64.dmg
+            artifactPath: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*x64.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - name: Windows x64
             platform: windows-latest
             rustTargets: x86_64-pc-windows-msvc
@@ -59,7 +65,9 @@ jobs:
             prepareArgs: --win --x64
             tauriArgs: --target x86_64-pc-windows-msvc --bundles nsis
             artifactName: windows-x64
-            artifactPath: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*x64-setup.exe
+            artifactPath: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*x64-setup.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
 
     steps:
       - name: Checkout
@@ -83,6 +91,10 @@ jobs:
         run: node scripts/tauri-build.mjs --prepare-only ${{ matrix.prepareArgs }}
 
       - name: Build Tauri bundles
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build ${{ matrix.tauriArgs }}
 
       - name: Upload bundle artifact

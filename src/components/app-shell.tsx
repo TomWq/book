@@ -10,6 +10,7 @@ import { FloatingWritingAssistant } from "@/components/floating-writing-assistan
 import { WorkspaceActions } from "@/components/workspace-actions";
 import { AppIconMark } from "@/components/app-icon-mark";
 import { PenNameOnboarding } from "@/components/pen-name-onboarding";
+import { AutoUpdatePrompt } from "@/components/auto-update-prompt";
 
 const navItems: SideNavItem[] = [
   { href: "/", label: "首页" },
@@ -118,6 +119,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
       {user && !isAdminMode ? <FloatingWritingAssistant authorName={user.penName || user.name} /> : null}
       {user && !isAdminMode ? <PenNameOnboarding initialPenName={user.penName} /> : null}
+      {user && !isAdminMode && desktopRuntime ? <AutoUpdatePrompt /> : null}
     </div>
   );
 }

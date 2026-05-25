@@ -52,6 +52,7 @@ export async function proxy(request: NextRequest) {
       pathname === "/api/license/verify" ||
       pathname === "/api/app/update/manifest" ||
       pathname === "/api/app/update/check" ||
+      pathname.startsWith("/api/app/tauri-update/") ||
       pathname.startsWith("/api/download/") ||
       pathname === "/api/health" ||
       pathname === "/api/jobs/worker";
@@ -125,7 +126,7 @@ export async function proxy(request: NextRequest) {
     return rewriteWithPath(request, "/login", "/login");
   }
 
-  if (publicPaths.has(pathname) || pathname.startsWith("/api/download/")) {
+  if (publicPaths.has(pathname) || pathname.startsWith("/api/download/") || pathname.startsWith("/api/app/tauri-update/")) {
     return nextWithPath(request);
   }
 

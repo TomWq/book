@@ -32,6 +32,7 @@ const APP_NAME: &str = "AI 网文写作助手";
 const DEFAULT_PORT: u16 = 3131;
 const DEFAULT_LICENSE_SERVER_URL: &str = "http://62.234.205.107";
 const DEFAULT_LICENSE_SERVER_TIMEOUT_MS: &str = "30000";
+const DEFAULT_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3M0I3RkZFQkM5NzVGNApSV1QwZGNuci83ZHpDdnJrYlJtdUloV1p5SERoSGZiVHJPdUc5MXJXNUtrTk9MU1dzZzZRM2dCKwo=";
 const MENU_OPEN_LOGS: &str = "open_logs_dir";
 const SPLASH_WINDOW: &str = "splash";
 const MAIN_WINDOW: &str = "main";
@@ -527,6 +528,13 @@ fn main() {
     let main_window_ready_for_setup = Arc::clone(&main_window_ready);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(env_or_default("TAURI_UPDATER_PUBLIC_KEY", DEFAULT_UPDATER_PUBLIC_KEY))
+                .build(),
+        )
         .setup(move |app| -> Result<(), Box<dyn std::error::Error>> {
             setup_app_menu(app)?;
 

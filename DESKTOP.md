@@ -53,8 +53,11 @@ GitHub Actions 会构建：
 
 ```text
 macOS Apple 芯片 DMG
+macOS Apple 芯片 updater 包和 .sig
 macOS Intel DMG
+macOS Intel updater 包和 .sig
 Windows x64 NSIS Setup.exe
+Windows x64 Setup.exe.sig
 ```
 
 ## 正式发布
@@ -75,7 +78,7 @@ npm run release:tauri:status
 npm run release:download
 ```
 
-然后把 `release/packages/v版本号/` 里的三个安装包上传到 COS，最后发布下载清单：
+然后按 `release/packages/v版本号/UPLOAD_THESE_FILES.txt` 上传安装包、updater 包和 `.sig` 到 COS，最后发布下载清单：
 
 ```bash
 DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
@@ -121,4 +124,4 @@ Windows: %APPDATA%/com.ai-novel-workbench.tauri/logs/tauri.log
 
 1. macOS Developer ID 签名和公证。
 2. Windows Authenticode 签名。
-3. 更完整的自动更新体验。
+3. HTTPS 域名就绪后，把 updater endpoint 从 HTTP 切到 HTTPS。

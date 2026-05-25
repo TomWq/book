@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "icons:generate": "node scripts/generate-desktop-icons  .mjs",
+    "icons:generate": "node scripts/generate-desktop-icons.mjs",
     "tauri:prepare": "node scripts/tauri-prepare.mjs",
     "tauri:dev": "npm run tauri:prepare && tauri dev",
     "tauri:build": "node scripts/tauri-build.mjs",
@@ -22,7 +22,7 @@
     "release:tauri:status": "gh run list --workflow \"Tauri Release\" --limit 5",
     "release:download": "node scripts/download-tauri-release.mjs",
     "downloads:publish": "node scripts/publish-downloads.mjs",
-    "downloads:local": "node scripts/publish-downloads.mjs --local-only", 
+    "downloads:local": "node scripts/publish-downloads.mjs --local-only",
     "downloads:manifest": "node scripts/publish-downloads.mjs --manifest-only",
     "manual:build": "node scripts/build-user-manual.mjs",
     "deploy:server": "node scripts/deploy-server.mjs",
@@ -32,6 +32,9 @@
     "activation:reset": "node scripts/reset-local-activation.mjs"
   },
   "dependencies": {
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@xyflow/react": "^12.10.2",
     "better-sqlite3": "^12.10.0",
     "next": "^16.2.6",

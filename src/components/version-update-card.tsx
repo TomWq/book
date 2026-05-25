@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { openExternalUrl } from "@/lib/client-open-external";
 
 type UpdateCheckResult = {
   currentVersion: string;
@@ -126,13 +127,13 @@ export function VersionUpdateCard({ currentVersion }: { currentVersion: string }
           {checking ? "正在检查..." : "检查更新"}
         </button>
         {result?.downloadUrl ? (
-          <a className="button" href={result.downloadUrl} target="_blank" rel="noreferrer">
+          <button className="button" type="button" onClick={() => void openExternalUrl(result.downloadUrl)}>
             {result.hasUpdate ? "下载新版" : "下载当前版本"}
-          </a>
+          </button>
         ) : null}
-        <a className="button" href={result?.downloadPageUrl || "/download"} target="_blank" rel="noreferrer">
+        <button className="button" type="button" onClick={() => void openExternalUrl(result?.downloadPageUrl || "/download")}>
           下载中心
-        </a>
+        </button>
       </div>
 
       {result?.announcement ? (

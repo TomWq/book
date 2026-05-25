@@ -2,6 +2,7 @@
 
 import { CSSProperties, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { MoLanMascot } from "@/components/molan-mascot";
 import { WritingAssistantPanel } from "@/components/writing-assistant-panel";
 
 function getProjectId(pathname: string) {
@@ -14,7 +15,7 @@ function getProjectId(pathname: string) {
 const introDismissedKey = "writing-assistant:intro-dismissed";
 const routeTipDismissedPrefix = "writing-assistant:route-tip-dismissed:";
 const launcherPositionKey = "writing-assistant:launcher-position";
-const launcherSize = 64;
+const launcherSize = 92;
 const launcherMargin = 12;
 
 type LauncherPosition = {
@@ -414,12 +415,13 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
   const launcherStyle: CSSProperties | undefined = launcherPosition
     ? { left: launcherPosition.x, top: launcherPosition.y, right: "auto", bottom: "auto" }
     : undefined;
+  const tipSide = launcherPosition && launcherPosition.x < 210 ? "left" : "right";
 
   return (
     <>
       <div className="floating-ai-launcher" style={launcherStyle}>
         {visibleTip && !open ? (
-          <div className="floating-ai-greeting" role="status">
+          <div className="floating-ai-greeting" role="status" data-side={tipSide}>
             <button type="button" aria-label="关闭墨澜提示" onClick={dismissTip}>
               ×
             </button>
@@ -431,8 +433,10 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
         <button
           className="floating-ai-button"
           type="button"
+          aria-label="打开墨澜 AI 创作助手"
           aria-expanded={open}
           aria-controls="writing-assistant-drawer"
+          data-mood={open ? "listening" : visibleTip ? "speaking" : "idle"}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={finishDrag}
@@ -447,11 +451,7 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
             setOpen((current) => !current);
           }}
         >
-          <span className="floating-ai-orb" aria-hidden="true">
-            <span className="floating-ai-book" />
-            <span className="floating-ai-face" />
-            <span className="floating-ai-label">AI</span>
-          </span>
+          <MoLanMascot />
         </button>
       </div>
 

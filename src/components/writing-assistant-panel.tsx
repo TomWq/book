@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MoLanMascot } from "@/components/molan-mascot";
 
 type ChatMessage = {
   id: string;
@@ -519,11 +520,9 @@ export function WritingAssistantPanel({
       <section className={className} aria-label="AI 创作顾问工作台">
         <aside className="assistant-chat-sidebar">
           <div className="assistant-chat-brand">
-            <div className="floating-ai-orb" aria-hidden="true">
-              <span className="floating-ai-book" />
-              <span className="floating-ai-face" />
-              <span className="floating-ai-label">AI</span>
-            </div>
+            <span className="assistant-chat-mascot" data-mood={loading || historyLoading ? "listening" : "idle"} aria-hidden="true">
+              <MoLanMascot />
+            </span>
             <div>
               <strong>墨澜</strong>
               <span>{projectId ? "当前作品上下文" : "通用小说创作"}</span>

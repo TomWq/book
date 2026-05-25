@@ -17,12 +17,37 @@ const assets = [
     output: `AI网文写作助手-Setup-${version}-x64.exe`
   },
   {
+    pattern: "*x64-setup.exe.sig",
+    output: `AI网文写作助手-Setup-${version}-x64.exe.sig`,
+    optional: true
+  },
+  {
     pattern: "*aarch64.dmg",
     output: `AI网文写作助手-${version}-arm64-mac.dmg`
   },
   {
+    pattern: "*aarch64.app.tar.gz",
+    output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz`,
+    optional: true
+  },
+  {
+    pattern: "*aarch64.app.tar.gz.sig",
+    output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz.sig`,
+    optional: true
+  },
+  {
     pattern: "*x64.dmg",
     output: `AI网文写作助手-${version}-x64-mac.dmg`
+  },
+  {
+    pattern: "*x64.app.tar.gz",
+    output: `AI网文写作助手-${version}-x64-mac.app.tar.gz`,
+    optional: true
+  },
+  {
+    pattern: "*x64.app.tar.gz.sig",
+    output: `AI网文写作助手-${version}-x64-mac.app.tar.gz.sig`,
+    optional: true
   }
 ];
 
@@ -53,25 +78,40 @@ async function downloadAsset(asset) {
 
   await rm(tempPath, { force: true });
   await rm(outputPath, { force: true });
-  await run("gh", [
-    "release",
-    "download",
-    tag,
-    "--repo",
-    "TomWq/book",
-    "--pattern",
-    asset.pattern,
-    "--output",
-    tempPath,
-    "--clobber"
-  ]);
+  try {
+    await run("gh", [
+      "release",
+      "download",
+      tag,
+      "--repo",
+      "TomWq/book",
+      "--pattern",
+      asset.pattern,
+      "--output",
+      tempPath,
+      "--clobber"
+    ]);
+  } catch (error) {
+    if (asset.optional) {
+      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${asset.pattern}`);
+      return false;
+    }
+
+    throw error;
+  }
 
   if (!existsSync(tempPath)) {
+    if (asset.optional) {
+      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${asset.pattern}`);
+      return false;
+    }
+
     throw new Error(`下载失败，未找到 ${tempPath}`);
   }
 
   await rename(tempPath, outputPath);
   console.log(`[release-download] 已保存：release/packages/v${version}/${asset.output}`);
+  return true;
 }
 
 async function main() {
@@ -82,18 +122,19 @@ async function main() {
   await rm(packageDir, { recursive: true, force: true });
   await mkdir(packageDir, { recursive: true });
 
+  const downloaded = [];
   for (const asset of assets) {
-    await downloadAsset(asset);
+    if (await downloadAsset(asset)) {
+      downloaded.push(asset.output);
+    }
   }
 
   await writeFile(
     path.join(packageDir, "UPLOAD_THESE_FILES.txt"),
     [
-      "上传 COS 时只上传本目录里的三个安装包：",
+      "上传 COS 时上传本目录里的安装包和 updater 产物：",
       "",
-      `AI网文写作助手-Setup-${version}-x64.exe`,
-      `AI网文写作助手-${version}-arm64-mac.dmg`,
-      `AI网文写作助手-${version}-x64-mac.dmg`,
+      ...downloaded,
       "",
       "不要上传这个说明文件。",
       ""

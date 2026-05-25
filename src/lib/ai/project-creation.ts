@@ -9,6 +9,11 @@ export type TitleNamingStyle = "fanqie" | "qidian";
 export type TagTaxonomyStyle = "fanqie" | "qidian";
 export type DescriptionWritingStyle = "fanqie" | "qidian";
 export type WorkLengthType = "short" | "medium" | "long" | "epic";
+export type ProjectCreationCharacterRole = "男主" | "女主" | "男配" | "女配";
+export type ProjectCreationCharacterInput = {
+  role: ProjectCreationCharacterRole;
+  name?: string;
+};
 
 export type ProjectCreationAssistInput = {
   action: ProjectCreationAssistAction;
@@ -18,6 +23,7 @@ export type ProjectCreationAssistInput = {
   targetReader?: string;
   tags?: string[];
   protagonistNames?: string[];
+  protagonistCharacters?: ProjectCreationCharacterInput[];
   coreSellingPoint?: string;
   goldenFinger?: string;
   openingHook?: string;
@@ -33,6 +39,7 @@ export type ProjectCreationAssistInput = {
 export type ProjectCreationAssistResult = {
   titles: string[];
   protagonistNames: string[];
+  protagonistCharacters: ProjectCreationCharacterInput[];
   description: string;
 };
 
@@ -46,8 +53,39 @@ function normalizeResult(value: Partial<ProjectCreationAssistResult>) {
   return attachAiTokenUsage({
     titles: list(value.titles).slice(0, 8),
     protagonistNames: list(value.protagonistNames).slice(0, 8),
+    protagonistCharacters: normalizeCharacters(value.protagonistCharacters),
     description: String(value.description ?? "").trim()
   }, getAiTokenUsage(value));
+}
+
+function normalizeCharacterRole(value: unknown, fallback: ProjectCreationCharacterRole = "男主"): ProjectCreationCharacterRole {
+  return value === "男主" || value === "女主" || value === "男配" || value === "女配" ? value : fallback;
+}
+
+function normalizeCharacters(value: unknown): ProjectCreationCharacterInput[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .flatMap((item, index): ProjectCreationCharacterInput[] => {
+      if (!item || typeof item !== "object") {
+        return [];
+      }
+
+      const raw = item as { role?: unknown; name?: unknown };
+      const name = String(raw.name ?? "").trim();
+
+      if (!name) {
+        return [];
+      }
+
+      return [{
+        role: normalizeCharacterRole(raw.role, index === 1 ? "女主" : "男主"),
+        name
+      }];
+    })
+    .slice(0, 8);
 }
 
 function titleCraftRules(titleNamingStyle: TitleNamingStyle) {
@@ -110,6 +148,21 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
   const titleNamingStyle = input.titleNamingStyle === "qidian" ? "qidian" : "fanqie";
   const tagTaxonomyStyle = input.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie";
   const descriptionWritingStyle = input.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie";
+  const characterSlots = (input.protagonistCharacters?.length
+    ? input.protagonistCharacters
+    : (input.protagonistNames ?? []).map((name, index) => ({ role: normalizeCharacterRole(index === 1 ? "女主" : "男主"), name }))
+  )
+    .map((item, index) => ({
+      role: normalizeCharacterRole(item.role, index === 1 ? "女主" : "男主"),
+      name: String(item.name ?? "").trim()
+    }))
+    .slice(0, 8);
+  const requestedCharacterSlots = characterSlots.length > 0
+    ? characterSlots
+    : [
+        { role: "男主" as const, name: "" },
+        { role: "女主" as const, name: "" }
+      ];
   const actionConfig: Record<
     ProjectCreationAssistAction,
     {
@@ -132,12 +185,13 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     },
     protagonists: {
       task:
-        "只生成 8 个适合该题材的主角名。名字要像中文网文主角，易读、好记、有辨识度；避免生僻字堆砌，避免像真实公众人物。",
+        "只为新建作品表单里的人物栏生成中文角色名。必须逐行理解 characterSlots 的 role：男主/男配只能生成男性气质姓名，女主/女配只能生成女性气质姓名；不要把女主、女配生成男性名。已有 name 的行不要强行改名，空白行必须给出对应姓名。名字要像中文网文角色，易读、好记、有辨识度，避免生僻字堆砌，避免像真实公众人物。",
       outputSchema: {
+        protagonistCharacters: "Array<{ role: '男主' | '女主' | '男配' | '女配'; name: string }>",
         protagonistNames: "string[]"
       },
       temperature: 0.8,
-      maxTokens: 350
+      maxTokens: 520
     },
     description: {
       task: descriptionTask(descriptionWritingStyle),
@@ -182,6 +236,14 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     input.action === "description" && input.targetTotalWords
       ? `简介需要符合当前作品体量：${input.workLengthType ?? "medium"}，目标约 ${Math.round(input.targetTotalWords / 10000)} 万字；不要把短篇写成长篇无限升级，也不要把长篇写成很快收尾。`
       : null,
+    input.action === "protagonists"
+      ? [
+          "人物取名必须按 requestedCharacterSlots 顺序返回 protagonistCharacters。",
+          "每个返回项都要包含 role 和 name；protagonistNames 也要按相同顺序给出 name。",
+          "男主、男配使用男性姓名；女主、女配使用女性姓名。不要让女主/女配出现明显男性名。",
+          "不同角色的名字要有差异，不要同音堆叠，不要套用同一个姓氏模板。"
+        ].join("")
+      : null,
     ...(input.action === "description" ? descriptionStyleRules(descriptionWritingStyle) : []),
     "如果用户已经输入内容，请保留核心意思并增强网文吸引力。",
     "所有输出必须服务当前题材和标签，不要生成泛泛模板话。"
@@ -205,6 +267,8 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               targetReader: input.targetReader,
               tags: input.tags ?? [],
               protagonistNames: input.protagonistNames ?? [],
+              characterSlots,
+              requestedCharacterSlots,
               coreSellingPoint: input.coreSellingPoint,
               goldenFinger: input.goldenFinger,
               openingHook: input.openingHook,

@@ -11,6 +11,10 @@ export type AppUpdateFile = {
   url?: string;
   sizeBytes?: number;
   sha256?: string;
+  updaterFileName?: string;
+  updaterUrl?: string;
+  updaterSignature?: string;
+  updaterSizeBytes?: number;
   platform?: string;
   arch?: string;
 };
@@ -141,6 +145,10 @@ function normalizeFile(value: unknown): AppUpdateFile | undefined {
     url: normalizeUrl(readString(raw, "url")),
     sizeBytes: normalizeSize(raw.sizeBytes),
     sha256: readString(raw, "sha256"),
+    updaterFileName: readString(raw, "updaterFileName"),
+    updaterUrl: normalizeUrl(readString(raw, "updaterUrl")),
+    updaterSignature: readString(raw, "updaterSignature"),
+    updaterSizeBytes: normalizeSize(raw.updaterSizeBytes),
     platform: readString(raw, "platform"),
     arch: readString(raw, "arch")
   };

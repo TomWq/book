@@ -8,6 +8,8 @@ const ssrChunksDir = path.join(standaloneDir, ".next", "server", "chunks", "ssr"
 const nodeModulesDir = path.join(standaloneDir, "node_modules");
 const sourceStaticDir = path.join(root, ".next", "static");
 const targetStaticDir = path.join(standaloneDir, ".next", "static");
+const sourcePublicDir = path.join(root, "public");
+const targetPublicDir = path.join(standaloneDir, "public");
 const forcedRuntimePackages = ["better-sqlite3", "bindings", "file-uri-to-path"];
 
 function run(command, args, options = {}) {
@@ -119,9 +121,21 @@ function syncStaticAssets() {
   console.log("[tauri-prepare] 已同步 Next 静态资源到 .next/standalone/.next/static");
 }
 
+function syncPublicAssets() {
+  if (!existsSync(sourcePublicDir)) {
+    return;
+  }
+
+  rmSync(targetPublicDir, { recursive: true, force: true });
+  mkdirSync(path.dirname(targetPublicDir), { recursive: true });
+  cpSync(sourcePublicDir, targetPublicDir, { recursive: true });
+  console.log("[tauri-prepare] 已同步 public 资源到 .next/standalone/public");
+}
+
 async function main() {
   await run("next", ["build"]);
   syncStaticAssets();
+  syncPublicAssets();
   syncNativeRuntimePackages();
 
   const aliases = findBetterSqliteAliases();

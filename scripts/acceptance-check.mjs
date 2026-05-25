@@ -45,6 +45,7 @@ const requiredRoutes = [
   "src/app/admin/page.tsx",
   "src/app/api/app/update/manifest/route.ts",
   "src/app/api/app/update/check/route.ts",
+  "src/app/api/app/tauri-update/[target]/[arch]/[currentVersion]/route.ts",
   "src/app/download/page.tsx",
   "src/app/downloads/page.tsx",
   "src/app/api/jobs/worker/route.ts",
@@ -98,12 +99,19 @@ assertIncludes("src/lib/projects.ts", [
   "getProjectAnalysisForUser",
   "getProjectWritingStateForUser"
 ]);
-assertIncludes("package.json", ["acceptance:flow", "release:tauri", "release:download", "downloads:manifest"]);
+assertIncludes("package.json", [
+  "acceptance:flow",
+  "release:tauri",
+  "release:download",
+  "downloads:manifest",
+  "@tauri-apps/plugin-updater"
+]);
 assertIncludes("src/lib/app-update.ts", [
   "APP_LATEST_VERSION",
   "APP_UPDATE_DOWNLOAD_WIN_URL",
   "APP_UPDATE_MANIFEST_URL",
-  "compareAppVersions"
+  "compareAppVersions",
+  "updaterSignature"
 ]);
 assertIncludes("src/app/download/page.tsx", ["Windows 版", "Mac 版", "Mac Intel 版"]);
 assertIncludes("src/components/version-update-card.tsx", ["检查更新", "下载新版"]);
@@ -113,6 +121,8 @@ assertIncludes("src/lib/store-persistence.ts", [
   "readCoreStoreFromDb",
   "getPersistenceStatus"
 ]);
-assertIncludes("src/proxy.ts", ["/download", "/downloads", "/api/jobs/worker", "/api/app/update/manifest"]);
+assertIncludes("src/proxy.ts", ["/download", "/downloads", "/api/jobs/worker", "/api/app/update/manifest", "/api/app/tauri-update/"]);
+assertIncludes("src-tauri/tauri.conf.json", ["createUpdaterArtifacts", "dangerousInsecureTransportProtocol"]);
+assertIncludes("src-tauri/capabilities/default.json", ["updater:default", "process:default", "opener:default"]);
 
 console.log("验收守门检查通过：拆书、模板、大纲、创作、状态、二稿、后台 Worker 和 SQLite 关键契约均存在。");

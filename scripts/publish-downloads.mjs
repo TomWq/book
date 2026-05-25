@@ -77,6 +77,10 @@ function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
+function readTextIfExists(filePath) {
+  return existsSync(filePath) ? readFileSync(filePath, "utf8").trim() : "";
+}
+
 function newestExistingMtime(paths) {
   return paths
     .map((filePath) => existsSync(filePath) ? statSync(filePath).mtimeMs : 0)
@@ -140,6 +144,11 @@ function releaseFileIfManifestOnly(fileName) {
 
 function fileEntry(input) {
   const sizeBytes = statSync(input.path).size;
+  const updaterPath = input.updaterFileName
+    ? path.join(releasePackageDir, input.updaterFileName)
+    : "";
+  const updaterSignaturePath = updaterPath ? `${updaterPath}.sig` : "";
+  const hasUpdater = updaterPath && existsSync(updaterPath) && existsSync(updaterSignaturePath);
 
   return {
     label: input.label,
@@ -147,6 +156,10 @@ function fileEntry(input) {
     url: `${input.baseUrl}/${encodeURIComponent(input.fileName)}`,
     sizeBytes,
     sha256: sha256(input.path),
+    updaterFileName: hasUpdater ? input.updaterFileName : "",
+    updaterUrl: hasUpdater ? `${input.baseUrl}/${encodeURIComponent(input.updaterFileName)}` : "",
+    updaterSignature: hasUpdater ? readTextIfExists(updaterSignaturePath) : "",
+    updaterSizeBytes: hasUpdater ? statSync(updaterPath).size : undefined,
     platform: input.platform,
     arch: input.arch
   };
@@ -165,18 +178,21 @@ async function main() {
     win32X64: {
       label: "Windows x64",
       fileName: `AI网文写作助手-Setup-${version}-x64.exe`,
+      updaterFileName: `AI网文写作助手-Setup-${version}-x64.exe`,
       platform: "win32",
       arch: "x64"
     },
     darwinArm64: {
       label: "macOS Apple 芯片",
       fileName: `AI网文写作助手-${version}-arm64-mac.dmg`,
+      updaterFileName: `AI网文写作助手-${version}-arm64-mac.app.tar.gz`,
       platform: "darwin",
       arch: "arm64"
     },
     darwinX64: {
       label: "macOS Intel",
       fileName: `AI网文写作助手-${version}-x64-mac.dmg`,
+      updaterFileName: `AI网文写作助手-${version}-x64-mac.app.tar.gz`,
       platform: "darwin",
       arch: "x64"
     }
@@ -214,6 +230,14 @@ async function main() {
         const targetPath = path.join(tempDir, item.fileName);
         writeFileSync(targetPath, readFileSync(source));
         writeFileSync(path.join(localDownloadsDir, item.fileName), readFileSync(source));
+        if (item.updaterFileName) {
+          const updaterSource = releaseFile(item.updaterFileName);
+          const updaterSignatureSource = releaseFile(`${item.updaterFileName}.sig`);
+          writeFileSync(path.join(tempDir, item.updaterFileName), readFileSync(updaterSource));
+          writeFileSync(path.join(tempDir, `${item.updaterFileName}.sig`), readFileSync(updaterSignatureSource));
+          writeFileSync(path.join(localDownloadsDir, item.updaterFileName), readFileSync(updaterSource));
+          writeFileSync(path.join(localDownloadsDir, `${item.updaterFileName}.sig`), readFileSync(updaterSignatureSource));
+        }
       }
     }
 

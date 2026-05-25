@@ -368,9 +368,14 @@ async function main() {
   await ensureRustTarget(triple);
 
   const tauriArgs = ["build", "--target", triple];
+  const hasSigningKey = Boolean(process.env.TAURI_SIGNING_PRIVATE_KEY || process.env.TAURI_SIGNING_PRIVATE_KEY_PATH);
 
   await run(binCommand("tauri"), tauriArgs, {
-    env: { PATH: toolPath }
+    env: {
+      PATH: toolPath,
+      TAURI_UPDATER_PUBLIC_KEY: process.env.TAURI_UPDATER_PUBLIC_KEY || "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3M0I3RkZFQkM5NzVGNApSV1QwZGNuci83ZHpDdnJrYlJtdUloV1p5SERoSGZiVHJPdUc5MXJXNUtrTk9MU1dzZzZRM2dCKwo=",
+      ...(hasSigningKey ? {} : { TAURI_BUNDLER_NO_SIGN: "1" })
+    }
   });
 
   log(`Tauri ${platform}-${arch} 打包完成。`);

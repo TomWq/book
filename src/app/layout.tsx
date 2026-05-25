@@ -3,6 +3,7 @@ import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { AppToaster } from "@/components/app-toaster";
+import { FormValidationLocalizer } from "@/components/form-validation-localizer";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 
 export const metadata: Metadata = {
@@ -29,6 +30,7 @@ export default function RootLayout({
         />
       </head>
       <body className={desktopRuntime ? "desktop-runtime" : undefined}>
+        <FormValidationLocalizer />
         <AppShell>{children}</AppShell>
         <AppToaster />
       </body>

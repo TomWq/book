@@ -46,6 +46,11 @@ type CharacterDraft = {
   name: string;
 };
 
+type CharacterNameSuggestion = {
+  role: CharacterRole;
+  name: string;
+};
+
 type ProjectFormDraft = {
   name: string;
   titleConcept: string;
@@ -271,7 +276,7 @@ export function ProjectForm() {
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [activeTagSection, setActiveTagSection] = useState<TagSectionKey>("mainCategories");
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
-  const [protagonistSuggestions, setProtagonistSuggestions] = useState<string[]>([]);
+  const [protagonistSuggestions, setProtagonistSuggestions] = useState<CharacterNameSuggestion[]>([]);
   const [activeStep, setActiveStep] = useState<CreationStepId>("book-step-identity");
   const [coreSellingPoint, setCoreSellingPoint] = useState("");
   const [goldenFinger, setGoldenFinger] = useState("");
@@ -553,30 +558,6 @@ export function ProjectForm() {
       .slice(0, 8);
   }
 
-  function applySuggestedCharacterName(name: string) {
-    const cleanName = name.trim().slice(0, 12);
-
-    if (!cleanName) {
-      return;
-    }
-
-    setCharacters((current) => {
-      const emptyIndex = current.findIndex((character) => !character.name.trim());
-
-      if (emptyIndex >= 0) {
-        return current.map((character, index) =>
-          index === emptyIndex ? { ...character, name: cleanName } : character
-        );
-      }
-
-      const nextRole: CharacterRole = current.some((character) => character.role === "男主" && character.name.trim())
-        ? "女主"
-        : "男主";
-
-      return [...current, createCharacterDraft(nextRole, cleanName)].slice(0, 8);
-    });
-  }
-
   function getCurrentContext() {
     return {
       name,
@@ -589,6 +570,10 @@ export function ProjectForm() {
       avoidTitles: titleSuggestions,
       tags: selectedTags,
       protagonistNames: getFilledCharacters().map((character) => character.name),
+      protagonistCharacters: characters.map((character) => ({
+        role: character.role,
+        name: character.name.trim()
+      })),
       coreSellingPoint,
       goldenFinger,
       openingHook,
@@ -634,21 +619,50 @@ export function ProjectForm() {
         const names: string[] = Array.isArray(result.protagonistNames)
           ? result.protagonistNames.map((item: unknown) => String(item).trim()).filter(Boolean)
           : [];
+        const suggestedCharacters: CharacterNameSuggestion[] = Array.isArray(result.protagonistCharacters)
+          ? result.protagonistCharacters
+              .map((item: unknown, index: number): CharacterNameSuggestion | null => {
+                if (!item || typeof item !== "object") {
+                  return null;
+                }
 
-        setProtagonistSuggestions(names);
-        if (names.length > 0) {
+                const raw = item as { role?: unknown; name?: unknown };
+                const role = isCharacterRole(raw.role) ? raw.role : characters[index]?.role ?? (index === 1 ? "女主" : "男主");
+                const name = String(raw.name ?? "").trim();
+
+                return name ? { role, name } : null;
+              })
+              .filter((item: CharacterNameSuggestion | null): item is CharacterNameSuggestion => Boolean(item))
+          : [];
+        const fallbackSuggestions = names.map((item, index) => ({
+          role: characters[index]?.role ?? (index === 1 ? "女主" : "男主"),
+          name: item
+        }));
+        const suggestions = (suggestedCharacters.length > 0 ? suggestedCharacters : fallbackSuggestions).slice(0, 8);
+
+        setProtagonistSuggestions(suggestions);
+        if (suggestions.length > 0) {
           setCharacters((current) => {
             const next = current.length > 0 ? [...current] : defaultCharacters();
 
-            names.slice(0, 2).forEach((item, index) => {
-              const cleanName = item.slice(0, 12);
-              const nextRole: CharacterRole = index === 1 ? "女主" : "男主";
+            next.forEach((character, index) => {
+              const item = suggestions[index];
 
-              if (next[index]) {
-                next[index] = { ...next[index], role: next[index].role || nextRole, name: cleanName };
-              } else {
-                next.push(createCharacterDraft(nextRole, cleanName));
+              if (!item) {
+                return;
               }
+
+              const cleanName = item.name.slice(0, 12);
+
+              if (!cleanName) {
+                return;
+              }
+
+              next[index] = {
+                ...character,
+                role: item.role || character.role,
+                name: cleanName
+              };
             });
 
             return next.slice(0, 8);
@@ -1169,20 +1183,15 @@ export function ProjectForm() {
             </div>
           </div>
           {protagonistSuggestions.length > 0 ? (
-            <div className="assist-suggestion-list compact">
+            <div className="assist-suggestion-list compact" aria-label="AI 取名候选">
               {protagonistSuggestions.map((item) => (
-                <button
-                  key={item}
-                  className="assist-suggestion"
-                  type="button"
-                  onClick={() => applySuggestedCharacterName(item)}
-                >
-                  {item}
-                </button>
+                <span key={`${item.role}-${item.name}`} className="assist-suggestion" aria-disabled="true">
+                  <span>{item.role}</span>
+                  {item.name}
+                </span>
               ))}
             </div>
           ) : null}
-
           <div className="field">
             <div className="field-label">作品体量</div>
             <div className="title-style-picker work-length-picker" aria-label="作品体量">
