@@ -130,7 +130,37 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
-          merge-multiple: true
+
+      - name: Normalize release assets
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          mkdir -p release-assets
+
+          copy_one() {
+            local search_dir="$1"
+            local pattern="$2"
+            local output="$3"
+            local source
+            source="$(find "$search_dir" -type f -name "$pattern" | sort | head -n 1)"
+            if [ -z "$source" ]; then
+              echo "Missing release asset: $search_dir / $pattern"
+              find release-artifacts -maxdepth 4 -type f | sort
+              exit 1
+            fi
+            cp "$source" "release-assets/$output"
+          }
+
+          copy_one "release-artifacts/windows-x64" "*x64-setup.exe" "AI网文写作助手-Setup-${VERSION}-x64.exe"
+          copy_one "release-artifacts/windows-x64" "*x64-setup.exe.sig" "AI网文写作助手-Setup-${VERSION}-x64.exe.sig"
+          copy_one "release-artifacts/macos-arm64" "*aarch64.dmg" "AI网文写作助手-${VERSION}-arm64-mac.dmg"
+          copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz" "AI网文写作助手-${VERSION}-arm64-mac.app.tar.gz"
+          copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz.sig" "AI网文写作助手-${VERSION}-arm64-mac.app.tar.gz.sig"
+          copy_one "release-artifacts/macos-x64" "*x64.dmg" "AI网文写作助手-${VERSION}-x64-mac.dmg"
+          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz" "AI网文写作助手-${VERSION}-x64-mac.app.tar.gz"
+          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz.sig" "AI网文写作助手-${VERSION}-x64-mac.app.tar.gz.sig"
+
+          printf 'Prepared release assets:\n'
+          find release-assets -maxdepth 1 -type f | sort | sed 's#^# - #'
 
       - name: Create draft release
         env:
@@ -142,13 +172,13 @@ jobs:
             gh release delete "$TAG" --yes
           fi
 
-          mapfile -d '' RELEASE_ASSETS < <(find release-artifacts -type f \
+          mapfile -d '' RELEASE_ASSETS < <(find release-assets -type f \
             \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" -o -name "*setup.exe" -o -name "*.sig" \) \
             -print0 | sort -z)
 
           if [ "${#RELEASE_ASSETS[@]}" -eq 0 ]; then
-            echo "No release assets found in release-artifacts."
-            find release-artifacts -maxdepth 3 -print
+            echo "No release assets found in release-assets."
+            find release-assets -maxdepth 3 -print
             exit 1
           fi
 

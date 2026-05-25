@@ -13,39 +13,39 @@ const packageDir = path.join(releaseDir, "packages", `v${version}`);
 
 const assets = [
   {
-    pattern: "*x64-setup.exe",
+    patterns: [`*Setup-${version}-x64.exe`, "*x64-setup.exe"],
     output: `AI网文写作助手-Setup-${version}-x64.exe`
   },
   {
-    pattern: "*x64-setup.exe.sig",
+    patterns: [`*Setup-${version}-x64.exe.sig`, "*x64-setup.exe.sig"],
     output: `AI网文写作助手-Setup-${version}-x64.exe.sig`,
     optional: true
   },
   {
-    pattern: "*aarch64.dmg",
+    patterns: [`*${version}-arm64-mac.dmg`, "*aarch64.dmg"],
     output: `AI网文写作助手-${version}-arm64-mac.dmg`
   },
   {
-    pattern: "*aarch64.app.tar.gz",
+    patterns: [`*${version}-arm64-mac.app.tar.gz`, "*aarch64.app.tar.gz"],
     output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz`,
     optional: true
   },
   {
-    pattern: "*aarch64.app.tar.gz.sig",
+    patterns: [`*${version}-arm64-mac.app.tar.gz.sig`, "*aarch64.app.tar.gz.sig"],
     output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz.sig`,
     optional: true
   },
   {
-    pattern: "*x64.dmg",
+    patterns: [`*${version}-x64-mac.dmg`, "*x64.dmg"],
     output: `AI网文写作助手-${version}-x64-mac.dmg`
   },
   {
-    pattern: "*x64.app.tar.gz",
+    patterns: [`*${version}-x64-mac.app.tar.gz`, "*x64.app.tar.gz"],
     output: `AI网文写作助手-${version}-x64-mac.app.tar.gz`,
     optional: true
   },
   {
-    pattern: "*x64.app.tar.gz.sig",
+    patterns: [`*${version}-x64-mac.app.tar.gz.sig`, "*x64.app.tar.gz.sig"],
     output: `AI网文写作助手-${version}-x64-mac.app.tar.gz.sig`,
     optional: true
   }
@@ -75,34 +75,43 @@ function run(command, args) {
 async function downloadAsset(asset) {
   const tempPath = path.join(packageDir, `.tauri-${asset.output}`);
   const outputPath = path.join(packageDir, asset.output);
+  const patterns = asset.patterns ?? [asset.pattern];
 
   await rm(tempPath, { force: true });
   await rm(outputPath, { force: true });
-  try {
-    await run("gh", [
-      "release",
-      "download",
-      tag,
-      "--repo",
-      "TomWq/book",
-      "--pattern",
-      asset.pattern,
-      "--output",
-      tempPath,
-      "--clobber"
-    ]);
-  } catch (error) {
-    if (asset.optional) {
-      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${asset.pattern}`);
-      return false;
-    }
+  for (const pattern of patterns) {
+    try {
+      await run("gh", [
+        "release",
+        "download",
+        tag,
+        "--repo",
+        "TomWq/book",
+        "--pattern",
+        pattern,
+        "--output",
+        tempPath,
+        "--clobber"
+      ]);
+      break;
+    } catch (error) {
+      await rm(tempPath, { force: true });
+      if (pattern !== patterns.at(-1)) {
+        continue;
+      }
 
-    throw error;
+      if (asset.optional) {
+        console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${patterns.join(" / ")}`);
+        return false;
+      }
+
+      throw error;
+    }
   }
 
   if (!existsSync(tempPath)) {
     if (asset.optional) {
-      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${asset.pattern}`);
+      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${patterns.join(" / ")}`);
       return false;
     }
 
