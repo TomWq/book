@@ -150,14 +150,14 @@ jobs:
             cp "$source" "release-assets/$output"
           }
 
-          copy_one "release-artifacts/windows-x64" "*x64-setup.exe" "AI网文写作助手-Setup-${VERSION}-x64.exe"
-          copy_one "release-artifacts/windows-x64" "*x64-setup.exe.sig" "AI网文写作助手-Setup-${VERSION}-x64.exe.sig"
-          copy_one "release-artifacts/macos-arm64" "*aarch64.dmg" "AI网文写作助手-${VERSION}-arm64-mac.dmg"
-          copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz" "AI网文写作助手-${VERSION}-arm64-mac.app.tar.gz"
-          copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz.sig" "AI网文写作助手-${VERSION}-arm64-mac.app.tar.gz.sig"
-          copy_one "release-artifacts/macos-x64" "*x64.dmg" "AI网文写作助手-${VERSION}-x64-mac.dmg"
-          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz" "AI网文写作助手-${VERSION}-x64-mac.app.tar.gz"
-          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz.sig" "AI网文写作助手-${VERSION}-x64-mac.app.tar.gz.sig"
+          copy_one "release-artifacts/windows-x64" "*x64-setup.exe" "AI-Novel-Workbench-Setup-${VERSION}-x64.exe"
+          copy_one "release-artifacts/windows-x64" "*x64-setup.exe.sig" "AI-Novel-Workbench-Setup-${VERSION}-x64.exe.sig"
+          copy_one "release-artifacts/macos-arm64" "*aarch64.dmg" "AI-Novel-Workbench-${VERSION}-arm64-mac.dmg"
+          copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz" "AI-Novel-Workbench-${VERSION}-arm64-mac.app.tar.gz"
+          copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz.sig" "AI-Novel-Workbench-${VERSION}-arm64-mac.app.tar.gz.sig"
+          copy_one "release-artifacts/macos-x64" "*x64.dmg" "AI-Novel-Workbench-${VERSION}-x64-mac.dmg"
+          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz" "AI-Novel-Workbench-${VERSION}-x64-mac.app.tar.gz"
+          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz.sig" "AI-Novel-Workbench-${VERSION}-x64-mac.app.tar.gz.sig"
 
           printf 'Prepared release assets:\n'
           find release-assets -maxdepth 1 -type f | sort | sed 's#^# - #'
@@ -173,7 +173,7 @@ jobs:
           fi
 
           mapfile -d '' RELEASE_ASSETS < <(find release-assets -type f \
-            \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" -o -name "*setup.exe" -o -name "*.sig" \) \
+            \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" -o -name "*.exe" -o -name "*.sig" \) \
             -print0 | sort -z)
 
           if [ "${#RELEASE_ASSETS[@]}" -eq 0 ]; then
