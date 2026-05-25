@@ -5,32 +5,6 @@ import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
 import { formatReviewText } from "@/lib/review-display";
 
-const genreOptions = [
-  "都市逆袭",
-  "都市高武",
-  "玄幻升级",
-  "东方玄幻",
-  "修仙",
-  "规则怪谈",
-  "悬疑脑洞",
-  "末世",
-  "女频重生",
-  "历史权谋",
-  "直播爽文",
-  "其他"
-];
-
-const workTypeOptions = [
-  "长篇连载",
-  "短篇试写",
-  "开局样章",
-  "拆书迁移新书",
-  "系列文第一卷"
-];
-
-const readerOptions = ["男频", "女频", "通用", "网文读者", "小红书读者", "公众号读者"];
-const volumeOptions = ["第一卷", "第二卷", "第三卷", "番外卷", "完结卷"];
-const mapOptions = ["初始地图", "校园/基地", "城市", "家族/宗门", "秘境/副本", "更高层势力", "全国/天下"];
 const styleOptions = ["快节奏强爽点", "悬疑推进", "轻松爽文", "热血升级", "压迫反转", "细腻情绪"];
 
 export default async function ProjectStatePage({
@@ -99,7 +73,7 @@ export default async function ProjectStatePage({
             />
             <span className="chip">人物 {profileCount}</span>
             <span className="chip">伏笔 {foreshadowingCount}</span>
-            <span className="chip">主线 {state.plotState.currentVolume}</span>
+            <span className="chip">主线 {state.plotState.currentVolume || "未分卷"}</span>
           </div>
         </div>
         <div className="state-health-strip">
@@ -161,20 +135,17 @@ export default async function ProjectStatePage({
           <div className="split-panels">
             <div className="field">
               <div className="field-label">作品名称</div>
-              <input name="name" defaultValue={state.project.name} placeholder="例如：归零之后，我在古代重启人生" />
+              <div className="locked-setting">
+                <strong>{state.project.name}</strong>
+                <span>创建后锁定，避免章节上下文和项目识别混乱。</span>
+              </div>
             </div>
             <div className="field">
               <div className="field-label">题材类型</div>
-              <select name="genre" defaultValue={state.project.genre || "都市逆袭"}>
-                {state.project.genre && !genreOptions.includes(state.project.genre) ? (
-                  <option value={state.project.genre}>{state.project.genre}</option>
-                ) : null}
-                {genreOptions.map((genre) => (
-                  <option key={genre} value={genre}>
-                    {genre}
-                  </option>
-                ))}
-              </select>
+              <div className="locked-setting">
+                <strong>{state.project.genre || "未填写题材"}</strong>
+                <span>创建后锁定，避免后续创作方向跑偏。</span>
+              </div>
             </div>
           </div>
           <div className="field">
@@ -207,29 +178,17 @@ export default async function ProjectStatePage({
           <div className="split-panels">
             <div className="field">
               <div className="field-label">作品类型</div>
-              <select name="workType" defaultValue={state.bible.workType || "长篇连载"}>
-                {state.bible.workType && !workTypeOptions.includes(state.bible.workType) ? (
-                  <option value={state.bible.workType}>{state.bible.workType}</option>
-                ) : null}
-                {workTypeOptions.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
+              <div className="locked-setting">
+                <strong>{state.bible.workType || "未填写作品类型"}</strong>
+                <span>来自新建作品时的体量规划。</span>
+              </div>
             </div>
             <div className="field">
               <div className="field-label">目标读者</div>
-              <select name="targetReader" defaultValue={state.bible.targetReader || "网文读者"}>
-                {state.bible.targetReader && !readerOptions.includes(state.bible.targetReader) ? (
-                  <option value={state.bible.targetReader}>{state.bible.targetReader}</option>
-                ) : null}
-                {readerOptions.map((reader) => (
-                  <option key={reader} value={reader}>
-                    {reader}
-                  </option>
-                ))}
-              </select>
+              <div className="locked-setting">
+                <strong>{state.bible.targetReader || "网文读者"}</strong>
+                <span>创建后锁定，保持小说读者定位稳定。</span>
+              </div>
             </div>
           </div>
           <div className="field">
@@ -282,7 +241,7 @@ export default async function ProjectStatePage({
             <strong>主线状态</strong>
             <small>告诉 AI 当前写到哪里，下一步必须推进什么。</small>
           </span>
-          <span className="state-section-tag">{state.plotState.currentVolume || "第一卷"}</span>
+          <span className="state-section-tag">{state.plotState.currentVolume || "未分卷"}</span>
         </summary>
         <ApiForm
           className="forms state-plot-form"
@@ -298,30 +257,22 @@ export default async function ProjectStatePage({
         >
           <div className="split-panels">
             <div className="field">
-              <div className="field-label">当前卷</div>
-              <select name="currentVolume" defaultValue={state.plotState.currentVolume || "第一卷"}>
-                {state.plotState.currentVolume && !volumeOptions.includes(state.plotState.currentVolume) ? (
-                  <option value={state.plotState.currentVolume}>{state.plotState.currentVolume}</option>
-                ) : null}
-                {volumeOptions.map((volume) => (
-                  <option key={volume} value={volume}>
-                    {volume}
-                  </option>
-                ))}
-              </select>
+              <div className="field-label">当前分卷 / 阶段</div>
+              <input
+                name="currentVolume"
+                defaultValue={state.plotState.currentVolume}
+                placeholder="不分卷可留空；例如：第一卷 青石镇风波 / 开局篇"
+              />
+              <div className="field-hint">只有你明确设计分卷时再填写；系统不会强行判断第几卷。</div>
             </div>
             <div className="field">
               <div className="field-label">当前地图</div>
-              <select name="currentMap" defaultValue={state.plotState.currentMap || "初始地图"}>
-                {state.plotState.currentMap && !mapOptions.includes(state.plotState.currentMap) ? (
-                  <option value={state.plotState.currentMap}>{state.plotState.currentMap}</option>
-                ) : null}
-                {mapOptions.map((map) => (
-                  <option key={map} value={map}>
-                    {map}
-                  </option>
-                ))}
-              </select>
+              <input
+                name="currentMap"
+                defaultValue={state.plotState.currentMap}
+                placeholder="不确定可留空；例如：青石镇 / 临江市 / 白塔学院"
+              />
+              <div className="field-hint">地图来自正文台账和你的手动维护，不再使用固定模板下拉。</div>
             </div>
           </div>
           <div className="field">

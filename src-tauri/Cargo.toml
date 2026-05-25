@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 url = "2"
 
+[profile.dev]
+incremental = true # Compile your binary in smaller steps.
+
 [profile.release]
 codegen-units = 1
 lto = true

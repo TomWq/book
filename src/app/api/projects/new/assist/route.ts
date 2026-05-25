@@ -11,6 +11,20 @@ function list(value: unknown) {
         .filter(Boolean);
 }
 
+function readWorkLengthType(value: unknown) {
+  return value === "short" || value === "medium" || value === "long" || value === "epic" ? value : "medium";
+}
+
+function readTargetTotalWords(value: unknown) {
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    return 500000;
+  }
+
+  return Math.min(5000000, Math.max(50000, Math.round(numberValue * 10000)));
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const rawAction = String(body.action ?? "");
@@ -32,6 +46,8 @@ export async function POST(request: Request) {
       coreSellingPoint: String(body.coreSellingPoint ?? ""),
       goldenFinger: String(body.goldenFinger ?? ""),
       openingHook: String(body.openingHook ?? ""),
+      workLengthType: readWorkLengthType(body.workLengthType),
+      targetTotalWords: readTargetTotalWords(body.targetTotalWords),
       description: String(body.description ?? ""),
       titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie",
       tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",

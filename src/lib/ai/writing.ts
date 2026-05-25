@@ -368,7 +368,7 @@ function normalizeDraftTargetWordCount(value?: number) {
     return 2500;
   }
 
-  return Math.min(8000, Math.max(800, Math.floor(Number(value))));
+  return Math.min(3000, Math.max(800, Math.floor(Number(value))));
 }
 
 function estimateDraftMaxTokens(targetWordCount: number) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { showToast } from "@/lib/client-toast";
 
 export function CopyButton({ value, label = "复制" }: { value: string; label?: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
@@ -39,9 +40,11 @@ export function CopyButton({ value, label = "复制" }: { value: string; label?:
     try {
       await copyText(value);
       setState("copied");
+      showToast({ type: "success", title: "复制成功", message: "内容已经复制到剪贴板。" });
       window.setTimeout(() => setState("idle"), 1600);
     } catch {
       setState("failed");
+      showToast({ type: "error", title: "复制失败", message: "系统没有允许写入剪贴板，请手动复制。" });
       window.setTimeout(() => setState("idle"), 2200);
     }
   }

@@ -167,12 +167,17 @@ export async function POST(
   const { projectId } = await context.params;
   const body = await request.json().catch(() => ({}));
   const action = String(body.action ?? "");
+  const currentState = await getProjectWritingState(projectId);
+
+  if (!currentState) {
+    return Response.json({ error: "项目不存在" }, { status: 404 });
+  }
 
   try {
     if (action === "update_project") {
       const project = await updateProjectMetadata(projectId, {
-        name: String(body.name ?? ""),
-        genre: String(body.genre ?? ""),
+        name: currentState.project.name,
+        genre: currentState.project.genre,
         description: String(body.description ?? "")
       });
 
@@ -181,8 +186,8 @@ export async function POST(
 
     if (action === "update_bible") {
       const bible = await updateWritingBible(projectId, {
-        workType: String(body.workType ?? ""),
-        targetReader: String(body.targetReader ?? ""),
+        workType: currentState.bible.workType,
+        targetReader: currentState.bible.targetReader,
         corePleasure: String(body.corePleasure ?? ""),
         protagonistDesire: String(body.protagonistDesire ?? ""),
         worldRules: String(body.worldRules ?? ""),

@@ -15,6 +15,40 @@ function list(value: unknown) {
         .filter(Boolean);
 }
 
+function characterList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const raw = item as { name?: unknown; role?: unknown };
+      const name = String(raw.name ?? "").trim();
+      const role = String(raw.role ?? "").trim();
+
+      return name ? { name, role } : null;
+    })
+    .filter((item): item is { name: string; role: string } => Boolean(item));
+}
+
+function readWorkLengthType(value: unknown) {
+  return value === "short" || value === "medium" || value === "long" || value === "epic" ? value : "medium";
+}
+
+function readTargetTotalWords(value: unknown) {
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    return 500000;
+  }
+
+  return Math.min(5000000, Math.max(50000, Math.round(numberValue)));
+}
+
 export async function GET() {
   const projects = await getProjects();
   return Response.json({ projects });
@@ -39,6 +73,9 @@ export async function POST(request: Request) {
       tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",
       tags: list(body.tags),
       protagonistNames: list(body.protagonistNames),
+      protagonistCharacters: characterList(body.protagonistCharacters),
+      workLengthType: readWorkLengthType(body.workLengthType),
+      targetTotalWords: readTargetTotalWords(body.targetTotalWords),
       coreSellingPoint: String(body.coreSellingPoint ?? ""),
       openingHook: String(body.openingHook ?? ""),
       goldenFinger: String(body.goldenFinger ?? ""),

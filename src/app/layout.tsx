@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
+import { AppToaster } from "@/components/app-toaster";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 
 export const metadata: Metadata = {
@@ -23,12 +24,13 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(() => { try { const key = "ai-novel-workbench-theme"; const stored = localStorage.getItem(key); const theme = stored === "dark" || stored === "light" ? stored : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; } catch {} })();`
+            __html: `(() => { try { const key = "ai-novel-workbench-theme"; const stored = localStorage.getItem(key); const theme = stored === "dark" || stored === "light" ? stored : "light"; document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; } catch {} })();`
           }}
         />
       </head>
       <body className={desktopRuntime ? "desktop-runtime" : undefined}>
         <AppShell>{children}</AppShell>
+        <AppToaster />
       </body>
     </html>
   );

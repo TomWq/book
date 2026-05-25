@@ -23,6 +23,19 @@ export default function NewProjectPage() {
         </div>
       </section>
 
+      <section className="new-project-guide">
+        <div>
+          <span>墨澜建议</span>
+          <strong>第一次创建作品，不用把所有设定都想完</strong>
+          <p>先选读者和题材标签，再让 AI 试起书名、主角名和简介。创建成功后，直接去生成第一章任务卡。</p>
+        </div>
+        <ol>
+          <li><span>1</span>选读者与标签</li>
+          <li><span>2</span>AI 起名和取主角</li>
+          <li><span>3</span>生成简介并创建</li>
+        </ol>
+      </section>
+
       <Panel
           title="作品基础信息"
           description="这些信息会同步成为后续状态管理的初始设定。只想上传原文做拆解，请使用独立的拆书项目入口。"

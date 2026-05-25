@@ -30,6 +30,21 @@ type TagTaxonomyStyle = "fanqie" | "qidian";
 type DescriptionWritingStyle = "fanqie" | "qidian";
 type CreationStepId = (typeof creationSteps)[number]["id"];
 type TagSectionKey = (typeof fanqieTagSections)[number]["key"] | (typeof qidianTagSections)[number]["key"];
+type WorkLengthType = "short" | "medium" | "long" | "epic";
+const characterRoleOptions = ["男主", "女主", "男配", "女配"] as const;
+const workLengthOptions: Array<{ value: WorkLengthType; label: string; hint: string; defaultWords: string }> = [
+  { value: "short", label: "短篇", hint: "适合 10-30 万字，节奏更紧，结局提前规划", defaultWords: "20" },
+  { value: "medium", label: "中篇", hint: "适合 30-80 万字，主线完整，支线克制", defaultWords: "50" },
+  { value: "long", label: "长篇", hint: "适合 80-150 万字，多阶段升级和地图推进", defaultWords: "100" },
+  { value: "epic", label: "超长篇", hint: "适合 150 万字以上，长期连载和多卷结构", defaultWords: "200" }
+];
+type CharacterRole = (typeof characterRoleOptions)[number];
+
+type CharacterDraft = {
+  id: string;
+  role: CharacterRole;
+  name: string;
+};
 
 type ProjectFormDraft = {
   name: string;
@@ -40,8 +55,9 @@ type ProjectFormDraft = {
   tagTaxonomyStyle: TagTaxonomyStyle;
   descriptionWritingStyle: DescriptionWritingStyle;
   description: string;
-  protagonist1: string;
-  protagonist2: string;
+  characters: CharacterDraft[];
+  protagonist1?: string;
+  protagonist2?: string;
   targetReader: TargetReader;
   genre: string;
   selectedTags: string[];
@@ -51,7 +67,16 @@ type ProjectFormDraft = {
   goldenFinger: string;
   openingHook: string;
   writingGoal: string;
+  workLengthType: WorkLengthType;
+  targetTotalWords: string;
 };
+
+function defaultCharacters(): CharacterDraft[] {
+  return [
+    { id: "lead-male", role: "男主", name: "" },
+    { id: "lead-female", role: "女主", name: "" }
+  ];
+}
 
 const defaultDraft: ProjectFormDraft = {
   name: "",
@@ -62,8 +87,7 @@ const defaultDraft: ProjectFormDraft = {
   tagTaxonomyStyle: "fanqie",
   descriptionWritingStyle: "fanqie",
   description: "",
-  protagonist1: "",
-  protagonist2: "",
+  characters: defaultCharacters(),
   targetReader: "男频",
   genre: "",
   selectedTags: [],
@@ -72,7 +96,9 @@ const defaultDraft: ProjectFormDraft = {
   coreSellingPoint: "",
   goldenFinger: "",
   openingHook: "",
-  writingGoal: ""
+  writingGoal: "",
+  workLengthType: "medium",
+  targetTotalWords: "50"
 };
 
 function asText(value: FormDataEntryValue | null) {
@@ -103,8 +129,85 @@ function isTagSectionKey(value: unknown): value is TagSectionKey {
   return [...fanqieTagSections, ...qidianTagSections].some((section) => section.key === value);
 }
 
+function isCharacterRole(value: unknown): value is CharacterRole {
+  return characterRoleOptions.includes(value as CharacterRole);
+}
+
+function isWorkLengthType(value: unknown): value is WorkLengthType {
+  return workLengthOptions.some((option) => option.value === value);
+}
+
 function stringValue(value: unknown, maxLength = 1000) {
   return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function normalizeTargetTotalWords(value: unknown) {
+  const text = stringValue(value, 8).replace(/[^\d.]/g, "");
+  const numberValue = Number(text);
+
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    return defaultDraft.targetTotalWords;
+  }
+
+  return String(Math.min(500, Math.max(5, Math.round(numberValue))));
+}
+
+function cleanTargetTotalWordsInput(value: string) {
+  const text = value.replace(/[^\d]/g, "").slice(0, 3);
+
+  if (!text) {
+    return "";
+  }
+
+  return String(Math.min(500, Math.max(1, Number(text))));
+}
+
+function createCharacterDraft(role: CharacterRole = "男主", name = ""): CharacterDraft {
+  return {
+    id: `character-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    name: name.slice(0, 12)
+  };
+}
+
+function normalizeCharacters(rawCharacters: unknown, legacyNames: string[]): CharacterDraft[] {
+  if (Array.isArray(rawCharacters)) {
+    const characters = rawCharacters
+      .map((item, index) => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+
+        const raw = item as Partial<Record<keyof CharacterDraft, unknown>>;
+        const role = isCharacterRole(raw.role) ? raw.role : index === 1 ? "女主" : "男主";
+
+        return {
+          id: stringValue(raw.id, 60) || `character-${index}`,
+          role,
+          name: stringValue(raw.name, 12)
+        };
+      })
+      .filter((item): item is CharacterDraft => Boolean(item))
+      .slice(0, 8);
+
+    if (characters.length > 0) {
+      return characters;
+    }
+  }
+
+  const legacyCharacters = legacyNames
+    .map((name, index): CharacterDraft | null =>
+      name.trim()
+        ? {
+            id: `legacy-${index}`,
+            role: index === 1 ? "女主" : "男主",
+            name: name.slice(0, 12)
+          }
+        : null
+    )
+    .filter((item): item is CharacterDraft => Boolean(item));
+
+  return legacyCharacters.length > 0 ? legacyCharacters : defaultCharacters();
 }
 
 function normalizeDraft(value: unknown): ProjectFormDraft {
@@ -113,6 +216,7 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
   }
 
   const raw = value as Partial<Record<keyof ProjectFormDraft, unknown>>;
+  const legacyProtagonists = [stringValue(raw.protagonist1, 12), stringValue(raw.protagonist2, 12)];
 
   return {
     name: stringValue(raw.name, 60),
@@ -125,8 +229,9 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
       ? raw.descriptionWritingStyle
       : defaultDraft.descriptionWritingStyle,
     description: stringValue(raw.description, 500),
-    protagonist1: stringValue(raw.protagonist1, 8),
-    protagonist2: stringValue(raw.protagonist2, 8),
+    characters: normalizeCharacters(raw.characters, legacyProtagonists),
+    protagonist1: legacyProtagonists[0],
+    protagonist2: legacyProtagonists[1],
     targetReader: isTargetReader(raw.targetReader) ? raw.targetReader : defaultDraft.targetReader,
     genre: stringValue(raw.genre, 40),
     selectedTags: Array.isArray(raw.selectedTags)
@@ -137,7 +242,9 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
     coreSellingPoint: stringValue(raw.coreSellingPoint, 160),
     goldenFinger: stringValue(raw.goldenFinger, 160),
     openingHook: stringValue(raw.openingHook, 160),
-    writingGoal: stringValue(raw.writingGoal, 500)
+    writingGoal: stringValue(raw.writingGoal, 500),
+    workLengthType: isWorkLengthType(raw.workLengthType) ? raw.workLengthType : defaultDraft.workLengthType,
+    targetTotalWords: normalizeTargetTotalWords(raw.targetTotalWords)
   };
 }
 
@@ -157,8 +264,7 @@ export function ProjectForm() {
   const [tagTaxonomyStyle, setTagTaxonomyStyle] = useState<TagTaxonomyStyle>("fanqie");
   const [descriptionWritingStyle, setDescriptionWritingStyle] = useState<DescriptionWritingStyle>("fanqie");
   const [description, setDescription] = useState("");
-  const [protagonist1, setProtagonist1] = useState("");
-  const [protagonist2, setProtagonist2] = useState("");
+  const [characters, setCharacters] = useState<CharacterDraft[]>(() => defaultCharacters());
   const [targetReader, setTargetReader] = useState<TargetReader>("男频");
   const [genre, setGenre] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -171,6 +277,8 @@ export function ProjectForm() {
   const [goldenFinger, setGoldenFinger] = useState("");
   const [openingHook, setOpeningHook] = useState("");
   const [writingGoal, setWritingGoal] = useState("");
+  const [workLengthType, setWorkLengthType] = useState<WorkLengthType>("medium");
+  const [targetTotalWords, setTargetTotalWords] = useState("50");
 
   const coverTitle = name || "书本名称";
   const coverAuthor = authorName.trim() || "作者名称";
@@ -207,26 +315,23 @@ export function ProjectForm() {
         setTagTaxonomyStyle(draft.tagTaxonomyStyle);
         setDescriptionWritingStyle(draft.descriptionWritingStyle);
         setDescription(draft.description);
-        setProtagonist1(draft.protagonist1);
-        setProtagonist2(draft.protagonist2);
+        setCharacters(draft.characters);
         setTargetReader(draft.targetReader);
         setGenre(draft.genre);
         setSelectedTags(draft.selectedTags);
         setActiveTagSection(draft.activeTagSection);
-        setActiveStep(draft.activeStep);
         setCoreSellingPoint(draft.coreSellingPoint);
         setGoldenFinger(draft.goldenFinger);
         setOpeningHook(draft.openingHook);
         setWritingGoal(draft.writingGoal);
-
-        window.setTimeout(() => {
-          document.getElementById(draft.activeStep)?.scrollIntoView({ block: "start" });
-        }, 0);
+        setWorkLengthType(draft.workLengthType);
+        setTargetTotalWords(draft.targetTotalWords);
       }
     } catch {
       window.localStorage.removeItem(draftStorageKey);
     }
 
+    window.scrollTo({ top: 0, left: 0 });
     draftRestoredRef.current = true;
   }, []);
 
@@ -244,8 +349,7 @@ export function ProjectForm() {
       tagTaxonomyStyle,
       descriptionWritingStyle,
       description,
-      protagonist1,
-      protagonist2,
+      characters,
       targetReader,
       genre,
       selectedTags,
@@ -254,7 +358,9 @@ export function ProjectForm() {
       coreSellingPoint,
       goldenFinger,
       openingHook,
-      writingGoal
+      writingGoal,
+      workLengthType,
+      targetTotalWords
     };
 
     try {
@@ -272,19 +378,20 @@ export function ProjectForm() {
     authorName,
     coreSellingPoint,
     coverImageUrl,
+    characters,
     description,
     descriptionWritingStyle,
     genre,
     goldenFinger,
     name,
     openingHook,
-    protagonist1,
-    protagonist2,
     selectedTags,
     tagTaxonomyStyle,
     targetReader,
+    targetTotalWords,
     titleConcept,
     titleNamingStyle,
+    workLengthType,
     writingGoal
   ]);
 
@@ -320,6 +427,16 @@ export function ProjectForm() {
     if (tagTaxonomyStyle === "qidian") {
       setSelectedTags([]);
       setActiveTagSection("subCategories");
+    }
+  }
+
+  function updateWorkLengthType(nextType: WorkLengthType) {
+    setWorkLengthType(nextType);
+    const option = workLengthOptions.find((item) => item.value === nextType);
+    const defaultWordValues = new Set(workLengthOptions.map((item) => item.defaultWords));
+
+    if (option && (!targetTotalWords.trim() || defaultWordValues.has(targetTotalWords))) {
+      setTargetTotalWords(option.defaultWords);
     }
   }
 
@@ -404,6 +521,62 @@ export function ProjectForm() {
     document.getElementById(stepId)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function updateCharacter(id: string, patch: Partial<Pick<CharacterDraft, "role" | "name">>) {
+    setCharacters((current) =>
+      current.map((character) =>
+        character.id === id
+          ? {
+              ...character,
+              ...patch,
+              name: patch.name !== undefined ? patch.name.slice(0, 12) : character.name
+            }
+          : character
+      )
+    );
+  }
+
+  function addCharacter(role: CharacterRole) {
+    setCharacters((current) => [...current, createCharacterDraft(role)].slice(0, 8));
+  }
+
+  function removeCharacter(id: string) {
+    setCharacters((current) => current.filter((character) => character.id !== id));
+  }
+
+  function getFilledCharacters() {
+    return characters
+      .map((character) => ({
+        role: character.role,
+        name: character.name.trim()
+      }))
+      .filter((character) => character.name)
+      .slice(0, 8);
+  }
+
+  function applySuggestedCharacterName(name: string) {
+    const cleanName = name.trim().slice(0, 12);
+
+    if (!cleanName) {
+      return;
+    }
+
+    setCharacters((current) => {
+      const emptyIndex = current.findIndex((character) => !character.name.trim());
+
+      if (emptyIndex >= 0) {
+        return current.map((character, index) =>
+          index === emptyIndex ? { ...character, name: cleanName } : character
+        );
+      }
+
+      const nextRole: CharacterRole = current.some((character) => character.role === "男主" && character.name.trim())
+        ? "女主"
+        : "男主";
+
+      return [...current, createCharacterDraft(nextRole, cleanName)].slice(0, 8);
+    });
+  }
+
   function getCurrentContext() {
     return {
       name,
@@ -415,11 +588,13 @@ export function ProjectForm() {
       titleConcept,
       avoidTitles: titleSuggestions,
       tags: selectedTags,
-      protagonistNames: [protagonist1, protagonist2].map((item) => item.trim()).filter(Boolean),
+      protagonistNames: getFilledCharacters().map((character) => character.name),
       coreSellingPoint,
       goldenFinger,
       openingHook,
-      description
+      description,
+      workLengthType,
+      targetTotalWords
     };
   }
 
@@ -456,16 +631,28 @@ export function ProjectForm() {
       }
 
       if (action === "protagonists") {
-        const names = Array.isArray(result.protagonistNames)
+        const names: string[] = Array.isArray(result.protagonistNames)
           ? result.protagonistNames.map((item: unknown) => String(item).trim()).filter(Boolean)
           : [];
 
         setProtagonistSuggestions(names);
-        if (names[0]) {
-          setProtagonist1(names[0].slice(0, 8));
-        }
-        if (names[1]) {
-          setProtagonist2(names[1].slice(0, 8));
+        if (names.length > 0) {
+          setCharacters((current) => {
+            const next = current.length > 0 ? [...current] : defaultCharacters();
+
+            names.slice(0, 2).forEach((item, index) => {
+              const cleanName = item.slice(0, 12);
+              const nextRole: CharacterRole = index === 1 ? "女主" : "男主";
+
+              if (next[index]) {
+                next[index] = { ...next[index], role: next[index].role || nextRole, name: cleanName };
+              } else {
+                next.push(createCharacterDraft(nextRole, cleanName));
+              }
+            });
+
+            return next.slice(0, 8);
+          });
         }
       }
 
@@ -489,8 +676,9 @@ export function ProjectForm() {
     setError("");
 
     const formData = new FormData(event.currentTarget);
-    const protagonistNames = [asText(formData.get("protagonist1")), asText(formData.get("protagonist2"))]
-      .filter(Boolean);
+    const protagonistCharacters = getFilledCharacters();
+    const protagonistNames = protagonistCharacters.map((character) => character.name);
+    const normalizedTargetTotalWords = Number(normalizeTargetTotalWords(targetTotalWords)) * 10000;
 
     if (!genre) {
       setError("请先在第二步选择主分类");
@@ -518,6 +706,9 @@ export function ProjectForm() {
           tagTaxonomyStyle,
           tags: selectedTags,
           protagonistNames,
+          protagonistCharacters,
+          workLengthType,
+          targetTotalWords: normalizedTargetTotalWords,
           coreSellingPoint: asText(formData.get("coreSellingPoint")),
           openingHook: asText(formData.get("openingHook")),
           goldenFinger: asText(formData.get("goldenFinger")),
@@ -641,8 +832,6 @@ export function ProjectForm() {
             </div>
             <div className="assist-context-hint">
               AI 起名会参考：{titleNamingStyle === "qidian" ? "起点风格" : "番茄小说风格"}、读者与标签里的内容，所以调整下方信息会影响起名结果。
-              {/* AI 起名会参考：{targetReader}、{genre}{selectedTags.length ? `、${selectedTags.join("、")}` : ""}
-              {protagonist1.trim() ? `、主角 ${protagonist1.trim()}` : ""}，以及下方已填写的卖点、金手指和开局钩子。 */}
             </div>
             <input
               name="name"
@@ -926,36 +1115,57 @@ export function ProjectForm() {
             </div>
           </div>
 
-          <div className="split-panels">
-            <div className="field">
-              <div className="field-label field-label-row">
-                <span>主角名 1</span>
-                <button
-                  className="mini-action-button"
-                  type="button"
-                  onClick={() => runAssist("protagonists")}
-                  disabled={Boolean(assistLoading)}
-                >
-                  {assistLoading === "protagonists" ? "生成中..." : "AI 取名"}
-                </button>
-              </div>
-              <input
-                name="protagonist1"
-                value={protagonist1}
-                onChange={(event) => setProtagonist1(event.target.value)}
-                placeholder="请输入主角名"
-                maxLength={8}
-              />
+          <div className="field character-builder">
+            <div className="field-label field-label-row">
+              <span>主要人物（可选）</span>
+              <button
+                className="mini-action-button"
+                type="button"
+                onClick={() => runAssist("protagonists")}
+                disabled={Boolean(assistLoading)}
+              >
+                {assistLoading === "protagonists" ? "生成中..." : "AI 取名"}
+              </button>
             </div>
-            <div className="field">
-              <div className="field-label">主角名 2</div>
-              <input
-                name="protagonist2"
-                value={protagonist2}
-                onChange={(event) => setProtagonist2(event.target.value)}
-                placeholder="双主角可填，非必填"
-                maxLength={8}
-              />
+            <div className="character-builder-hint">可先只填男主；多女主、男配、女配都可以继续添加。</div>
+            <div className="character-list">
+              {characters.map((character) => (
+                <div className="character-row" key={character.id}>
+                  <select
+                    aria-label="人物身份"
+                    value={character.role}
+                    onChange={(event) => updateCharacter(character.id, { role: event.target.value as CharacterRole })}
+                  >
+                    {characterRoleOptions.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={character.name}
+                    onChange={(event) => updateCharacter(character.id, { name: event.target.value })}
+                    placeholder="请输入人物名"
+                    maxLength={12}
+                  />
+                  <button
+                    className="character-remove-button"
+                    type="button"
+                    onClick={() => removeCharacter(character.id)}
+                    aria-label={`删除${character.role}${character.name ? `：${character.name}` : ""}`}
+                    title="删除"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="character-add-actions" aria-label="添加人物">
+              {characterRoleOptions.map((role) => (
+                <button key={role} type="button" onClick={() => addCharacter(role)} disabled={characters.length >= 8}>
+                  + {role}
+                </button>
+              ))}
             </div>
           </div>
           {protagonistSuggestions.length > 0 ? (
@@ -965,13 +1175,7 @@ export function ProjectForm() {
                   key={item}
                   className="assist-suggestion"
                   type="button"
-                  onClick={() => {
-                    if (!protagonist1 || protagonist1 === item) {
-                      setProtagonist1(item.slice(0, 8));
-                    } else {
-                      setProtagonist2(item.slice(0, 8));
-                    }
-                  }}
+                  onClick={() => applySuggestedCharacterName(item)}
                 >
                   {item}
                 </button>
@@ -979,9 +1183,49 @@ export function ProjectForm() {
             </div>
           ) : null}
 
+          <div className="field">
+            <div className="field-label">作品体量</div>
+            <div className="title-style-picker work-length-picker" aria-label="作品体量">
+              {workLengthOptions.map((option) => (
+                <label key={option.value}>
+                  <input
+                    type="radio"
+                    name="workLengthType"
+                    value={option.value}
+                    checked={workLengthType === option.value}
+                    onChange={() => updateWorkLengthType(option.value)}
+                  />
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small>{option.hint}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="field-label field-label-row">
+              <span>目标总字数</span>
+              <span className="field-hint">用于控制长期节奏，不要求精确到每一章</span>
+            </div>
+            <div className="target-total-words-input">
+              <input
+                name="targetTotalWords"
+                type="number"
+                min={5}
+                max={500}
+                value={targetTotalWords}
+                onChange={(event) => setTargetTotalWords(cleanTargetTotalWordsInput(event.target.value))}
+                placeholder="50"
+              />
+              <span>万字左右</span>
+            </div>
+          </div>
+
           <div className="split-panels">
             <div className="field">
-              <div className="field-label">核心卖点</div>
+              <div className="field-label">核心卖点(可选)</div>
               <input
                 name="coreSellingPoint"
                 value={coreSellingPoint}
@@ -990,7 +1234,7 @@ export function ProjectForm() {
               />
             </div>
             <div className="field">
-              <div className="field-label">金手指 / 关键机制</div>
+              <div className="field-label">金手指 / 关键机制(可选)</div>
               <input
                 name="goldenFinger"
                 value={goldenFinger}
@@ -1001,7 +1245,7 @@ export function ProjectForm() {
           </div>
 
           <div className="field">
-            <div className="field-label">开局钩子</div>
+            <div className="field-label">开局钩子(可选)</div>
             <input
               name="openingHook"
               value={openingHook}
@@ -1069,12 +1313,12 @@ export function ProjectForm() {
           </div>
 
           <div className="field">
-            <div className="field-label">本项目目标</div>
+            <div className="field-label">创作目标</div>
             <textarea
               name="writingGoal"
               value={writingGoal}
               onChange={(event) => setWritingGoal(event.target.value)}
-              placeholder="例如：先跑通前 30 章爽点节奏；或拆一本爆款的开局公式，再迁移成新书。"
+              placeholder="例如：先完成前 10 章开局，把主角目标、核心冲突、追读钩子和第一轮爽点跑顺。"
             />
           </div>
         </div>

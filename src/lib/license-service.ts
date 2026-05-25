@@ -86,6 +86,48 @@ function ensureLicenseExpiryStarted(license: StoredLicenseCode, activatedAt: str
   return true;
 }
 
+function hasMachineResetLog(store: AppStore, licenseId: string) {
+  return store.licenseActivationLogs.some((log) => log.licenseCodeId === licenseId && log.reason === "machine_reset");
+}
+
+function normalizePreActivationTrialExpiry(store: AppStore) {
+  let changed = false;
+
+  for (const license of store.licenseCodes) {
+    if (
+      license.status !== "unused" &&
+      license.status !== "expired"
+    ) {
+      continue;
+    }
+
+    if (
+      license.activatedAt ||
+      license.activationCount > 0 ||
+      !license.expiresAt ||
+      hasMachineResetLog(store, license.id)
+    ) {
+      continue;
+    }
+
+    const createdTime = Date.parse(license.createdAt);
+    const expiresTime = Date.parse(license.expiresAt);
+
+    if (!Number.isFinite(createdTime) || !Number.isFinite(expiresTime) || expiresTime <= createdTime) {
+      continue;
+    }
+
+    const inferredDurationMinutes = Math.max(1, Math.ceil((expiresTime - createdTime) / 60_000));
+    license.durationMinutes = getActivationDurationMinutes(license) || inferredDurationMinutes;
+    license.expiresAt = undefined;
+    license.status = "unused";
+    license.updatedAt = now();
+    changed = true;
+  }
+
+  return changed;
+}
+
 export function createActivationCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = randomBytes(16);
@@ -802,6 +844,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
 
   const store = await readStore();
   syncLegacyConfiguredCodes(store);
+  normalizePreActivationTrialExpiry(store);
 
   const timestamp = now();
   const license = store.licenseCodes.find((item) => item.codeHash === codeHash);
@@ -938,6 +981,7 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
   }
 
   const store = await readStore();
+  normalizePreActivationTrialExpiry(store);
   const timestamp = now();
   const license = store.licenseCodes.find(
     (item) => (licenseId && item.id === licenseId) || (codeHash && item.codeHash === codeHash)
@@ -1025,6 +1069,7 @@ export function buildAdminLicenseCenter(
   options?: { recentLogLimit?: number; recentLogOffset?: number }
 ): AdminLicenseCenterSummary {
   syncLegacyConfiguredCodes(store);
+  normalizePreActivationTrialExpiry(store);
   const nowTime = Date.now();
   const recentLogLimit = Math.max(1, Math.min(200, Math.floor(Number(options?.recentLogLimit ?? 20)) || 20));
   const recentLogOffset = Math.max(0, Math.floor(Number(options?.recentLogOffset ?? 0)) || 0);

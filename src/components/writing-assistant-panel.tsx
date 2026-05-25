@@ -21,9 +21,9 @@ type AssistantThread = {
 
 const quickPrompts = [
   "帮我给书名或角色起名",
+  "这个软件怎么生成第一章？",
   "帮我看这个设定会不会跑偏",
   "下一章可以怎么制造冲突？",
-  "这个人物动机合理吗？",
   "帮我加强爽点和章末钩子"
 ];
 const streamingPlaceholder = "正在结合小说上下文思考...";
@@ -72,7 +72,7 @@ function welcomeMessageFor(authorName?: string): ChatMessage {
   return {
     id: "welcome",
     role: "assistant",
-    content: `${name ? `${name}，您好。` : ""}我可以帮你起书名、角色名、势力名、地名、功法名，也能看小说设定、人物动机、剧情推进、爽点节奏和章节问题。非小说创作相关的问题我会请你换个方向。`
+    content: `${name ? `${name}，您好。` : ""}我可以帮你起书名、角色名、势力名、地名、功法名，也能看小说设定、人物动机、剧情推进、爽点节奏和章节问题。软件里的创建作品、生成任务卡、导出正文、备份恢复这些功能，也可以直接问我。`
   };
 }
 
@@ -136,6 +136,43 @@ function normalizeThreads(value: unknown): AssistantThread[] {
     .filter((item): item is AssistantThread => Boolean(item));
 }
 
+function compactAssistantMarkdown(content: string) {
+  const listMarkerOnly = /^\s*(?:\d+[.)、]|[-*+])\s*$/;
+  const listItem = /^\s*(?:\d+[.)、]|[-*+])\s+\S/;
+  const headingLike = /^\s*(?:#{1,6}\s+\S|[*_]{2}.+[*_]{2}\s*)$/;
+  const lines = content.replace(/\r\n?/g, "\n").trim().split("\n");
+  const compacted: string[] = [];
+
+  lines.forEach((line, index) => {
+    const current = line.trim();
+    const previous = compacted.at(-1)?.trim() ?? "";
+    const next = lines[index + 1]?.trim() ?? "";
+
+    if (current) {
+      compacted.push(line);
+      return;
+    }
+
+    if (!previous || !next) {
+      return;
+    }
+
+    if (listMarkerOnly.test(previous) || listItem.test(next)) {
+      return;
+    }
+
+    if (headingLike.test(previous) && /^[-*+]\s+\S/.test(next)) {
+      return;
+    }
+
+    if (compacted.at(-1) !== "") {
+      compacted.push("");
+    }
+  });
+
+  return compacted.join("\n").replace(/^(\s*\d+[.)、])\s*\n\s*(?=\S)/gm, "$1 ");
+}
+
 function AssistantMessageContent({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return <>{message.content}</>;
@@ -143,7 +180,7 @@ function AssistantMessageContent({ message }: { message: ChatMessage }) {
 
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-      {message.content}
+      {compactAssistantMarkdown(message.content)}
     </ReactMarkdown>
   );
 }
@@ -554,7 +591,7 @@ export function WritingAssistantPanel({
             {isEmptyConversation ? (
               <div className="assistant-chat-welcome">
                 <h1>{assistantGreeting}</h1>
-                <p>你的小说创作顾问，可以陪你讨论起名、设定、人物动机、剧情推进、爽点节奏和章节问题。</p>
+                <p>你的小说创作顾问，也能帮你解释软件里的功能入口、创作流程、导出备份和审稿使用方式。</p>
                 <div className="assistant-chat-suggestions">
                   {quickPrompts.map((prompt) => (
                     <button key={prompt} type="button" onClick={() => void sendQuestion(prompt)}>

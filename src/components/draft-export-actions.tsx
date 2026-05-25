@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { showToast } from "@/lib/client-toast";
 
 type DraftExportActionsProps = {
   content: string;
@@ -94,9 +95,11 @@ export function DraftExportActions({
     try {
       await copyText(content.trim());
       setCopied(true);
+      showToast({ type: "success", title: "复制成功", message: "正文已经复制到剪贴板。" });
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
       setCopied(false);
+      showToast({ type: "error", title: "复制失败", message: "系统没有允许写入剪贴板，请手动复制正文。" });
     }
   }
 
@@ -110,12 +113,18 @@ export function DraftExportActions({
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = buildFilename(projectName, chapterNumber, title);
+    const filename = buildFilename(projectName, chapterNumber, title);
+    anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     setExported(true);
+    showToast({
+      type: "success",
+      title: "TXT 已开始导出",
+      message: `${filename} 通常会保存到系统下载目录。`
+    });
     window.setTimeout(() => setExported(false), 1600);
   }
 

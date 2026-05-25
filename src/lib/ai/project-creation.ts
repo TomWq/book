@@ -8,6 +8,7 @@ export type ProjectCreationAssistAction = "titles" | "protagonists" | "descripti
 export type TitleNamingStyle = "fanqie" | "qidian";
 export type TagTaxonomyStyle = "fanqie" | "qidian";
 export type DescriptionWritingStyle = "fanqie" | "qidian";
+export type WorkLengthType = "short" | "medium" | "long" | "epic";
 
 export type ProjectCreationAssistInput = {
   action: ProjectCreationAssistAction;
@@ -20,6 +21,8 @@ export type ProjectCreationAssistInput = {
   coreSellingPoint?: string;
   goldenFinger?: string;
   openingHook?: string;
+  workLengthType?: WorkLengthType;
+  targetTotalWords?: number;
   description?: string;
   titleNamingStyle?: TitleNamingStyle;
   tagTaxonomyStyle?: TagTaxonomyStyle;
@@ -176,6 +179,9 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     input.action === "description"
       ? "简介要先让读者知道主角是谁、被什么压住、靠什么翻盘、后面有什么更大期待。"
       : "本次只处理当前任务，不要顺手补充其他字段。",
+    input.action === "description" && input.targetTotalWords
+      ? `简介需要符合当前作品体量：${input.workLengthType ?? "medium"}，目标约 ${Math.round(input.targetTotalWords / 10000)} 万字；不要把短篇写成长篇无限升级，也不要把长篇写成很快收尾。`
+      : null,
     ...(input.action === "description" ? descriptionStyleRules(descriptionWritingStyle) : []),
     "如果用户已经输入内容，请保留核心意思并增强网文吸引力。",
     "所有输出必须服务当前题材和标签，不要生成泛泛模板话。"
@@ -202,6 +208,8 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               coreSellingPoint: input.coreSellingPoint,
               goldenFinger: input.goldenFinger,
               openingHook: input.openingHook,
+              workLengthType: input.workLengthType,
+              targetTotalWords: input.targetTotalWords,
               description: input.description,
               titleNamingStyle,
               tagTaxonomyStyle,

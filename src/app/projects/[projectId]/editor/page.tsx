@@ -10,10 +10,6 @@ import { getProjectWritingState } from "@/lib/projects";
 const editorModes = [
   "拆书博主版",
   "网文作者版",
-  "写作教学版",
-  "毒舌点评版",
-  "公众号长文版",
-  "小红书短文版",
   "小说正文增强版"
 ];
 

@@ -97,6 +97,9 @@ export function WorkspaceActions({
               <Link href="/settings/account#version-update" onClick={() => setOpenMenu("")}>
                 检查更新
               </Link>
+              <Link href="/manual" onClick={() => setOpenMenu("")}>
+                使用手册
+              </Link>
               <ThemeToggle />
               {desktopRuntime ? null : <LogoutButton redirectTo={adminLoginPath} />}
             </div>

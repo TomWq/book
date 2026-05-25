@@ -27,7 +27,7 @@ export function StreamDraftButton({
 }) {
   const router = useRouter();
   const [state, setState] = useState<StreamState>({ status: "idle", content: "" });
-  const [targetWordCount, setTargetWordCount] = useState(2500);
+  const [targetWordCount, setTargetWordCount] = useState(1500);
   const [oneShotState, setOneShotState] = useState<{
     status: "idle" | "running" | "done" | "error";
     error?: string;
@@ -62,7 +62,7 @@ function normalizedTargetWordCount() {
       return 2500;
     }
 
-    return Math.min(8000, Math.max(800, Math.floor(parsed)));
+    return Math.min(3000, Math.max(800, Math.floor(parsed)));
   }
 
   function splitFailureMarker(value: string) {
@@ -187,12 +187,12 @@ function normalizedTargetWordCount() {
       <div className="field">
         <div className="field-label-row">
           <div className="field-label">目标字数</div>
-          <div className="field-hint">800-8000 字，保存时保留实时生成内容</div>
+          <div className="field-hint">建议 800-3000 字；AI 会围绕目标上下浮动，不会精确等于输入字数</div>
         </div>
         <input
           type="number"
           min={800}
-          max={8000}
+          max={3000}
           step={100}
           value={targetWordCount}
           onChange={(event) => setTargetWordCount(Number(event.target.value))}

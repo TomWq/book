@@ -674,6 +674,10 @@ function arrayFromBackup<T>(payload: Record<string, unknown>, key: string): T[] 
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function isBackupArray(payload: Record<string, unknown>, key: string) {
+  return Array.isArray(payload[key]);
+}
+
 function removeUserWorkspaceData(store: AppStore, userId: string) {
   const ownedProjectIds = getOwnedProjectIds(store, userId);
   const ownedTemplateIds = store.templates
@@ -717,17 +721,31 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
   }
 
   const data = payload as Record<string, unknown>;
-  const projects = arrayFromBackup<StoredProject>(data, "projects");
 
-  if (!Array.isArray(projects)) {
+  if (!isBackupArray(data, "projects")) {
     throw new Error("备份文件缺少项目数据");
   }
 
+  const projects = arrayFromBackup<StoredProject>(data, "projects");
   const store = await readStore();
   const user = await requireCurrentUser(store);
   const backupPath = await backupStoreSnapshot(store, "before-restore");
 
   removeUserWorkspaceData(store, user.id);
+
+  const exportedUser = data.user && typeof data.user === "object" ? data.user as Partial<StoredUser> : null;
+  const exportedPenName = typeof exportedUser?.penName === "string" ? exportedUser.penName.trim() : "";
+
+  if (exportedPenName) {
+    user.penName = exportedPenName;
+    user.penNameSetAt = typeof exportedUser?.penNameSetAt === "string" ? exportedUser.penNameSetAt : user.penNameSetAt || now();
+  }
+
+  if (typeof data.onboardingCompletedAt === "string") {
+    user.onboardingCompletedAt = data.onboardingCompletedAt;
+  }
+
+  user.updatedAt = now();
 
   const importedProjectIds = new Set(projects.map((project) => project.id));
   const templates = arrayFromBackup<StoredTemplate>(data, "templates");
@@ -1957,6 +1975,7 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     exportedAt: now(),
     user: toAuthUser(user),
     plan: user.plan ?? "trial",
+    onboardingCompletedAt: user.onboardingCompletedAt ?? null,
     projects: ownedProjects,
     sourceTexts: store.sourceTexts.filter((item) => ownedProjectIds.has(item.projectId)),
     chapters: store.chapters.filter((item) => ownedProjectIds.has(item.projectId)),
@@ -2063,8 +2082,8 @@ function ensureDefaultWritingState(store: AppStore, project: StoredProject) {
     store.plotStates.push({
       id: randomUUID(),
       projectId: project.id,
-      currentVolume: "第一卷",
-      currentMap: "初始地图",
+      currentVolume: "",
+      currentMap: "",
       mainGoal: "建立主角的第一轮逆袭循环",
       shortTermGoal: "完成当前章节任务并保留下一章钩子",
       currentStage: "开局压制与第一次反击",
@@ -2217,6 +2236,12 @@ function sanitizeLegacyStatePlacement(
   let changed = false;
 
   if (bible) {
+    if (bible.targetReader === "小红书读者" || bible.targetReader === "公众号读者") {
+      bible.targetReader = "网文读者";
+      bible.updatedAt = now();
+      changed = true;
+    }
+
     const nextImmutableSettings = removeLegacyPlacedLines(bible.immutableSettings, [
       "作品简介：",
       "大纲一句话卖点：",
@@ -2247,6 +2272,18 @@ function sanitizeLegacyStatePlacement(
   }
 
   if (plotState) {
+    if (plotState.currentVolume === "第一卷") {
+      plotState.currentVolume = "";
+      plotState.updatedAt = now();
+      changed = true;
+    }
+
+    if (plotState.currentMap === "初始地图") {
+      plotState.currentMap = "";
+      plotState.updatedAt = now();
+      changed = true;
+    }
+
     const extractedGoal =
       extractLabeledLine(plotState.mainGoal, "一句话卖点：") ||
       extractLabeledLine(plotState.mainGoal, "当前主线目标：");
@@ -2275,6 +2312,65 @@ function sanitizeLegacyStatePlacement(
   return changed;
 }
 
+function normalizeInitialCharacters(input: InitialProjectStateInput) {
+  const supportedRoles = new Set(["男主", "女主", "男配", "女配"]);
+  const fromCharacters = Array.isArray(input.protagonistCharacters)
+    ? input.protagonistCharacters
+        .map((item) => {
+          const name = item?.name?.trim() ?? "";
+          const role = item?.role?.trim() ?? "";
+
+          return name
+            ? {
+                name,
+                role: supportedRoles.has(role) ? role : "主要人物"
+              }
+            : null;
+        })
+        .filter((item): item is { name: string; role: string } => Boolean(item))
+    : [];
+
+  if (fromCharacters.length > 0) {
+    return fromCharacters;
+  }
+
+  return cleanList(input.protagonistNames).map((name, index) => ({
+    name,
+    role: index === 0 ? "男主" : index === 1 ? "女主" : "主要人物"
+  }));
+}
+
+function normalizeWorkLengthPlan(input: InitialProjectStateInput) {
+  const type = input.workLengthType === "short" || input.workLengthType === "medium" || input.workLengthType === "long" || input.workLengthType === "epic"
+    ? input.workLengthType
+    : "medium";
+  const labels: Record<NonNullable<InitialProjectStateInput["workLengthType"]>, string> = {
+    short: "短篇",
+    medium: "中篇",
+    long: "长篇",
+    epic: "超长篇"
+  };
+  const guidance: Record<NonNullable<InitialProjectStateInput["workLengthType"]>, string> = {
+    short: "短篇节奏：主线集中，少开支线，尽早埋结局条件，避免无限升级。",
+    medium: "中篇节奏：主线完整，支线克制，每一阶段都要推进结局所需条件。",
+    long: "长篇节奏：允许多阶段升级和地图推进，但每卷都要服务终局目标。",
+    epic: "超长篇节奏：需要多卷结构、长期悬念和阶段性收束，避免只扩张不回收。"
+  };
+  const numberValue = Number(input.targetTotalWords);
+  const targetTotalWords = Number.isFinite(numberValue) && numberValue > 0
+    ? Math.min(5000000, Math.max(50000, Math.round(numberValue)))
+    : 500000;
+  const targetWan = Math.round(targetTotalWords / 10000);
+
+  return {
+    type,
+    label: labels[type],
+    targetTotalWords,
+    display: `${targetWan}万字左右`,
+    guidance: guidance[type]
+  };
+}
+
 function applyInitialProjectState(
   store: AppStore,
   project: StoredProject,
@@ -2288,11 +2384,13 @@ function applyInitialProjectState(
 
   const timestamp = now();
   const tags = cleanList(input.tags);
-  const protagonists = cleanList(input.protagonistNames).slice(0, 2);
+  const protagonistCharacters = normalizeInitialCharacters(input).slice(0, 8);
+  const protagonists = protagonistCharacters.map((character) => character.name);
   const coreSellingPoint = input.coreSellingPoint?.trim() ?? "";
   const openingHook = input.openingHook?.trim() ?? "";
   const goldenFinger = input.goldenFinger?.trim() ?? "";
   const writingGoal = input.writingGoal?.trim() ?? "";
+  const workLengthPlan = normalizeWorkLengthPlan(input);
   const outlineId = input.outlineId?.trim() ?? "";
   const outlineLogline = input.outlineLogline?.trim() ?? "";
   const worldSetting = input.worldSetting?.trim() ?? "";
@@ -2316,18 +2414,21 @@ function applyInitialProjectState(
     return false;
   }
 
-  bible.workType = project.genre ? `${project.genre}长篇连载` : bible.workType;
+  bible.workType = project.genre ? `${project.genre}${workLengthPlan.label}` : workLengthPlan.label;
   bible.targetReader = targetReader || bible.targetReader;
   bible.corePleasure = [
     project.genre ? `主分类：${project.genre}` : "",
     categoryDescription ? `题材边界：${categoryDescription}` : "",
+    `作品体量：${workLengthPlan.label}，目标约${workLengthPlan.display}`,
     coreSellingPoint,
     tags.length ? `作品标签：${tags.join("、")}` : "",
     openingHook ? `开局情绪：${openingHook}` : ""
   ].filter(Boolean).join("\n") || bible.corePleasure;
   bible.protagonistDesire = [
-    protagonists.length ? `核心主角：${protagonists.join("、")}` : "",
-    "后续需要继续补充主角真正想要什么、害怕失去什么、愿意付出什么代价。"
+    protagonistCharacters.length
+      ? `主要人物：${protagonistCharacters.map((character) => `${character.role}：${character.name}`).join("、")}`
+      : "",
+    "后续需要继续补充关键人物真正想要什么、害怕失去什么、愿意付出什么代价。"
   ].filter(Boolean).join("\n");
   bible.worldRules = worldSetting || bible.worldRules;
   bible.goldenFingerRules = goldenFinger || bible.goldenFingerRules;
@@ -2337,7 +2438,8 @@ function applyInitialProjectState(
     ...genreBoundaryRules,
     worldSetting ? "世界规则以「世界规则」字段为准，不随章节临时改写。" : "",
     goldenFinger ? `关键机制：${goldenFinger}` : "",
-    openingHook ? `开局钩子必须被承接：${openingHook}` : ""
+    openingHook ? `开局钩子必须被承接：${openingHook}` : "",
+    `体量边界：按${workLengthPlan.label} ${workLengthPlan.display}规划节奏，不要无限开新地图、新体系或新支线；接近后期时主动收束主线、回收伏笔并准备完结。`
   ].filter(Boolean).join("\n") || bible.immutableSettings;
   bible.narrativeTaboos = cleanList([
     bible.narrativeTaboos,
@@ -2348,13 +2450,14 @@ function applyInitialProjectState(
   bible.styleGuide = [
     bible.styleGuide,
     project.genre ? `题材口味：${project.genre}${categoryDescription ? `，${categoryDescription}` : ""}` : "",
+    `体量节奏：${workLengthPlan.guidance}`,
     tags.length ? `标签口味：${tags.join("、")}` : "",
     first100Pacing ? `前100章节奏：${first100Pacing}` : "",
     pleasureDistribution ? `爽点分布：${pleasureDistribution}` : ""
   ].filter(Boolean).join("\n");
   bible.updatedAt = timestamp;
 
-  plotState.mainGoal = outlineLogline || coreSellingPoint || "完成第一阶段主线：建立压制、反击和持续悬念。";
+  plotState.mainGoal = outlineLogline || coreSellingPoint || `完成${workLengthPlan.label} ${workLengthPlan.display}的完整主线：建立压制、反击、升级、终局回收和完结路径。`;
   plotState.shortTermGoal = outlineChapters[0] || openingHook || "补齐开局压制、第一次反击和章末钩子。";
   plotState.currentStage = outlineChapters[0] ? `大纲第1章：${outlineChapters[0]}` : openingHook || "新书开局设定阶段";
   plotState.currentEnemy = "待明确的第一阶段压力源";
@@ -2373,6 +2476,7 @@ function applyInitialProjectState(
   ]);
   plotState.nextMilestones = cleanList([
     ...outlineChapters.map((chapter, index) => `大纲第${index + 1}章：${chapter}`),
+    `按${workLengthPlan.label} ${workLengthPlan.display}规划阶段节奏，避免无边界扩写`,
     openingHook ? "兑现开局钩子的第一轮情绪回报" : "",
     coreSellingPoint ? "围绕核心卖点设计前 10 章节奏" : "",
     ...plotState.nextMilestones
@@ -2380,20 +2484,20 @@ function applyInitialProjectState(
   plotState.nextStageGoal = outlineChapters[0] || coreSellingPoint || plotState.nextStageGoal;
   plotState.updatedAt = timestamp;
 
-  protagonists.forEach((name, index) => {
-    if (store.characterProfiles.some((item) => item.projectId === project.id && item.name === name)) {
+  protagonistCharacters.forEach((character, index) => {
+    if (store.characterProfiles.some((item) => item.projectId === project.id && item.name === character.name)) {
       return;
     }
 
     store.characterProfiles.push({
       id: randomUUID(),
       projectId: project.id,
-      name,
-      identity: index === 0 ? "主角" : "重要主角",
+      name: character.name,
+      identity: character.role,
       currentGoal: writingGoal || "等待补充当前目标",
       longTermGoal: "等待补充长期目标",
       secret: goldenFinger ? `可能与关键机制相关：${goldenFinger}` : "",
-      relationshipToProtagonist: index === 0 ? "本人" : "双主角 / 重要关系人",
+      relationshipToProtagonist: index === 0 ? "本人" : `${character.role} / 重要关系人`,
       attitude: "待补充",
       abilityBoundary: goldenFinger || "待补充能力边界",
       voice: "待补充说话习惯",
@@ -2493,7 +2597,7 @@ function normalizeDraftTargetWordCount(value?: number) {
     return 2500;
   }
 
-  return Math.min(8000, Math.max(800, Math.floor(Number(value))));
+  return Math.min(3000, Math.max(800, Math.floor(Number(value))));
 }
 
 function diagnoseAiFlavor(originalText: string) {

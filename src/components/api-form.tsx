@@ -2,6 +2,7 @@
 
 import { type ReactNode, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { showToast } from "@/lib/client-toast";
 
 type Method = "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -68,7 +69,9 @@ function useApiMutation() {
       });
 
       if (!response.ok) {
-        setError(await readError(response));
+        const nextError = await readError(response);
+        setError(nextError);
+        showToast({ type: "error", title: "操作失败", message: nextError });
         return false;
       }
 
@@ -90,9 +93,14 @@ function useApiMutation() {
           }, 350);
         }
       });
+      const nextSuccess = successMessage || "操作已完成";
+      setSuccess(nextSuccess);
+      showToast({ type: "success", title: nextSuccess });
       return true;
     } catch {
-      setError("网络请求失败，请稍后重试");
+      const nextError = "网络请求失败，请稍后重试";
+      setError(nextError);
+      showToast({ type: "error", title: "操作失败", message: nextError });
       return false;
     } finally {
       setIsMutating(false);

@@ -2,6 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { showToast } from "@/lib/client-toast";
 
 type RestoreResult = {
   backupPath?: string;
@@ -38,17 +39,23 @@ export function AccountRestoreActions() {
       const body = (await response.json().catch(() => null)) as RestoreResult & { error?: string } | null;
 
       if (!response.ok) {
-        setError(body?.error ? String(body.error) : "恢复数据失败");
+        const nextError = body?.error ? String(body.error) : "恢复数据失败";
+        setError(nextError);
+        showToast({ type: "error", title: "恢复失败", message: nextError });
         return;
       }
 
       const counts = body?.counts;
-      setMessage(`已恢复 ${counts?.projects ?? 0} 个项目、${counts?.chapters ?? 0} 个章节、${counts?.drafts ?? 0} 篇正文。`);
+      const nextMessage = `已恢复 ${counts?.projects ?? 0} 个项目、${counts?.chapters ?? 0} 个章节、${counts?.drafts ?? 0} 篇正文。`;
+      setMessage(nextMessage);
+      showToast({ type: "success", title: "恢复完成", message: nextMessage });
       startTransition(() => {
         router.refresh();
       });
     } catch {
-      setError("恢复数据失败，请确认文件是本工具导出的 JSON 备份。");
+      const nextError = "恢复数据失败，请确认文件是本工具导出的 JSON 备份。";
+      setError(nextError);
+      showToast({ type: "error", title: "恢复失败", message: nextError });
     } finally {
       setIsUploading(false);
       if (inputRef.current) {

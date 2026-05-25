@@ -52,6 +52,8 @@ function formatDate(value: string) {
 
 export default function DownloadPage() {
   const manifest = getLocalUpdateManifest();
+  const manualHtmlUrl = "/manual/AI网文写作助手使用手册.html";
+  const manualPdfUrl = "/manual/AI网文写作助手使用手册.pdf";
   const options: DownloadOption[] = [
     {
       key: "win32X64",
@@ -112,8 +114,16 @@ export default function DownloadPage() {
           <section className="download-panel" aria-label="版本选择">
             <div className="download-panel-head">
               <div>
-                <span className="download-kicker">桌面客户端下载</span>
+                {/* <span className="download-kicker">桌面客户端下载</span> */}
                 <p>选择适合你电脑的版本，安装后使用授权码激活。</p>
+              </div>
+              <div className="download-manual-actions">
+                <a className="download-card-button primary" href={manualHtmlUrl} target="_blank" rel="noreferrer">
+                  查看使用说明
+                </a>
+                <a className="download-card-button" href={manualPdfUrl}>
+                  PDF
+                </a>
               </div>
             </div>
 

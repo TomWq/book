@@ -37,6 +37,9 @@ export type InitialProjectStateInput = {
   tagTaxonomyStyle?: "fanqie" | "qidian";
   tags?: string[];
   protagonistNames?: string[];
+  protagonistCharacters?: Array<{ name: string; role?: string }>;
+  workLengthType?: "short" | "medium" | "long" | "epic";
+  targetTotalWords?: number;
   coreSellingPoint?: string;
   openingHook?: string;
   goldenFinger?: string;

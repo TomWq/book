@@ -1,4 +1,6 @@
+import { AccountBackupActions } from "@/components/account-backup-actions";
 import { AccountRestoreActions } from "@/components/account-restore-actions";
+import Link from "next/link";
 import { Panel } from "@/components/panel";
 import { LicenseSessionActions } from "@/components/license-session-actions";
 import { VersionUpdateCard } from "@/components/version-update-card";
@@ -116,10 +118,21 @@ export default async function AccountSettingsPage() {
               <p>导出 JSON 文件，适合换电脑、重装前保存，或在恢复数据前留一份保险。</p>
             </div>
             <div className="account-data-actions">
-              <a href="/api/account/export" className="button primary">
-                导出备份
-              </a>
+              <AccountBackupActions />
               <AccountRestoreActions />
+            </div>
+          </div>
+
+          <div className="account-data-tools">
+            <div>
+              <span className="muted">帮助文档</span>
+              <strong>使用手册</strong>
+              <p>查看完整使用流程。PDF 文件会随安装包一起发布，适合放在下载中心或单独发给用户。</p>
+            </div>
+            <div className="account-data-actions">
+              <Link href="/manual" className="button primary">
+                查看手册
+              </Link>
             </div>
           </div>
         </div>

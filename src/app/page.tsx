@@ -61,6 +61,65 @@ function ProjectListItem({
   );
 }
 
+function FirstCreationFlow({
+  writingProject,
+  hasTaskCard,
+  hasDraft
+}: {
+  writingProject?: ProjectWithCounts;
+  hasTaskCard: boolean;
+  hasDraft: boolean;
+}) {
+  const steps = [
+    {
+      index: "01",
+      title: "创建第一本书",
+      description: "先用 AI 帮你打样书名、简介、主角名和题材标签。",
+      href: "/projects/new",
+      state: writingProject ? "done" : "active",
+      action: writingProject ? "已创建" : "开始创建"
+    },
+    {
+      index: "02",
+      title: "生成第一章任务卡",
+      description: "把开局钩子拆成可执行的章节目标、冲突和章末悬念。",
+      href: writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new",
+      state: hasTaskCard ? "done" : writingProject ? "active" : "locked",
+      action: hasTaskCard ? "已生成" : writingProject ? "去生成" : "先创建作品"
+    },
+    {
+      index: "03",
+      title: "写出第一段正文",
+      description: "任务卡生成后，直接进入正文生成和审稿闭环。",
+      href: writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new",
+      state: hasDraft ? "done" : hasTaskCard ? "active" : "locked",
+      action: hasDraft ? "已完成" : hasTaskCard ? "去写正文" : "等待任务卡"
+    }
+  ];
+
+  return (
+    <section className="first-flow-card">
+      <div className="first-flow-copy">
+        <span>新手首流程</span>
+        <h2>先完成第一本书的第一章</h2>
+        <p>不用先研究所有功能。跟着这 3 步走，先把作品雏形和第一章跑通，后面再慢慢扩展台账、审稿和模板。</p>
+      </div>
+      <div className="first-flow-steps">
+        {steps.map((step) => (
+          <Link key={step.index} href={step.href} className={`first-flow-step ${step.state}`}>
+            <span>{step.index}</span>
+            <div>
+              <strong>{step.title}</strong>
+              <p>{step.description}</p>
+              <small>{step.action}</small>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default async function HomePage() {
   const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
@@ -234,6 +293,9 @@ export default async function HomePage() {
   const todayDrafts = allDrafts.filter((draft) => isSameLocalDay(draft.createdAt, today));
   const todayCharacters = todayDrafts.reduce((total, draft) => total + countTextCharacters(draft.content), 0);
   const totalCharacters = allDrafts.reduce((total, draft) => total + countTextCharacters(draft.content), 0);
+  const hasWritingTaskCard = writingProjects.some((project) => project._count.writingTaskCards > 0);
+  const hasWritingDraft = writingProjects.some((project) => project._count.chapterDrafts > 0);
+  const showFirstCreationFlow = writingProjects.length === 0 || !hasWritingDraft;
   const writingStats = [
     { label: "今日字数", value: todayCharacters.toLocaleString("zh-CN") },
     { label: "累计字数", value: totalCharacters.toLocaleString("zh-CN") },
@@ -255,6 +317,14 @@ export default async function HomePage() {
         <h1>今天先走哪条线？</h1>
         <p>创作和拆书分开看：写书看正文、任务卡和审稿；拆书看导入、拆解和模板沉淀。</p>
       </section>
+
+      {showFirstCreationFlow ? (
+        <FirstCreationFlow
+          writingProject={writingProject}
+          hasTaskCard={hasWritingTaskCard}
+          hasDraft={hasWritingDraft}
+        />
+      ) : null}
 
       <div className="grid two-col">
         <div className="grid">
