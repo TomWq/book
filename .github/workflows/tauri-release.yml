@@ -45,6 +45,8 @@ jobs:
             artifactName: macos-arm64
             artifactPath: |
               src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*aarch64.dmg
+            updaterArtifactName: macos-arm64-updater
+            updaterArtifactPath: |
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - name: macOS x64
@@ -56,6 +58,8 @@ jobs:
             artifactName: macos-x64
             artifactPath: |
               src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*x64.dmg
+            updaterArtifactName: macos-x64-updater
+            updaterArtifactPath: |
               src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
               src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - name: Windows x64
@@ -68,6 +72,8 @@ jobs:
             artifactPath: |
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*x64-setup.exe
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
+            updaterArtifactName: ""
+            updaterArtifactPath: ""
 
     steps:
       - name: Checkout
@@ -104,6 +110,14 @@ jobs:
           path: ${{ matrix.artifactPath }}
           if-no-files-found: error
 
+      - name: Upload updater artifact
+        if: ${{ matrix.updaterArtifactName != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.updaterArtifactName }}
+          path: ${{ matrix.updaterArtifactPath }}
+          if-no-files-found: error
+
   publish-release:
     name: Publish draft release
     needs: build-tauri
@@ -127,7 +141,21 @@ jobs:
           if gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q true; then
             gh release delete "$TAG" --yes
           fi
-          gh release create "$TAG" release-artifacts/* \
+
+          mapfile -d '' RELEASE_ASSETS < <(find release-artifacts -type f \
+            \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" -o -name "*setup.exe" -o -name "*.sig" \) \
+            -print0 | sort -z)
+
+          if [ "${#RELEASE_ASSETS[@]}" -eq 0 ]; then
+            echo "No release assets found in release-artifacts."
+            find release-artifacts -maxdepth 3 -print
+            exit 1
+          fi
+
+          printf 'Uploading release assets:\n'
+          printf ' - %s\n' "${RELEASE_ASSETS[@]}"
+
+          gh release create "$TAG" "${RELEASE_ASSETS[@]}" \
             --draft \
             --title "AI 网文写作助手 v${VERSION}" \
             --notes "自动构建的桌面端安装包，请在 Assets 中下载对应系统版本。"
