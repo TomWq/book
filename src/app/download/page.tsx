@@ -87,6 +87,17 @@ export default function DownloadPage() {
     }
   ];
   const availableCount = options.filter((item) => item.file || item.url).length;
+  const primaryOption = options[0];
+  const secondaryOptions = options.slice(1);
+
+  function renderDownloadMeta(option: DownloadOption) {
+    const size = formatBytes(option.file?.sizeBytes);
+    return [option.arch, size, formatDate(manifest.releaseDate)].filter(Boolean).join(" · ");
+  }
+
+  function renderDownloadHref(option: DownloadOption) {
+    return option.file || option.url ? option.url || "#" : "#";
+  }
 
   return (
     <section className="download-center-page">
@@ -103,18 +114,19 @@ export default function DownloadPage() {
 
         <div className="download-layout">
           <div className="download-slogan">
-            <div className="download-calligraphy">好故事<br />不止一章<br />更要稳稳写下去</div>
-            <div className="download-slogan-side">
-              <strong>Good stories</strong>
-              <span>structure first</span>
-              <span>write longer</span>
+            <div className="download-calligraphy">
+              <span>灯下起长卷</span>
+              <span>笔端生云烟</span>
+              <span>胸中藏万象</span>
+              <span>落笔自成篇</span>
             </div>
           </div>
 
           <section className="download-panel" aria-label="版本选择">
             <div className="download-panel-head">
               <div>
-                {/* <span className="download-kicker">桌面客户端下载</span> */}
+                <span className="download-kicker">桌面客户端下载</span>
+                <h1>选择你的安装版本</h1>
                 <p>选择适合你电脑的版本，安装后使用授权码激活。</p>
               </div>
               <div className="download-manual-actions">
@@ -134,64 +146,104 @@ export default function DownloadPage() {
             </div>
 
             <div className="download-grid">
-              {options.map((option) => {
-                const size = formatBytes(option.file?.sizeBytes);
-                const hasDownload = Boolean(option.file || option.url);
-                const href = hasDownload ? option.url || "#" : "#";
-                const meta = [option.arch, size, formatDate(manifest.releaseDate)]
-                  .filter(Boolean)
-                  .join(" · ");
+              <article className={`download-card download-primary-card ${primaryOption.file || primaryOption.url ? "" : "disabled"}`}>
+                <div className="download-recommend-badge">推荐版本</div>
+                <div className="download-primary-main">
+                  <span className="download-os-icon windows" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <div className="download-primary-heading">
+                    <h2>
+                      <span>{primaryOption.title}</span>
+                    </h2>
+                    <div className="download-card-version">客户端 v{manifest.version}</div>
+                  </div>
+                  <p>{primaryOption.subtitle}</p>
+                  <div className="download-card-meta">{renderDownloadMeta(primaryOption)}</div>
+                </div>
+                {primaryOption.file || primaryOption.url ? (
+                  <a className="download-card-button" href={renderDownloadHref(primaryOption)}>
+                    立即下载 <span aria-hidden="true">↓</span>
+                  </a>
+                ) : (
+                  <span className="download-card-button disabled">暂未发布</span>
+                )}
+              </article>
 
-                return (
-                  <article key={option.key} className={`download-card ${hasDownload ? "" : "disabled"}`}>
-                    <div className="download-card-head">
-                      <span className="download-platform">{option.platform}</span>
-                      {option.badge ? <span className="download-badge">{option.badge}</span> : null}
-                    </div>
-                    <div className="download-card-body">
-                      <h2>
-                        <span>{option.title}</span>
-                        <em>客户端 v{manifest.version}</em>
-                      </h2>
+              <div className="download-secondary-list">
+                {secondaryOptions.map((option) => {
+                  const hasDownload = Boolean(option.file || option.url);
+
+                  return (
+                    <article key={option.key} className={`download-card download-secondary-card ${hasDownload ? "" : "disabled"}`}>
+                      <span className="download-os-icon mac" aria-hidden="true"></span>
+                      <div className="download-secondary-heading">
+                        <h2>{option.platform} ({option.arch})</h2>
+                        <div className="download-card-version">
+                          <span>{option.title}</span>
+                          <em>客户端 v{manifest.version}</em>
+                        </div>
+                      </div>
                       <p>{option.subtitle}</p>
-                      <div className="download-card-meta">{meta}</div>
-                    </div>
-                    {hasDownload ? (
-                      <a className="download-card-button" href={href}>
-                        立即下载
-                      </a>
-                    ) : (
-                      <span className="download-card-button disabled">暂未发布</span>
-                    )}
-                  </article>
-                );
-              })}
+                      <div className="download-card-meta">{renderDownloadMeta(option)}</div>
+                      {hasDownload ? (
+                        <a className="download-card-button" href={renderDownloadHref(option)}>
+                          下载 <span aria-hidden="true">↓</span>
+                        </a>
+                      ) : (
+                        <span className="download-card-button disabled">暂未发布</span>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="download-notes">
-              <div>
-                <strong>隐私保护</strong>
-                <p>作品、草稿、设定、人物档案和项目数据默认保存在你的电脑里，不上传到我们的服务器。</p>
-              </div>
               {manifest.announcement ? (
-                <div>
+                <div className="download-note announcement">
                   <strong>发布公告</strong>
                   <p>{manifest.announcement}</p>
                 </div>
               ) : null}
-              <div>
-                <strong>Mac 首次打开</strong>
-                <ol>
-                  <li>解压后先拖入“应用程序”。</li>
-                  {/* <li>按住 Control 点应用图标，选择“打开”。</li> */}
-                  <li>如提示已损坏，在终端执行：</li>
-                </ol>
-                <code>xattr -dr com.apple.quarantine "/Applications/AI 网文写作助手.app"</code>
-              </div>
-              <div>
-                <strong>内测说明</strong>
-                <p>当前包已做内测用 ad-hoc 签名，Windows 若提示未知发布者，确认来源可信后继续安装。</p>
-              </div>
+              <details className="download-note">
+                <summary className="download-help-row">
+                  <strong>Mac 首次打开提示</strong>
+                  <p>若提示“无法打开”，请在系统设置中允许后再打开应用。</p>
+                  <span aria-hidden="true">⌄</span>
+                </summary>
+                <div className="download-note-detail">
+                  <ol>
+                    <li>下载后先解压安装包，再把应用拖入“应用程序”。</li>
+                    <li>如果系统提示无法验证开发者，请打开“系统设置”里的“隐私与安全性”，允许后再打开。</li>
+                    <li>如果提示应用已损坏，可以在终端执行下面命令后重新打开。</li>
+                  </ol>
+                  <code>xattr -dr com.apple.quarantine "/Applications/AI 网文写作助手.app"</code>
+                </div>
+              </details>
+              <details className="download-note">
+                <summary className="download-help-row">
+                  <strong>本地隐私</strong>
+                  <p>作品、草稿、设定、人物档案和项目数据默认保存在你的电脑里。</p>
+                  <span aria-hidden="true">⌄</span>
+                </summary>
+                <div className="download-note-detail">
+                  <p>客户端默认把作品、草稿、设定、人物档案、项目状态和模板数据保存在本机。除非你主动配置 AI 接口并发起生成，否则这些创作数据不会上传到我们的服务器。</p>
+                </div>
+              </details>
+              <details className="download-note">
+                <summary className="download-help-row">
+                  <strong>内测签名</strong>
+                  <p>若遇到系统安全提示，请确认来源可信后继续安装。</p>
+                  <span aria-hidden="true">⌄</span>
+                </summary>
+                <div className="download-note-detail">
+                  <p>当前安装包用于内测分发。Windows 如果提示“未知发布者”或安全提醒，请确认下载来源是本页面后继续安装；macOS 如果拦截打开，请按上面的 Mac 首次打开提示处理。</p>
+                </div>
+              </details>
             </div>
           </section>
         </div>
