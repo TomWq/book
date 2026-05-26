@@ -17,6 +17,7 @@ const routeTipDismissedPrefix = "writing-assistant:route-tip-dismissed:";
 const launcherPositionKey = "writing-assistant:launcher-position";
 const launcherSize = 92;
 const launcherMargin = 12;
+const defaultAssistantName = "墨澜";
 
 type LauncherPosition = {
   x: number;
@@ -52,6 +53,21 @@ function cleanAuthorName(value?: string) {
   return String(value ?? "").trim().replace(/[，。！？,.!?]+$/g, "");
 }
 
+function cleanAssistantName(value?: string) {
+  return String(value ?? "").trim().replace(/[，。！？,.!?]+$/g, "") || defaultAssistantName;
+}
+
+function personalizeTip(tip: MoLanTip, assistantName: string): MoLanTip {
+  return {
+    title: tip.title.replaceAll(defaultAssistantName, assistantName),
+    message: tip.message.replaceAll(defaultAssistantName, assistantName)
+  };
+}
+
+function personalizeTips(tips: MoLanTip[], assistantName: string) {
+  return tips.map((tip) => personalizeTip(tip, assistantName));
+}
+
 function routeTipKey(pathname: string) {
   return `${routeTipDismissedPrefix}${pathname || "/"}`;
 }
@@ -60,8 +76,8 @@ function pickTip(tips: MoLanTip[]) {
   return tips[Math.floor(Math.random() * tips.length)] ?? tips[0];
 }
 
-function restTip(): MoLanTip {
-  return pickTip([
+function restTip(assistantName: string): MoLanTip {
+  return pickTip(personalizeTips([
     {
       title: "主人主人，暂停一下",
       message: "你已经陪故事待了很久啦。墨澜建议先喝口水，眼睛也该休息一小会儿。"
@@ -74,7 +90,7 @@ function restTip(): MoLanTip {
       title: "墨澜检测到疲劳气息",
       message: "主人今天已经很努力啦。稍微放松一下，下一段剧情会更顺。"
     }
-  ]);
+  ], assistantName));
 }
 
 function getMoLanTips(pathname: string, projectId: string, authorName?: string): MoLanTip[] {
@@ -245,7 +261,7 @@ function getMoLanTips(pathname: string, projectId: string, authorName?: string):
   ];
 }
 
-export function FloatingWritingAssistant({ authorName }: { authorName?: string }) {
+export function FloatingWritingAssistant({ authorName, assistantName }: { authorName?: string; assistantName?: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -260,7 +276,11 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
   const currentQuery = searchParams.toString();
   const currentPath = currentQuery ? `${pathname}?${currentQuery}` : pathname;
   const workbenchParams = new URLSearchParams();
-  const contextualTips = useMemo(() => getMoLanTips(pathname, projectId, authorName), [authorName, pathname, projectId]);
+  const assistantDisplayName = useMemo(() => cleanAssistantName(assistantName), [assistantName]);
+  const contextualTips = useMemo(
+    () => personalizeTips(getMoLanTips(pathname, projectId, authorName), assistantDisplayName),
+    [assistantDisplayName, authorName, pathname, projectId]
+  );
 
   useEffect(() => {
     try {
@@ -296,10 +316,10 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
 
     const timer = window.setTimeout(() => {
       setVisibleTip(hasSeenIntro
-        ? hasWorkedLong ? restTip() : pickTip(contextualTips)
+        ? hasWorkedLong ? restTip(assistantDisplayName) : pickTip(contextualTips)
         : {
             title: "主人主人，我在这里",
-            message: "我是墨澜。你有任何小说创作相关的问题，都可以随时找我哦。"
+            message: `我是${assistantDisplayName}。你有任何小说创作相关的问题，都可以随时找我哦。`
           });
     }, 520);
 
@@ -314,7 +334,7 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
         window.clearTimeout(autoHideTipRef.current);
       }
     };
-  }, [contextualTips, open, pathname]);
+  }, [assistantDisplayName, contextualTips, open, pathname]);
 
   useEffect(() => {
     function handleResize() {
@@ -422,7 +442,7 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
       <div className="floating-ai-launcher" style={launcherStyle}>
         {visibleTip && !open ? (
           <div className="floating-ai-greeting" role="status" data-side={tipSide}>
-            <button type="button" aria-label="关闭墨澜提示" onClick={dismissTip}>
+            <button type="button" aria-label={`关闭${assistantDisplayName}提示`} onClick={dismissTip}>
               ×
             </button>
             <strong>{visibleTip.title}</strong>
@@ -433,7 +453,7 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
         <button
           className="floating-ai-button"
           type="button"
-          aria-label="打开墨澜 AI 创作助手"
+          aria-label={`打开${assistantDisplayName} AI 创作助手`}
           aria-expanded={open}
           aria-controls="writing-assistant-drawer"
           data-mood={open ? "listening" : visibleTip ? "speaking" : "idle"}
@@ -459,7 +479,9 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
         <WritingAssistantPanel
           projectId={projectId}
           className="writing-assistant-drawer"
+          title={assistantDisplayName}
           authorName={authorName}
+          assistantName={assistantDisplayName}
           actions={
             <>
               <button
@@ -469,7 +491,7 @@ export function FloatingWritingAssistant({ authorName }: { authorName?: string }
               >
                 进入工作台
               </button>
-              <button type="button" aria-label="关闭 AI 创作顾问" onClick={() => setOpen(false)}>
+              <button type="button" aria-label={`关闭${assistantDisplayName}`} onClick={() => setOpen(false)}>
                 ×
               </button>
             </>

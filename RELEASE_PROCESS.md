@@ -127,7 +127,7 @@ UPLOAD_THESE_FILES.txt
 打开腾讯云 COS 桶：
 
 ```text
-ai-novel-downloads-1253439621
+book-1253439621
 ap-beijing
 ```
 
@@ -155,7 +155,7 @@ macOS Intel app.tar.gz.sig
 安装包上传 COS 后，发布 manifest：
 
 ```bash
-DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
+DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
 ```
 
 这个命令只同步 `manifest.json` 到授权中心服务器，不会上传大安装包。
@@ -163,7 +163,7 @@ DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud
 如果只想本地预览下载页清单：
 
 ```bash
-DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:local
+DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:local
 ```
 
 ## 8. 线上验证
@@ -218,7 +218,7 @@ npm run release:download
 然后按 `release/packages/v版本号/UPLOAD_THESE_FILES.txt` 上传文件到 COS，最后：
 
 ```bash
-DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
+DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
 ```
 
 如果有服务端代码改动，再执行：
@@ -232,7 +232,7 @@ npm run deploy:server
 如果新版有问题，不需要删除 COS 新包。把 `manifest.json` 指回上一个稳定版本，再重新执行：
 
 ```bash
-DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
+DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
 ```
 
 ## 11. 当前注意事项

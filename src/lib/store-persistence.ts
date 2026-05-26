@@ -447,6 +447,7 @@ function ensureSqliteSchema() {
       "name" TEXT NOT NULL,
       "penName" TEXT,
       "penNameSetAt" DATETIME,
+      "assistantName" TEXT,
       "passwordSalt" TEXT NOT NULL,
       "passwordHash" TEXT NOT NULL,
       "role" TEXT NOT NULL,
@@ -527,6 +528,7 @@ function ensureSqliteSchema() {
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "penName" TEXT',
     'ALTER TABLE "User" ADD COLUMN "penNameSetAt" DATETIME',
+    'ALTER TABLE "User" ADD COLUMN "assistantName" TEXT',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMarkup" REAL',
     'ALTER TABLE "User" ADD COLUMN "aiBillingMinimum" INTEGER',
     'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
@@ -690,9 +692,9 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "email", "name", "penName", "penNameSetAt", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "licenseSignedOutAt", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "email", "name", "penName", "penNameSetAt", "assistantName", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "licenseSignedOutAt", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @email, @name, @penName, @penNameSetAt, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @licenseSignedOutAt, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @email, @name, @penName, @penNameSetAt, @assistantName, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @licenseSignedOutAt, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
@@ -703,6 +705,7 @@ function syncCoreTables(store: unknown) {
         name: text(user.name),
         penName: nullableText(user.penName),
         penNameSetAt: user.penNameSetAt ? dateText(user.penNameSetAt) : null,
+        assistantName: nullableText(user.assistantName),
         passwordSalt: text(user.passwordSalt),
         passwordHash: text(user.passwordHash),
         role: text(user.role),
@@ -1845,6 +1848,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
         name: text(item.name),
         penName: maybeString(item.penName),
         penNameSetAt: maybeString(item.penNameSetAt),
+        assistantName: maybeString(item.assistantName),
         passwordSalt: text(item.passwordSalt),
         passwordHash: text(item.passwordHash),
         role: text(item.role),

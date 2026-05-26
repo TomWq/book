@@ -9,8 +9,9 @@ import { spawn } from "node:child_process";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = path.resolve(rootDir, "deploy.config.json");
 const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
-const version = String(packageJson.version ?? "").trim();
-const releasePackageDir = path.join(rootDir, "release", "packages", `v${version}`);
+const artifactVersion = String(packageJson.version ?? "").trim();
+const manifestVersion = String(process.env.APP_LATEST_VERSION || artifactVersion).trim();
+const releasePackageDir = path.join(rootDir, "release", "packages", `v${artifactVersion}`);
 const args = new Set(process.argv.slice(2));
 const localOnly = args.has("--local-only");
 const manifestOnly = args.has("--manifest-only");
@@ -73,6 +74,15 @@ function normalizeBaseUrl(config) {
   return base.replace(/\/+$/, "");
 }
 
+function normalizeDownloadPageUrl(config) {
+  const configured = String(process.env.APP_DOWNLOAD_PAGE_URL || "").trim();
+  if (configured) {
+    return configured.replace(/\/+$/, "");
+  }
+
+  return `http://${config.host}/download`;
+}
+
 function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
@@ -120,7 +130,7 @@ function releaseFile(fileName) {
   const filePath = path.join(releasePackageDir, fileName);
 
   if (!existsSync(filePath)) {
-    throw new Error(`缺少发布包：release/packages/v${version}/${fileName}。请先执行 npm run release:download。`);
+    throw new Error(`缺少发布包：release/packages/v${artifactVersion}/${fileName}。请先执行 npm run release:download。`);
   }
 
   assertReleasePackageFresh(filePath);
@@ -136,7 +146,7 @@ function releaseFileIfManifestOnly(fileName) {
   }
 
   if (!existsSync(filePath)) {
-    throw new Error(`缺少发布包：release/packages/v${version}/${fileName}。请先执行 npm run release:download。`);
+    throw new Error(`缺少发布包：release/packages/v${artifactVersion}/${fileName}。请先执行 npm run release:download。`);
   }
 
   return filePath;
@@ -165,9 +175,46 @@ function fileEntry(input) {
   };
 }
 
+function addTauriPlatform(platforms, keys, file) {
+  if (!file?.updaterUrl || !file.updaterSignature) {
+    return;
+  }
+
+  for (const key of keys) {
+    platforms[key] = {
+      url: file.updaterUrl,
+      signature: file.updaterSignature,
+      label: file.label,
+      sizeBytes: file.updaterSizeBytes ?? file.sizeBytes
+    };
+  }
+}
+
+function toTauriUpdateManifest(manifest, config) {
+  const platforms = {};
+
+  addTauriPlatform(platforms, ["windows-x86_64-nsis", "windows-x86_64", "windows-x64"], manifest.files.win32X64);
+  addTauriPlatform(platforms, ["darwin-aarch64-app", "darwin-aarch64", "darwin-arm64-app", "darwin-arm64"], manifest.files.darwinArm64);
+  addTauriPlatform(platforms, ["darwin-x86_64-app", "darwin-x86_64", "darwin-x64-app", "darwin-x64"], manifest.files.darwinX64);
+
+  return {
+    version: manifest.version,
+    notes: manifest.notes,
+    pub_date: manifest.releaseDate,
+    platforms,
+    required: manifest.required,
+    announcement: manifest.announcement,
+    downloadPageUrl: normalizeDownloadPageUrl(config)
+  };
+}
+
 async function main() {
-  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new Error(`package.json 版本号异常：${version || "未设置"}`);
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(artifactVersion)) {
+    throw new Error(`package.json 版本号异常：${artifactVersion || "未设置"}`);
+  }
+
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifestVersion)) {
+    throw new Error(`APP_LATEST_VERSION 版本号异常：${manifestVersion || "未设置"}`);
   }
 
   const config = getConfig();
@@ -177,22 +224,22 @@ async function main() {
   const files = {
     win32X64: {
       label: "Windows x64",
-      fileName: `AI网文写作助手-Setup-${version}-x64.exe`,
-      updaterFileName: `AI网文写作助手-Setup-${version}-x64.exe`,
+      fileName: `AI网文写作助手-Setup-${artifactVersion}-x64.exe`,
+      updaterFileName: `AI网文写作助手-Setup-${artifactVersion}-x64.exe`,
       platform: "win32",
       arch: "x64"
     },
     darwinArm64: {
       label: "macOS Apple 芯片",
-      fileName: `AI网文写作助手-${version}-arm64-mac.dmg`,
-      updaterFileName: `AI网文写作助手-${version}-arm64-mac.app.tar.gz`,
+      fileName: `AI网文写作助手-${artifactVersion}-arm64-mac.dmg`,
+      updaterFileName: `AI网文写作助手-${artifactVersion}-arm64-mac.app.tar.gz`,
       platform: "darwin",
       arch: "arm64"
     },
     darwinX64: {
       label: "macOS Intel",
-      fileName: `AI网文写作助手-${version}-x64-mac.dmg`,
-      updaterFileName: `AI网文写作助手-${version}-x64-mac.app.tar.gz`,
+      fileName: `AI网文写作助手-${artifactVersion}-x64-mac.dmg`,
+      updaterFileName: `AI网文写作助手-${artifactVersion}-x64-mac.app.tar.gz`,
       platform: "darwin",
       arch: "x64"
     }
@@ -205,8 +252,8 @@ async function main() {
   );
   const manifest = {
     productName: "AI 网文写作助手",
-    version,
-    notes: String(process.env.APP_LATEST_RELEASE_NOTES || `发布 ${version} 版本。`).trim(),
+    version: manifestVersion,
+    notes: String(process.env.APP_LATEST_RELEASE_NOTES || `发布 ${manifestVersion} 版本。`).trim(),
     announcement: String(process.env.APP_RELEASE_ANNOUNCEMENT || "").trim(),
     releaseDate: new Date().toISOString(),
     required: ["1", "true", "yes", "on"].includes(String(process.env.APP_UPDATE_REQUIRED || "").toLowerCase()),
@@ -217,6 +264,7 @@ async function main() {
     },
     files: prepared
   };
+  const tauriUpdateManifest = toTauriUpdateManifest(manifest, config);
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "novel-downloads-"));
   const localDownloadsDir = path.join(rootDir, "public", "downloads");
 
@@ -242,11 +290,15 @@ async function main() {
     }
 
     writeFileSync(path.join(tempDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    writeFileSync(path.join(tempDir, "tauri-update.json"), JSON.stringify(tauriUpdateManifest, null, 2), "utf8");
     writeFileSync(path.join(localDownloadsDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    writeFileSync(path.join(localDownloadsDir, "tauri-update.json"), JSON.stringify(tauriUpdateManifest, null, 2), "utf8");
     mkdirSync(path.join(rootDir, "release"), { recursive: true });
     mkdirSync(releasePackageDir, { recursive: true });
     writeFileSync(path.join(rootDir, "release", "download-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    writeFileSync(path.join(rootDir, "release", "tauri-update.json"), JSON.stringify(tauriUpdateManifest, null, 2), "utf8");
     writeFileSync(path.join(releasePackageDir, "download-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    writeFileSync(path.join(releasePackageDir, "tauri-update.json"), JSON.stringify(tauriUpdateManifest, null, 2), "utf8");
 
     if (localOnly) {
       console.log("[publish-downloads] 已生成本地下载中心预览：public/downloads/");
@@ -256,12 +308,17 @@ async function main() {
 
     await run("ssh", ["-p", String(config.port), target, `mkdir -p ${shellQuote(remoteDownloadsDir)}`]);
     if (manifestOnly) {
-      await run("rsync", [
-        "-az",
-        "-e",
-        `ssh -p ${config.port}`,
+      await run("scp", [
+        "-P",
+        String(config.port),
         path.join(tempDir, "manifest.json"),
         `${target}:${remoteDownloadsDir}/manifest.json`
+      ]);
+      await run("scp", [
+        "-P",
+        String(config.port),
+        path.join(tempDir, "tauri-update.json"),
+        `${target}:${remoteDownloadsDir}/tauri-update.json`
       ]);
     } else {
       await run("rsync", [
@@ -276,6 +333,7 @@ async function main() {
 
     console.log(`[publish-downloads] 下载中心文件已上传：${baseUrl}`);
     console.log(`[publish-downloads] 下载页：${baseUrl.replace(/\/downloads$/, "")}/download`);
+    console.log(`[publish-downloads] Tauri 更新清单：${baseUrl.replace(/\/downloads$/, "")}/tauri-update.json`);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

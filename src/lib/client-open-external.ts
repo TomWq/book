@@ -2,6 +2,13 @@
 
 export async function openExternalUrl(url: string) {
   const target = new URL(url || "/", window.location.origin).toString();
+  const targetUrl = new URL(target);
+  const currentUrl = new URL(window.location.href);
+
+  if (targetUrl.origin === currentUrl.origin && targetUrl.pathname === "/download") {
+    window.location.assign(target);
+    return;
+  }
 
   if ("__TAURI_INTERNALS__" in window) {
     try {
@@ -9,9 +16,14 @@ export async function openExternalUrl(url: string) {
       await openUrl(target);
       return;
     } catch {
-      // Fall through to browser fallback so the action still has a visible result.
+      window.location.assign(target);
+      return;
     }
   }
 
-  window.open(target, "_blank", "noopener,noreferrer");
+  const opened = window.open(target, "_blank", "noopener,noreferrer");
+
+  if (!opened) {
+    window.location.assign(target);
+  }
 }

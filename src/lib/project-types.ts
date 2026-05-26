@@ -421,6 +421,7 @@ export type StoredUser = {
   name: string;
   penName?: string;
   penNameSetAt?: string;
+  assistantName?: string;
   passwordSalt: string;
   passwordHash: string;
   role: "user" | "admin";

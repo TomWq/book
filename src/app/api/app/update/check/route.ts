@@ -13,9 +13,14 @@ export async function GET(request: Request) {
     arch
   });
   const downloadKey = getAppDownloadKeyForPlatform(result.platform, result.arch);
+  const downloadUrl = result.downloadUrl
+    ? /^https?:\/\//i.test(result.downloadUrl)
+      ? result.downloadUrl
+      : getAppDownloadUrl(downloadKey, url.origin)
+    : "";
 
   return Response.json({
     ...result,
-    downloadUrl: result.downloadUrl ? getAppDownloadUrl(downloadKey, url.origin) : ""
+    downloadUrl
   });
 }

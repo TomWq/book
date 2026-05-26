@@ -29,6 +29,7 @@ const quickPrompts = [
 ];
 const streamingPlaceholder = "正在结合小说上下文思考...";
 const newConversationSelection = "__new__";
+const defaultAssistantName = "墨澜";
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -67,13 +68,17 @@ function cleanAuthorName(value?: string) {
   return String(value ?? "").trim().replace(/[，。！？,.!?]+$/g, "");
 }
 
-function welcomeMessageFor(authorName?: string): ChatMessage {
+function cleanAssistantName(value?: string) {
+  return String(value ?? "").trim().replace(/[，。！？,.!?]+$/g, "") || defaultAssistantName;
+}
+
+function welcomeMessageFor(authorName?: string, assistantName = defaultAssistantName): ChatMessage {
   const name = cleanAuthorName(authorName);
 
   return {
     id: "welcome",
     role: "assistant",
-    content: `${name ? `${name}，您好。` : ""}我可以帮你起书名、角色名、势力名、地名、功法名，也能看小说设定、人物动机、剧情推进、爽点节奏和章节问题。软件里的创建作品、生成任务卡、导出正文、备份恢复这些功能，也可以直接问我。`
+    content: `${name ? `${name}，您好。` : ""}我是${assistantName}，可以帮你起书名、角色名、势力名、地名、功法名，也能看小说设定、人物动机、剧情推进、爽点节奏和章节问题。软件里的创建作品、生成任务卡、导出正文、备份恢复这些功能，也可以直接问我。`
   };
 }
 
@@ -189,11 +194,12 @@ function AssistantMessageContent({ message }: { message: ChatMessage }) {
 export function WritingAssistantPanel({
   projectId = "",
   className,
-  title = "AI 创作顾问",
+  title,
   contextLabel,
   actions,
   returnHref,
   authorName,
+  assistantName,
   variant = "drawer"
 }: {
   projectId?: string;
@@ -203,14 +209,17 @@ export function WritingAssistantPanel({
   actions?: ReactNode;
   returnHref?: string;
   authorName?: string;
+  assistantName?: string;
   variant?: "drawer" | "workbench";
 }) {
   const [input, setInput] = useState("");
   const authorDisplayName = useMemo(() => cleanAuthorName(authorName), [authorName]);
-  const welcomeMessage = useMemo(() => welcomeMessageFor(authorDisplayName), [authorDisplayName]);
+  const assistantDisplayName = useMemo(() => cleanAssistantName(assistantName), [assistantName]);
+  const panelTitle = title ?? assistantDisplayName;
+  const welcomeMessage = useMemo(() => welcomeMessageFor(authorDisplayName, assistantDisplayName), [assistantDisplayName, authorDisplayName]);
   const assistantGreeting = authorDisplayName
-    ? `${authorDisplayName}，您好，我是墨澜`
-    : "你好，我是墨澜";
+    ? `${authorDisplayName}，您好，我是${assistantDisplayName}`
+    : `你好，我是${assistantDisplayName}`;
   const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage]);
   const [threads, setThreads] = useState<AssistantThread[]>([]);
   const [threadId, setThreadId] = useState("");
@@ -517,14 +526,14 @@ export function WritingAssistantPanel({
 
   if (variant === "workbench") {
     return (
-      <section className={className} aria-label="AI 创作顾问工作台">
+      <section className={className} aria-label={`${assistantDisplayName}工作台`}>
         <aside className="assistant-chat-sidebar">
           <div className="assistant-chat-brand">
             <span className="assistant-chat-mascot" data-mood={loading || historyLoading ? "listening" : "idle"} aria-hidden="true">
               <MoLanMascot />
             </span>
             <div>
-              <strong>墨澜</strong>
+              <strong>{assistantDisplayName}</strong>
               <span>{projectId ? "当前作品上下文" : "通用小说创作"}</span>
             </div>
           </div>
@@ -638,10 +647,10 @@ export function WritingAssistantPanel({
   }
 
   return (
-    <section className={className} id="writing-assistant-drawer" aria-label="AI 创作顾问">
+    <section className={className} id="writing-assistant-drawer" aria-label={assistantDisplayName}>
       <div className="writing-assistant-head">
         <div className="writing-assistant-title">
-          <strong>{title}</strong>
+          <strong>{panelTitle}</strong>
           <span>{contextLabel ?? (projectId ? "已结合当前作品上下文" : "通用小说创作咨询")}</span>
         </div>
         <div className="writing-assistant-head-actions">{actions}</div>

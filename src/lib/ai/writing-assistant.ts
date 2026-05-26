@@ -62,6 +62,18 @@ const PRODUCT_HELP_CONTEXT = {
   ]
 };
 
+function assistantDisplayName(value?: string) {
+  return String(value ?? "").trim() || PRODUCT_HELP_CONTEXT.assistantName;
+}
+
+function productHelpContextFor(assistantName: string) {
+  return {
+    ...PRODUCT_HELP_CONTEXT,
+    assistantName,
+    scope: PRODUCT_HELP_CONTEXT.scope.map((item) => item.replaceAll(PRODUCT_HELP_CONTEXT.assistantName, assistantName))
+  };
+}
+
 const IN_SCOPE_PATTERNS = [
   /小说|网文|写作|创作|故事|剧情|情节|章节|正文|大纲|细纲|任务卡|爽点|钩子|伏笔|铺垫|反转|节奏/,
   /角色|人物|主角|男主|女主|男配|女配|反派|动机|人设|关系|对白|口吻|文风|简介|书名|起名/,
@@ -89,10 +101,10 @@ const OFF_SCOPE_PATTERNS = [
   /八卦|明星绯闻|体育比分|彩票开奖|考试答案|作业答案/
 ];
 
-function buildScopeRefusal(reason: "bypass" | "offScope"): WritingAssistantReply {
+function buildScopeRefusal(reason: "bypass" | "offScope", assistantName = PRODUCT_HELP_CONTEXT.assistantName): WritingAssistantReply {
   const answer = reason === "bypass"
-    ? "主人，这个请求像是在让我绕开规则，墨澜不能照做。我只能聊小说创作，或者帮你解释这个写作软件里的功能怎么用。"
-    : "主人，这个问题不在墨澜的职责范围里。我只能回答小说创作相关问题，或者说明 AI 网文写作助手里的功能用法。";
+    ? `主人，这个请求像是在让我绕开规则，${assistantName}不能照做。我只能聊小说创作，或者帮你解释这个写作软件里的功能怎么用。`
+    : `主人，这个问题不在${assistantName}的职责范围里。我只能回答小说创作相关问题，或者说明 AI 网文写作助手里的功能用法。`;
 
   return {
     answer,
@@ -109,15 +121,16 @@ function hasPattern(patterns: RegExp[], value: string) {
   return patterns.some((pattern) => pattern.test(value));
 }
 
-function guardAssistantScope(question: string): WritingAssistantReply | null {
+function guardAssistantScope(question: string, assistantName?: string): WritingAssistantReply | null {
   const normalized = question.trim();
+  const displayName = assistantDisplayName(assistantName);
 
   if (!normalized) {
     return null;
   }
 
   if (hasPattern(PROMPT_BYPASS_PATTERNS, normalized)) {
-    return buildScopeRefusal("bypass");
+    return buildScopeRefusal("bypass", displayName);
   }
 
   if (hasPattern(IN_SCOPE_PATTERNS, normalized)) {
@@ -125,10 +138,10 @@ function guardAssistantScope(question: string): WritingAssistantReply | null {
   }
 
   if (hasPattern(OFF_SCOPE_PATTERNS, normalized)) {
-    return buildScopeRefusal("offScope");
+    return buildScopeRefusal("offScope", displayName);
   }
 
-  return buildScopeRefusal("offScope");
+  return buildScopeRefusal("offScope", displayName);
 }
 
 function buildProjectContext(context?: WritingAssistantProjectContext | null) {
@@ -198,9 +211,11 @@ export async function generateWritingAssistantReply(input: {
   question: string;
   history?: WritingAssistantChatMessage[];
   projectContext?: WritingAssistantProjectContext | null;
+  assistantName?: string;
 }) {
   const question = input.question.trim();
-  const scopeGuard = guardAssistantScope(question);
+  const assistantName = assistantDisplayName(input.assistantName);
+  const scopeGuard = guardAssistantScope(question, assistantName);
 
   if (scopeGuard) {
     return scopeGuard;
@@ -233,7 +248,7 @@ export async function generateWritingAssistantReply(input: {
         role: "user",
         content: JSON.stringify({
           scope: "novel_writing_and_app_help_only",
-          productHelpContext: PRODUCT_HELP_CONTEXT,
+          productHelpContext: productHelpContextFor(assistantName),
           currentProjectContext: buildProjectContext(input.projectContext),
           conversationHistory: history,
           userQuestion: question
@@ -257,9 +272,11 @@ export async function* streamWritingAssistantReply(input: {
   question: string;
   history?: WritingAssistantChatMessage[];
   projectContext?: WritingAssistantProjectContext | null;
+  assistantName?: string;
 }) {
   const question = input.question.trim();
-  const scopeGuard = guardAssistantScope(question);
+  const assistantName = assistantDisplayName(input.assistantName);
+  const scopeGuard = guardAssistantScope(question, assistantName);
 
   if (scopeGuard) {
     yield scopeGuard.answer;
@@ -292,7 +309,7 @@ export async function* streamWritingAssistantReply(input: {
         role: "user",
         content: JSON.stringify({
           scope: "novel_writing_and_app_help_only",
-          productHelpContext: PRODUCT_HELP_CONTEXT,
+          productHelpContext: productHelpContextFor(assistantName),
           currentProjectContext: buildProjectContext(input.projectContext),
           conversationHistory: history,
           userQuestion: question

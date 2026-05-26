@@ -38,7 +38,31 @@ type UpdatePromptState = {
   tauriUpdate?: Update;
 };
 
+type UpdateProgressPhase = "idle" | "preparing" | "downloading" | "installing" | "installed" | "failed";
+
+type TauriPlatformMeta = {
+  label?: string;
+  sizeBytes?: number;
+};
+
 const autoCheckedKey = "ai-novel-workbench:update-auto-checked";
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+
+  try {
+    const text = JSON.stringify(error);
+    return text && text !== "{}" ? text : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function formatTime(value: string) {
   const timestamp = Date.parse(value);
@@ -77,10 +101,47 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function readNumber(value: unknown) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function pickTauriPlatformMeta(rawJson: Record<string, unknown>): TauriPlatformMeta {
+  const topLevel = {
+    label: typeof rawJson.label === "string" ? rawJson.label : undefined,
+    sizeBytes: readNumber(rawJson.sizeBytes)
+  };
+
+  const platforms = rawJson.platforms && typeof rawJson.platforms === "object"
+    ? rawJson.platforms as Record<string, unknown>
+    : {};
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent.toLowerCase();
+  const candidates = userAgent.includes("windows")
+    ? ["windows-x86_64-nsis", "windows-x86_64", "windows-x64"]
+    : userAgent.includes("mac")
+      ? ["darwin-aarch64-app", "darwin-aarch64", "darwin-arm64-app", "darwin-arm64", "darwin-x86_64-app", "darwin-x86_64", "darwin-x64-app", "darwin-x64"]
+      : Object.keys(platforms);
+
+  for (const key of candidates) {
+    const value = platforms[key];
+
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    const platform = value as Record<string, unknown>;
+    return {
+      label: typeof platform.label === "string" ? platform.label : topLevel.label,
+      sizeBytes: readNumber(platform.sizeBytes) ?? topLevel.sizeBytes
+    };
+  }
+
+  return topLevel;
+}
+
 function buildTauriPromptState(update: Update): UpdatePromptState {
   const rawJson = update.rawJson ?? {};
-  const sizeBytes = typeof rawJson.sizeBytes === "number" ? rawJson.sizeBytes : undefined;
-  const label = typeof rawJson.label === "string" ? rawJson.label : "当前设备";
+  const platformMeta = pickTauriPlatformMeta(rawJson);
 
   return {
     currentVersion: update.currentVersion,
@@ -91,8 +152,8 @@ function buildTauriPromptState(update: Update): UpdatePromptState {
     releaseDate: update.date ?? "",
     downloadPageUrl: typeof rawJson.downloadPageUrl === "string" ? rawJson.downloadPageUrl : "/download",
     file: {
-      label,
-      sizeBytes
+      label: platformMeta.label || "当前设备",
+      sizeBytes: platformMeta.sizeBytes
     },
     source: "tauri",
     tauriUpdate: update
@@ -118,11 +179,26 @@ export function AutoUpdatePrompt() {
   const [visible, setVisible] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateFinished, setUpdateFinished] = useState(false);
+  const [updateError, setUpdateError] = useState("");
+  const [progressPhase, setProgressPhase] = useState<UpdateProgressPhase>("idle");
   const [progressTotal, setProgressTotal] = useState(0);
   const [progressDownloaded, setProgressDownloaded] = useState(0);
   const fileSize = useMemo(() => formatFileSize(result?.file?.sizeBytes || progressTotal), [result?.file?.sizeBytes, progressTotal]);
   const releaseDate = useMemo(() => formatTime(result?.releaseDate ?? ""), [result?.releaseDate]);
-  const progressPercent = progressTotal > 0 ? Math.min(100, Math.round((progressDownloaded / progressTotal) * 100)) : 0;
+  const progressPercent = updateFinished
+    ? 100
+    : progressTotal > 0
+      ? Math.min(99, Math.round((progressDownloaded / progressTotal) * 100))
+      : 0;
+  const progressTitle = updateFinished
+    ? "新版已安装"
+    : progressPhase === "failed"
+      ? "更新失败"
+    : progressPhase === "installing"
+      ? "正在安装"
+      : progressPhase === "preparing"
+        ? "准备下载"
+        : "正在下载";
 
   useEffect(() => {
     if (typeof window === "undefined" || !canUseStorage(window.sessionStorage)) {
@@ -136,18 +212,7 @@ export function AutoUpdatePrompt() {
     window.sessionStorage.setItem(autoCheckedKey, "1");
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      try {
-        if (isTauriRuntime()) {
-          const { check } = await import("@tauri-apps/plugin-updater");
-          const update = await check({ timeout: 15000 });
-
-          if (update) {
-            setResult(buildTauriPromptState(update));
-            setVisible(true);
-            return;
-          }
-        }
-
+      async function checkManualUpdate(nativeError = "") {
         const response = await fetch("/api/app/update/check", {
           cache: "no-store",
           signal: controller.signal
@@ -158,8 +223,38 @@ export function AutoUpdatePrompt() {
           return;
         }
 
-        setResult(buildManualPromptState(payload));
+        const manualState = buildManualPromptState(payload);
+        setResult(nativeError
+          ? {
+            ...manualState,
+            notes: `${manualState.notes}\n\n应用内更新暂不可用：${nativeError}`
+          }
+          : manualState);
         setVisible(true);
+      }
+
+      try {
+        let nativeError = "";
+
+        if (isTauriRuntime()) {
+          try {
+            const { check } = await import("@tauri-apps/plugin-updater");
+            const update = await check({ timeout: 15000 });
+
+            if (update) {
+              setResult(buildTauriPromptState(update));
+              setVisible(true);
+              return;
+            }
+          } catch (error) {
+            nativeError = error instanceof Error ? error.message : String(error);
+            // Fall back to the app update API below. The settings page uses the
+            // same endpoint, so users still see the prompt when native updater
+            // metadata is temporarily invalid during release testing.
+          }
+        }
+
+        await checkManualUpdate(nativeError);
       } catch {
         // 自动检查失败不打扰用户，设置页仍可手动检查。
       }
@@ -189,17 +284,20 @@ export function AutoUpdatePrompt() {
 
   function handleDownloadEvent(event: DownloadEvent) {
     if (event.event === "Started") {
+      setProgressPhase("downloading");
       setProgressTotal(event.data.contentLength ?? 0);
       setProgressDownloaded(0);
       return;
     }
 
     if (event.event === "Progress") {
+      setProgressPhase("downloading");
       setProgressDownloaded((current) => current + event.data.chunkLength);
       return;
     }
 
     if (event.event === "Finished") {
+      setProgressPhase("installing");
       setProgressDownloaded((current) => progressTotal || current);
     }
   }
@@ -211,19 +309,26 @@ export function AutoUpdatePrompt() {
 
     setUpdating(true);
     setUpdateFinished(false);
-    setProgressTotal(result.file?.sizeBytes ?? 0);
+    setUpdateError("");
+    setProgressPhase("preparing");
+    setProgressTotal(0);
     setProgressDownloaded(0);
 
     try {
       await result.tauriUpdate.downloadAndInstall(handleDownloadEvent);
+      setProgressPhase("installed");
       setUpdateFinished(true);
+      setUpdating(false);
       showToast({ type: "success", title: "新版已安装", message: "重启后即可使用最新版本。" });
     } catch (error) {
       setUpdating(false);
+      const message = getErrorMessage(error, "请稍后重试，或打开下载中心手动下载。");
+      setUpdateError(message);
+      setProgressPhase("failed");
       showToast({
         type: "error",
         title: "自动更新失败",
-        message: error instanceof Error ? error.message : "请稍后重试，或打开下载中心手动下载。"
+        message
       });
     }
   }
@@ -236,10 +341,28 @@ export function AutoUpdatePrompt() {
       showToast({
         type: "error",
         title: "重启失败",
-        message: error instanceof Error ? error.message : "请手动退出并重新打开应用。"
+        message: getErrorMessage(error, "请手动退出并重新打开应用。")
       });
     }
   }
+
+  const metaItems = [
+    {
+      key: "platform",
+      label: "适用平台",
+      value: result.file?.label || "当前设备"
+    },
+    {
+      key: "size",
+      label: "安装包大小",
+      value: fileSize || "获取中"
+    },
+    {
+      key: "date",
+      label: "发布日期",
+      value: releaseDate || "刚刚发布"
+    }
+  ];
 
   return (
     <div className="update-prompt-backdrop" role="presentation">
@@ -254,65 +377,60 @@ export function AutoUpdatePrompt() {
         </div>
 
         <div className="update-prompt-main">
-          <div>
+          <div className="update-prompt-title-block">
             <h2 id="update-prompt-title">AI 网文写作助手 v{result.latestVersion}</h2>
             <p>
-              当前版本 v{result.currentVersion}，建议更新到最新版后继续使用。
+              当前版本 v{result.currentVersion}，建议更新到最新版以获得更好的体验。
               {result.required ? " 这个版本属于必须更新。" : ""}
             </p>
           </div>
 
           <div className="update-prompt-meta" aria-label="新版安装包信息">
-            {result.file?.label ? (
-              <div>
-                <span>适用版本</span>
-                <strong>{result.file.label}</strong>
+            {metaItems.map((item) => (
+              <div className="update-prompt-meta-card" key={item.key}>
+                <span className={`update-prompt-meta-icon ${item.key}`} aria-hidden="true" />
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
               </div>
-            ) : null}
-            {fileSize ? (
-              <div>
-                <span>安装包大小</span>
-                <strong>{fileSize}</strong>
-              </div>
-            ) : null}
-            {releaseDate ? (
-              <div>
-                <span>发布日期</span>
-                <strong>{releaseDate}</strong>
-              </div>
-            ) : null}
+            ))}
           </div>
 
           {result.announcement || result.notes ? (
             <div className="update-prompt-notes">
-              <span>更新说明</span>
-              {result.announcement ? <p>{result.announcement}</p> : null}
-              {result.notes ? <p>{result.notes}</p> : null}
+              <div className="update-prompt-notes-copy">
+                <span>更新说明</span>
+                {result.announcement ? <p>{result.announcement}</p> : null}
+                {result.notes ? <p>{result.notes}</p> : null}
+                <button type="button" onClick={() => void openDownloadCenter()}>
+                  查看更新详情
+                </button>
+              </div>
+              <img className="update-prompt-rocket" src="/update/rocket-launch.webp" alt="" aria-hidden="true" />
             </div>
           ) : null}
 
-          {updating ? (
+          {updating || updateFinished || updateError ? (
             <div className="update-progress">
               <div>
-                <strong>{updateFinished ? "新版已安装" : "正在下载并安装"}</strong>
-                <span>{progressTotal > 0 ? `${progressPercent}%` : "正在准备更新包..."}</span>
+                <strong>{progressTitle}</strong>
+                <span>{progressTotal > 0 || updateFinished ? `${progressPercent}%` : "0%"}</span>
               </div>
               <div className="update-progress-bar">
-                <span style={{ width: progressTotal > 0 ? `${progressPercent}%` : "38%" }} />
+                <span style={{ width: `${progressPercent}%` }} />
               </div>
+              {updateError ? <p className="update-progress-error">应用内更新失败：{updateError}</p> : null}
             </div>
           ) : null}
         </div>
 
         <div className="update-prompt-actions">
+          <div className="update-prompt-safe">
+            <span aria-hidden="true" />
+            安全更新，放心升级
+          </div>
           {!result.required && !updating ? (
             <button type="button" className="button" onClick={dismiss}>
               稍后再说
-            </button>
-          ) : null}
-          {!updating && result.source === "tauri" ? (
-            <button type="button" className="button" onClick={() => void openDownloadCenter()}>
-              下载中心
             </button>
           ) : null}
           {result.source === "tauri" ? (

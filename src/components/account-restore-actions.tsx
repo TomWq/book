@@ -27,6 +27,7 @@ export function AccountRestoreActions() {
     setMessage("");
     setError("");
     setIsUploading(true);
+    setMessage(`正在恢复：${file.name}`);
 
     try {
       const formData = new FormData();
@@ -40,6 +41,7 @@ export function AccountRestoreActions() {
 
       if (!response.ok) {
         const nextError = body?.error ? String(body.error) : "恢复数据失败";
+        setMessage("");
         setError(nextError);
         showToast({ type: "error", title: "恢复失败", message: nextError });
         return;
@@ -54,6 +56,7 @@ export function AccountRestoreActions() {
       });
     } catch {
       const nextError = "恢复数据失败，请确认文件是本工具导出的 JSON 备份。";
+      setMessage("");
       setError(nextError);
       showToast({ type: "error", title: "恢复失败", message: nextError });
     } finally {

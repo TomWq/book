@@ -35,6 +35,8 @@ export async function proxy(request: NextRequest) {
   const isAsset =
     pathname.startsWith("/_next") ||
     pathname.startsWith("/downloads/") ||
+    pathname.startsWith("/onboarding/") ||
+    pathname.startsWith("/update/") ||
     pathname === "/favicon.ico";
 
   if (isAsset) {

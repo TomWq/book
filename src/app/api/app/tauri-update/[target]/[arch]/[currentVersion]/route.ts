@@ -10,15 +10,33 @@ export const dynamic = "force-dynamic";
 
 const targetMap: Record<string, AppDownloadKey> = {
   "darwin-aarch64": "darwinArm64",
+  "darwin-arm64": "darwinArm64",
   "darwin-x86_64": "darwinX64",
+  "darwin-x64": "darwinX64",
+  "macos-aarch64": "darwinArm64",
+  "macos-arm64": "darwinArm64",
+  "macos-x86_64": "darwinX64",
+  "macos-x64": "darwinX64",
+  "aarch64-apple-darwin-aarch64": "darwinArm64",
+  "aarch64-apple-darwin-arm64": "darwinArm64",
+  "x86_64-apple-darwin-x86_64": "darwinX64",
+  "x86_64-apple-darwin-x64": "darwinX64",
+  "windows-x64": "win32X64",
   "windows-x86_64": "win32X64"
 };
 
 function publicBaseUrl(request: Request) {
   const configured = String(process.env.APP_PUBLIC_BASE_URL || process.env.LICENSE_SERVER_URL || "").trim().replace(/\/+$/, "");
 
-  if (configured) {
+  if (configured && !/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(configured)) {
     return configured;
+  }
+
+  const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
+  const forwardedProto = request.headers.get("x-forwarded-proto") || new URL(request.url).protocol.replace(":", "") || "http";
+
+  if (forwardedHost && !/^(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(forwardedHost)) {
+    return `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, "");
   }
 
   return new URL(request.url).origin;

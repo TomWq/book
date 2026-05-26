@@ -5,9 +5,10 @@ export const runtime = "nodejs";
 export async function PATCH(request: Request) {
   const body = await request.json().catch(() => ({}));
   const penName = String(body.penName ?? "").trim();
+  const assistantName = String(body.assistantName ?? "").trim();
 
   try {
-    const result = await updateCurrentUserPenName({ penName });
+    const result = await updateCurrentUserPenName({ penName, assistantName });
     return Response.json(result);
   } catch (error) {
     return Response.json(

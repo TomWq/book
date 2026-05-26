@@ -81,7 +81,7 @@ npm run release:download
 然后按 `release/packages/v版本号/UPLOAD_THESE_FILES.txt` 上传安装包、updater 包和 `.sig` 到 COS，最后发布下载清单：
 
 ```bash
-DOWNLOAD_BASE_URL="https://ai-novel-downloads-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
+DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run downloads:manifest
 ```
 
 ## 品牌资源

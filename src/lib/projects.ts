@@ -589,19 +589,34 @@ function normalizePenName(value: string) {
   return value.replace(/\s+/g, "").trim();
 }
 
-export async function updateCurrentUserPenName(input: { penName: string }) {
+function normalizeAssistantName(value?: string) {
+  return String(value ?? "").replace(/\s+/g, "").trim();
+}
+
+export async function updateCurrentUserPenName(input: { penName: string; assistantName?: string }) {
   const penName = normalizePenName(input.penName);
+  const assistantName = normalizeAssistantName(input.assistantName);
 
   if (!penName) {
     throw new Error("请先给自己起一个笔名");
   }
 
-  if (penName.length < 2 || penName.length > 16) {
-    throw new Error("笔名建议 2-16 个字");
+  if (penName.length < 2 || penName.length > 20) {
+    throw new Error("笔名建议 2-20 个字");
   }
 
   if (!/^[\p{Script=Han}A-Za-z0-9_·]+$/u.test(penName)) {
     throw new Error("笔名只能包含中文、字母、数字、下划线或间隔号");
+  }
+
+  if (assistantName) {
+    if (assistantName.length > 5) {
+      throw new Error("小助手名称最多 5 个字");
+    }
+
+    if (!/^[\p{Script=Han}A-Za-z0-9_·]+$/u.test(assistantName)) {
+      throw new Error("小助手名称只能包含中文、字母、数字、下划线或间隔号");
+    }
   }
 
   const store = await readStore();
@@ -610,6 +625,7 @@ export async function updateCurrentUserPenName(input: { penName: string }) {
 
   user.penName = penName;
   user.penNameSetAt = user.penNameSetAt || timestamp;
+  user.assistantName = assistantName || undefined;
   user.updatedAt = timestamp;
   await writeStore(store);
 
@@ -678,6 +694,53 @@ function isBackupArray(payload: Record<string, unknown>, key: string) {
   return Array.isArray(payload[key]);
 }
 
+function objectFromBackup<T>(payload: Record<string, unknown>, key: string): Partial<T> | null {
+  const value = payload[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Partial<T> : null;
+}
+
+function sameBackupUser(candidate: Partial<StoredUser>, user: StoredUser) {
+  return Boolean(
+    candidate.id === user.id ||
+      (candidate.email && candidate.email === user.email) ||
+      (candidate.licenseCustomerId && candidate.licenseCustomerId === user.licenseCustomerId) ||
+      (candidate.licenseCodeHash && candidate.licenseCodeHash === user.licenseCodeHash)
+  );
+}
+
+function pickBackupSourceUser(payload: Record<string, unknown>, user: StoredUser) {
+  const exportedUser = objectFromBackup<StoredUser>(payload, "user");
+
+  if (exportedUser) {
+    return exportedUser;
+  }
+
+  const users = arrayFromBackup<StoredUser>(payload, "users");
+
+  if (users.length === 0) {
+    return null;
+  }
+
+  const projects = arrayFromBackup<StoredProject>(payload, "projects");
+  return users.find((candidate) => sameBackupUser(candidate, user)) ??
+    users.find((candidate) => candidate.role !== "admin" && projects.some((project) => project.ownerUserId === candidate.id)) ??
+    users.find((candidate) => candidate.role !== "admin") ??
+    users[0];
+}
+
+function pickBackupAiSettings(payload: Record<string, unknown>, user: StoredUser, sourceUser: Partial<StoredUser> | null) {
+  const settings = normalizeStoredAiSettings(payload.aiSettings as StoredAiSettings | StoredAiSettings[] | undefined);
+
+  if (settings.length === 0) {
+    return null;
+  }
+
+  return settings.find((item) => sourceUser?.id && item.userId === sourceUser.id) ??
+    settings.find((item) => item.userId === user.id) ??
+    settings.find((item) => item.active) ??
+    settings[0];
+}
+
 function removeUserWorkspaceData(store: AppStore, userId: string) {
   const ownedProjectIds = getOwnedProjectIds(store, userId);
   const ownedTemplateIds = store.templates
@@ -729,16 +792,21 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
   const projects = arrayFromBackup<StoredProject>(data, "projects");
   const store = await readStore();
   const user = await requireCurrentUser(store);
+  const sourceUser = pickBackupSourceUser(data, user);
   const backupPath = await backupStoreSnapshot(store, "before-restore");
 
   removeUserWorkspaceData(store, user.id);
 
-  const exportedUser = data.user && typeof data.user === "object" ? data.user as Partial<StoredUser> : null;
-  const exportedPenName = typeof exportedUser?.penName === "string" ? exportedUser.penName.trim() : "";
+  const exportedPenName = typeof sourceUser?.penName === "string" ? sourceUser.penName.trim() : "";
+  const exportedAssistantName = typeof sourceUser?.assistantName === "string" ? sourceUser.assistantName.trim() : "";
 
   if (exportedPenName) {
     user.penName = exportedPenName;
-    user.penNameSetAt = typeof exportedUser?.penNameSetAt === "string" ? exportedUser.penNameSetAt : user.penNameSetAt || now();
+    user.penNameSetAt = typeof sourceUser?.penNameSetAt === "string" ? sourceUser.penNameSetAt : user.penNameSetAt || now();
+  }
+
+  if (exportedAssistantName) {
+    user.assistantName = exportedAssistantName;
   }
 
   if (typeof data.onboardingCompletedAt === "string") {
@@ -790,8 +858,16 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
     ...arrayFromBackup<StoredCreditTransaction>(data, "creditTransactions").map((item) => ({ ...item, userId: user.id }))
   );
 
-  const aiSettings = data.aiSettings && typeof data.aiSettings === "object"
-    ? { ...(data.aiSettings as StoredAiSettings), userId: user.id, updatedAt: now() }
+  const restoredAiSettings = pickBackupAiSettings(data, user, sourceUser);
+  const aiSettings = restoredAiSettings
+    ? {
+      ...restoredAiSettings,
+      id: restoredAiSettings.userId === user.id
+        ? restoredAiSettings.id
+        : `${user.id}:${restoredAiSettings.id || "restored"}`,
+      userId: user.id,
+      updatedAt: now()
+    }
     : null;
 
   if (aiSettings) {
@@ -5404,7 +5480,8 @@ export async function chatWithWritingAssistant(input: {
   const reply = await generateWritingAssistantReply({
     question,
     history,
-    projectContext
+    projectContext,
+    assistantName: currentUser.assistantName
   });
   const userMessage: StoredAssistantMessage = {
     id: randomUUID(),
@@ -5497,7 +5574,8 @@ export async function prepareWritingAssistantStream(input: {
     stream: streamWritingAssistantReply({
       question,
       history,
-      projectContext
+      projectContext,
+      assistantName: currentUser.assistantName
     })
   };
 }

@@ -20,6 +20,11 @@ const navItems: SideNavItem[] = [
 ];
 
 const standaloneAuthPaths = new Set(["/activate", "/login", "/register", "/download", "/downloads"]);
+const defaultAssistantName = "墨澜";
+
+function displayAssistantName(value?: string) {
+  return String(value ?? "").trim() || defaultAssistantName;
+}
 
 export async function AppShell({ children }: { children: ReactNode }) {
   const pathname = (await headers()).get("x-nw-pathname") ?? "";
@@ -38,10 +43,13 @@ export async function AppShell({ children }: { children: ReactNode }) {
   }
 
   const isAdminMode = isAdmin && !desktopRuntime;
+  const assistantName = displayAssistantName(user?.assistantName);
   const aiSetup = user && !isAdminMode
     ? await getCurrentUserAiSetupStatus()
     : { configured: true };
-  const visibleNavItems = isAdminMode ? [{ href: "/admin", label: "管理后台" }] : navItems;
+  const visibleNavItems = isAdminMode
+    ? [{ href: "/admin", label: "管理后台" }]
+    : navItems.map((item) => item.href === "/assistant" ? { ...item, label: assistantName } : item);
   const brandHref = isAdminMode ? "/admin" : "/";
 
   return (
@@ -53,7 +61,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
               <AppIconMark />
               <div>
                 <div className="brand-title">AI 网文写作助手</div>
-                <div className="brand-subtitle">爆款拆解 · 模板迁移 · 长篇管理</div>
+                <div className="brand-subtitle">智能创作 · 章节生成 · 一致性审稿</div>
               </div>
             </Link>
           </div>
@@ -82,7 +90,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
               <div>
                 <div className="brand-title">AI 网文写作助手</div>
                 <div className="brand-subtitle">
-                  {isAdminMode ? "授权中心 · 客户与版本管理" : "爆款拆解 · 模板迁移 · 长篇管理"}
+                  {isAdminMode ? "授权中心 · 客户与版本管理" : "智能创作 · 章节生成 · 一致性审稿"}
                 </div>
               </div>
             </Link>
@@ -117,7 +125,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
         <main className="app-main">{children}</main>
       </div>
 
-      {user && !isAdminMode ? <FloatingWritingAssistant authorName={user.penName || user.name} /> : null}
+      {user && !isAdminMode ? <FloatingWritingAssistant authorName={user.penName || user.name} assistantName={assistantName} /> : null}
       {user && !isAdminMode ? <PenNameOnboarding initialPenName={user.penName} /> : null}
       {user && !isAdminMode && desktopRuntime ? <AutoUpdatePrompt /> : null}
     </div>

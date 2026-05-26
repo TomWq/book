@@ -14,6 +14,10 @@ function safeReturnPath(value: unknown, fallback: string) {
   return value;
 }
 
+function displayAssistantName(value?: string) {
+  return String(value ?? "").trim() || "墨澜";
+}
+
 export default async function AssistantPage({
   searchParams
 }: {
@@ -28,6 +32,7 @@ export default async function AssistantPage({
   const params = (await searchParams) ?? {};
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   const returnHref = safeReturnPath(params.returnTo, projectId ? `/projects/${projectId}` : "/");
+  const assistantName = displayAssistantName(user.assistantName);
 
   return (
     <div className="assistant-page">
@@ -35,9 +40,10 @@ export default async function AssistantPage({
         projectId={projectId}
         returnHref={returnHref}
         className="assistant-chat-workbench"
-        title="AI 创作顾问"
+        title={assistantName}
         contextLabel={projectId ? "已绑定当前作品上下文" : "通用小说创作咨询"}
         authorName={user.penName || user.name}
+        assistantName={assistantName}
         variant="workbench"
       />
     </div>

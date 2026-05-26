@@ -1,8 +1,16 @@
 import Link from "next/link";
 import { Panel } from "@/components/panel";
+import { getCurrentUser } from "@/lib/projects";
 import { ProjectForm } from "./project-form";
 
-export default function NewProjectPage() {
+function displayAssistantName(value?: string) {
+  return String(value ?? "").trim() || "墨澜";
+}
+
+export default async function NewProjectPage() {
+  const user = await getCurrentUser();
+  const assistantName = displayAssistantName(user?.assistantName);
+
   return (
     <div className="grid">
       <section className="hero book-create-hero">
@@ -25,7 +33,7 @@ export default function NewProjectPage() {
 
       <section className="new-project-guide">
         <div>
-          <span>墨澜建议</span>
+          <span>{assistantName}建议</span>
           <strong>第一次创建作品，不用把所有设定都想完</strong>
           <p>先选读者和题材标签，再让 AI 试起书名、主角名和简介。创建成功后，直接去生成第一章任务卡。</p>
         </div>
