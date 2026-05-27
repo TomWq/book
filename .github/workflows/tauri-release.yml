@@ -90,8 +90,24 @@ jobs:
         with:
           targets: ${{ matrix.rustTargets }}
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.rustTarget }}
+
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Cache Tauri build runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules/.cache/tauri-build
+          key: tauri-build-runtime-${{ runner.os }}-${{ matrix.rustTarget }}-${{ hashFiles('scripts/tauri-build.mjs', 'package-lock.json') }}
+          restore-keys: |
+            tauri-build-runtime-${{ runner.os }}-${{ matrix.rustTarget }}-
+            tauri-build-runtime-${{ runner.os }}-
 
       - name: Prepare Tauri target resources
         run: node scripts/tauri-build.mjs --prepare-only ${{ matrix.prepareArgs }}

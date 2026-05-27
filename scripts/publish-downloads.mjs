@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = path.resolve(rootDir, "deploy.config.json");
+const releaseNotesPath = path.join(rootDir, "release", "release-notes.json");
 const packageJson = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
 const artifactVersion = String(packageJson.version ?? "").trim();
 const manifestVersion = String(process.env.APP_LATEST_VERSION || artifactVersion).trim();
@@ -37,6 +38,18 @@ function getConfig() {
     path: process.env.DEPLOY_PATH || fileConfig.path || "/root/book",
     port: Number(process.env.DEPLOY_PORT || fileConfig.port || 22),
     downloadBaseUrl: process.env.DOWNLOAD_BASE_URL || process.env.APP_DOWNLOAD_BASE_URL || fileConfig.downloadBaseUrl || ""
+  };
+}
+
+function getReleaseNotes() {
+  const fileNotes = readJsonIfExists(releaseNotesPath) ?? {};
+
+  return {
+    notes: String(process.env.APP_LATEST_RELEASE_NOTES || fileNotes.notes || `发布 ${manifestVersion} 版本。`).trim(),
+    announcement: String(process.env.APP_RELEASE_ANNOUNCEMENT || fileNotes.announcement || "").trim(),
+    required: ["1", "true", "yes", "on"].includes(
+      String(process.env.APP_UPDATE_REQUIRED ?? fileNotes.required ?? "").toLowerCase()
+    )
   };
 }
 
@@ -218,6 +231,7 @@ async function main() {
   }
 
   const config = getConfig();
+  const releaseNotes = getReleaseNotes();
   const target = `${config.user}@${config.host}`;
   const remoteDownloadsDir = path.posix.join(config.path, "public", "downloads");
   const baseUrl = normalizeBaseUrl(config);
@@ -253,10 +267,10 @@ async function main() {
   const manifest = {
     productName: "AI 网文写作助手",
     version: manifestVersion,
-    notes: String(process.env.APP_LATEST_RELEASE_NOTES || `发布 ${manifestVersion} 版本。`).trim(),
-    announcement: String(process.env.APP_RELEASE_ANNOUNCEMENT || "").trim(),
+    notes: releaseNotes.notes,
+    announcement: releaseNotes.announcement,
     releaseDate: new Date().toISOString(),
-    required: ["1", "true", "yes", "on"].includes(String(process.env.APP_UPDATE_REQUIRED || "").toLowerCase()),
+    required: releaseNotes.required,
     downloads: {
       win32X64: prepared.win32X64.url,
       darwinArm64: prepared.darwinArm64.url,
