@@ -1,4 +1,4 @@
-import { access, chmod, cp, mkdir, readdir, rm } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { constants, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -17,9 +17,54 @@ const projectNode = process.platform === "win32"
 const binDir = path.join(root, "node_modules", ".bin");
 const bundledNodeRuntimeDir = path.join(root, "build", "tauri-node-runtime");
 const standaloneDir = path.join(root, ".next", "standalone");
+const packageJsonPath = path.join(root, "package.json");
+const tauriConfigPath = path.join(root, "src-tauri", "tauri.conf.json");
+const cargoManifestPath = path.join(root, "src-tauri", "Cargo.toml");
+const cargoLockPath = path.join(root, "src-tauri", "Cargo.lock");
 
 function log(message) {
   console.log(`[tauri-build] ${message}`);
+}
+
+async function syncTauriVersion() {
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  const version = String(packageJson.version ?? "").trim();
+
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`package.json 版本号异常：${version || "未设置"}`);
+  }
+
+  const tauriConfig = JSON.parse(await readFile(tauriConfigPath, "utf8"));
+
+  if (tauriConfig.version !== version) {
+    tauriConfig.version = version;
+    await writeFile(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`, "utf8");
+    log(`已同步 Tauri 版本：${version}`);
+  } else {
+    log(`Tauri 版本已同步：${version}`);
+  }
+
+  const cargoManifest = await readFile(cargoManifestPath, "utf8");
+  const nextCargoManifest = cargoManifest.replace(
+    /^version = ".*"$/m,
+    `version = "${version}"`
+  );
+
+  if (nextCargoManifest !== cargoManifest) {
+    await writeFile(cargoManifestPath, nextCargoManifest, "utf8");
+    log(`已同步 Cargo.toml 版本：${version}`);
+  }
+
+  const cargoLock = await readFile(cargoLockPath, "utf8");
+  const nextCargoLock = cargoLock.replace(
+    /(name = "ai-novel-workbench"\nversion = )".*"/,
+    `$1"${version}"`
+  );
+
+  if (nextCargoLock !== cargoLock) {
+    await writeFile(cargoLockPath, nextCargoLock, "utf8");
+    log(`已同步 Cargo.lock 版本：${version}`);
+  }
 }
 
 function run(command, args, options = {}) {
@@ -337,6 +382,7 @@ async function main() {
     throw new Error("Tauri Windows 安装包建议通过 GitHub Actions 的 windows-latest 原生构建，或在 Windows 机器上执行。");
   }
 
+  await syncTauriVersion();
   await ensureProjectNode();
   const npmShimDir = await ensureNpmShim();
   const toolPath = [
