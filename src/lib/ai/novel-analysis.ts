@@ -18,6 +18,11 @@ export type StoryAnalysisResult = ReturnType<typeof buildStoryAnalysis>;
 type AiChapterAnalysisResult = ChapterAnalysisResult;
 type AiStoryAnalysisResult = StoryAnalysisResult;
 
+export type AnalysisProjectContext = {
+  genre?: string;
+  description?: string;
+};
+
 export type AnalysisRunResult<T> = {
   analysis: T;
   usedAi: boolean;
@@ -25,7 +30,10 @@ export type AnalysisRunResult<T> = {
   error?: string;
 };
 
-function buildChapterMessages(chapter: StoredChapter, options?: { compact?: boolean }) {
+function buildChapterMessages(
+  chapter: StoredChapter,
+  options?: { compact?: boolean; projectContext?: AnalysisProjectContext }
+) {
   const content = trimChapterContentForAnalysis(chapter.content);
   const qualityRules = [
     "summary 必须概括本章完整剧情，不少于 40 个中文字符。",
@@ -63,7 +71,13 @@ function buildChapterMessages(chapter: StoredChapter, options?: { compact?: bool
         {
           task: "analyze_chapter",
           mode: options?.compact ? "compact_retry" : "standard",
+          projectContext: options?.projectContext ?? {},
           qualityRules,
+          contextRules: [
+            "projectContext.genre 是用户标记的来源作品题材或平台分类，只作为拆解视角参考，不要强行覆盖原文证据。",
+            "projectContext.description 可能包含来源说明、分类体系、目标读者和分析目标；需要用它理解用户为什么拆这本书。",
+            "如果原文内容和用户标记不一致，必须以原文为准，并在总结中避免编造题材特征。"
+          ],
           chapter: {
             chapterNumber: chapter.chapterNumber,
             title: chapter.title,
@@ -106,7 +120,10 @@ function buildChapterMessages(chapter: StoredChapter, options?: { compact?: bool
   ];
 }
 
-function buildStoryMessages(chapters: Array<AiChapterAnalysisResult>) {
+function buildStoryMessages(
+  chapters: Array<AiChapterAnalysisResult>,
+  projectContext?: AnalysisProjectContext
+) {
   return [
     {
       role: "system" as const,
@@ -118,13 +135,15 @@ function buildStoryMessages(chapters: Array<AiChapterAnalysisResult>) {
       content: JSON.stringify(
         {
           task: "analyze_story",
+          projectContext: projectContext ?? {},
           qualityRules: [
             "openingHook 要指出具体开局事件，而不是摘一句环境描写。",
             "mainLoop 要写出这本书自己的循环，不要用通用箭头模板。",
             "pacing 要给出小爽点/大爽点/断章/地图推进的频率判断。",
             "usablePatterns 要能直接用于新书迁移，每条都要具体。",
             "avoidCopying 要指出本书哪些角色、桥段、专有设定不能照搬。",
-            "formula 必须是这本书的商业公式，不少于 30 个中文字符。"
+            "formula 必须是这本书的商业公式，不少于 30 个中文字符。",
+            "如果 projectContext.genre 存在，genre 输出优先结合用户标记和章节证据；不要把番茄/起点分类体系误写成原文设定。"
           ],
           chapterAnalyses: chapters.map((chapter) => ({
             summary: compactStorySignal(chapter.summary),
@@ -378,38 +397,42 @@ function isWeakStoryResult(result: StoryAnalysisResult, fallback: StoryAnalysisR
 
 async function requestChapterAnalysis(
   chapter: StoredChapter,
-  options?: { compact?: boolean; maxTokens?: number }
+  options?: { compact?: boolean; maxTokens?: number; projectContext?: AnalysisProjectContext }
 ) {
   return requestAiJson<Partial<ChapterAnalysisResult>>({
-    messages: buildChapterMessages(chapter, { compact: options?.compact }),
+    messages: buildChapterMessages(chapter, {
+      compact: options?.compact,
+      projectContext: options?.projectContext
+    }),
     temperature: 0.2,
     maxTokens: options?.maxTokens ?? 3200
   });
 }
 
 export async function analyzeChapterWithAi(
-  chapter: StoredChapter
+  chapter: StoredChapter,
+  projectContext?: AnalysisProjectContext
 ): Promise<AnalysisRunResult<ChapterAnalysisResult>> {
   try {
     let response: Partial<ChapterAnalysisResult>;
     let tokenUsage = undefined;
 
     try {
-      response = await requestChapterAnalysis(chapter);
+      response = await requestChapterAnalysis(chapter, { projectContext });
       tokenUsage = getAiTokenUsage(response);
     } catch (error) {
       if (!isAiOutputLengthError(error)) {
         throw error;
       }
 
-      response = await requestChapterAnalysis(chapter, { compact: true, maxTokens: 4200 });
+      response = await requestChapterAnalysis(chapter, { compact: true, maxTokens: 4200, projectContext });
       tokenUsage = getAiTokenUsage(response);
     }
 
     let analysis = sanitizeChapterResult(response, chapter);
 
     if (isWeakChapterResult(analysis)) {
-      const retryResponse = await requestChapterAnalysis(chapter, { compact: true, maxTokens: 4200 });
+      const retryResponse = await requestChapterAnalysis(chapter, { compact: true, maxTokens: 4200, projectContext });
       const retryAnalysis = sanitizeChapterResult(retryResponse, chapter);
       tokenUsage = combineAiTokenUsages([tokenUsage, getAiTokenUsage(retryResponse)]);
 
@@ -443,12 +466,13 @@ export async function analyzeChapterWithAi(
 }
 
 export async function analyzeStoryWithAi(
-  chapterAnalyses: ChapterAnalysisResult[]
+  chapterAnalyses: ChapterAnalysisResult[],
+  projectContext?: AnalysisProjectContext
 ): Promise<AnalysisRunResult<StoryAnalysisResult>> {
   try {
     const fallback = buildStoryAnalysis(chapterAnalyses);
     const response = await requestAiJsonWithRetry<Partial<StoryAnalysisResult>>({
-      messages: buildStoryMessages(chapterAnalyses),
+      messages: buildStoryMessages(chapterAnalyses, projectContext),
       temperature: 0.2,
       maxTokens: 3600
     });

@@ -9,6 +9,7 @@ import {
   enqueueReviewChapterJob,
   enqueueWritingTaskCardJob,
   generateChapterDraft,
+  generateLongFormPlan,
   generateWritingTaskCard,
   getProjectWritingState,
   reviewChapterDraft
@@ -64,6 +65,13 @@ export async function POST(
       const taskCard = await generateWritingTaskCard(projectId, input);
 
       return Response.json({ taskCard }, { status: 201 });
+    }
+
+    if (action === "generate_long_form_plan") {
+      const plan = await generateLongFormPlan(projectId, {
+        targetTotalWords: Number(body.targetTotalWords ?? 0) || undefined
+      });
+      return Response.json({ plan }, { status: 201 });
     }
 
     if (action === "generate_draft") {

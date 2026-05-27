@@ -30,6 +30,31 @@ async function readError(response: Response) {
   return "操作失败，请稍后重试";
 }
 
+export function ActionLoadingOverlay({
+  title,
+  description
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="action-loading-overlay" aria-live="polite" role="status">
+      <div className="route-loading-board">
+        <div className="route-loading-head">
+          <span className="loading-bookmark" aria-hidden="true">
+            <span />
+          </span>
+          <div>
+            <strong>{title}</strong>
+            <span>{description}</span>
+          </div>
+        </div>
+        <span className="route-loading-progress" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
 function useApiMutation() {
   const router = useRouter();
   const [isRoutePending, startTransition] = useTransition();
@@ -123,7 +148,10 @@ export function ApiForm({
   successMessage,
   resetOnSuccess = false,
   className,
-  children
+  children,
+  pendingTitle = "正在提交内容",
+  pendingDescription = "正在保存和处理你的操作，请稍等一下。",
+  showInlinePending = false
 }: {
   endpoint: string;
   method?: Method;
@@ -138,6 +166,9 @@ export function ApiForm({
   resetOnSuccess?: boolean;
   className?: string;
   children: ReactNode;
+  pendingTitle?: string;
+  pendingDescription?: string;
+  showInlinePending?: boolean;
 }) {
   const { mutate, error, success, isPending } = useApiMutation();
 
@@ -186,7 +217,8 @@ export function ApiForm({
   return (
     <form className={className} onSubmit={handleSubmit} aria-busy={isPending}>
       {children}
-      {isPending ? <div className="pill form-status">正在处理，请稍候...</div> : null}
+      {isPending ? <ActionLoadingOverlay title={pendingTitle} description={pendingDescription} /> : null}
+      {isPending && showInlinePending ? <div className="pill form-status">正在处理，请稍候...</div> : null}
       {success ? <div className="pill success form-status">{success}</div> : null}
       {error ? <div className="pill danger form-error">{error}</div> : null}
     </form>
@@ -205,7 +237,9 @@ export function ApiButton({
   redirectDataPath,
   redirectPrefix,
   refresh = true,
-  successMessage
+  successMessage,
+  pendingTitle,
+  pendingDescription
 }: {
   endpoint: string;
   method?: Method;
@@ -219,6 +253,8 @@ export function ApiButton({
   redirectPrefix?: string;
   refresh?: boolean;
   successMessage?: string;
+  pendingTitle?: string;
+  pendingDescription?: string;
 }) {
   const { mutate, error, isPending } = useApiMutation();
 
@@ -247,6 +283,12 @@ export function ApiButton({
       >
         {isPending ? "处理中..." : label}
       </button>
+      {isPending ? (
+        <ActionLoadingOverlay
+          title={pendingTitle || `正在${label}`}
+          description={pendingDescription || "正在处理请求，请稍等一下。"}
+        />
+      ) : null}
       {error ? <div className="pill danger form-error">{error}</div> : null}
     </>
   );

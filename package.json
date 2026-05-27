@@ -1,7 +1,7 @@
 {
   "name": "ai-novel-workbench",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "面向网文作者的爆款拆解、模板迁移和长篇创作工作台",
   "author": "AI 网文写作助手",
   "scripts": {
@@ -32,6 +32,9 @@
     "activation:reset": "node scripts/reset-local-activation.mjs"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",

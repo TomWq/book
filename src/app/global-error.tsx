@@ -14,8 +14,8 @@ export default function GlobalError({
           <div className="route-error-card">
             <span className="route-error-icon" aria-hidden="true">!</span>
             <div>
-              <h1>客户端加载失败</h1>
-              <p>本地服务遇到错误，请先点击重试。如果仍然失败，请在客户端菜单“帮助 / 打开日志目录”里找到 tauri.log 发给开发者。</p>
+              <h1>页面加载失败</h1>
+              <p>应用服务遇到错误，请先点击重试。如果仍然失败，请把当前页面地址和错误编号发给开发者。</p>
               {error.digest ? <code>错误编号：{error.digest}</code> : null}
             </div>
             <button className="button primary" type="button" onClick={reset}>

@@ -528,6 +528,8 @@ fn main() {
     let main_window_ready_for_setup = Arc::clone(&main_window_ready);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(

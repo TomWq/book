@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ActionLoadingOverlay } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
 
 type StreamState =
@@ -11,6 +12,7 @@ type StreamState =
   | { status: "error"; content: string; error: string };
 
 const streamDraftSavingMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_SAVING]]";
+const streamDraftFinalMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_FINAL]]";
 
 export function StreamDraftButton({
   projectId,
@@ -41,6 +43,8 @@ export function StreamDraftButton({
   const runningStatusText = isSavingStreamDraft
     ? "正文已生成，正在保存草稿并更新章节台账，请稍候。"
     : "正在生成正文，实时内容会持续出现在下方。";
+  const normalizedPreviewTarget = normalizedTargetWordCount();
+  const targetRangeText = `${Math.floor(normalizedPreviewTarget * 0.7)}-${Math.ceil(normalizedPreviewTarget * 1.25)}`;
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -79,15 +83,33 @@ function normalizedTargetWordCount() {
     };
   }
 
+  function stripStreamSystemMessages(value: string) {
+    return value
+      .replace(
+        /\n*\[(?:AI 输出被长度限制截断|补尾后结尾仍不完整|补尾仍不稳定)[^\]]*]\n*/g,
+        ""
+      )
+      .replace(
+        /\n*\[(?:正文需要补足|结尾仍疑似被截断|AI 流式生成提前结束)[^\]]*]\n*/g,
+        "\n\n"
+      );
+  }
+
   function parseStreamText(value: string) {
     const visible = splitFailureMarker(value);
     const phase: "generating" | "saving" = visible.content.includes(streamDraftSavingMarker)
       ? "saving"
       : "generating";
-    const content = visible.content
-      .replaceAll(`\n\n${streamDraftSavingMarker}\n\n`, "\n\n")
-      .replaceAll(streamDraftSavingMarker, "")
-      .replace(/\n{3,}/g, "\n\n");
+    const finalIndex = visible.content.lastIndexOf(streamDraftFinalMarker);
+    const sourceContent = finalIndex >= 0
+      ? visible.content.slice(finalIndex + streamDraftFinalMarker.length).trimStart()
+      : visible.content;
+    const content = stripStreamSystemMessages(
+      sourceContent
+        .replaceAll(`\n\n${streamDraftSavingMarker}\n\n`, "\n\n")
+        .replaceAll(streamDraftSavingMarker, "")
+        .replaceAll(streamDraftFinalMarker, "")
+    ).replace(/\n{3,}/g, "\n\n");
 
     return { ...visible, content, phase };
   }
@@ -184,10 +206,19 @@ function normalizedTargetWordCount() {
 
   return (
     <div className="list">
+      {isSavingStreamDraft ? (
+        <ActionLoadingOverlay
+          title="正在保存章节草稿"
+          description="正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"
+        />
+      ) : null}
       <div className="field">
         <div className="field-label-row">
           <div className="field-label">目标字数</div>
-          <div className="field-hint">建议 800-3000 字；AI 会围绕目标上下浮动，不会精确等于输入字数</div>
+          <div className="target-word-guide">
+            <span className="target-word-recommend">推荐 1500-2000 字</span>
+            <span className="field-hint">可填 800-3000 字；当前保存参考约 {targetRangeText} 字</span>
+          </div>
         </div>
         <input
           type="number"

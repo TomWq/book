@@ -275,6 +275,24 @@ export type StoredPlotState = {
   updatedAt: string;
 };
 
+export type StoredLongFormPlan = {
+  id: string;
+  projectId: string;
+  targetTotalWords: number;
+  estimatedChapters: number;
+  planningBasis: string;
+  corePromise: string;
+  volumePlan: string[];
+  progressionPacing: string[];
+  rewardPacing: string[];
+  first10Chapters: string[];
+  first100Pacing: string;
+  post100Pacing: string;
+  progressionRules: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CustomRelationGraphNodeType =
   | "person"
   | "place"
@@ -509,6 +527,7 @@ export type AppStore = {
   characterProfiles: StoredCharacterProfile[];
   foreshadowings: StoredForeshadowing[];
   plotStates: StoredPlotState[];
+  longFormPlans: StoredLongFormPlan[];
   customRelationGraphs?: StoredCustomRelationGraph[];
   writingTaskCards: StoredWritingTaskCard[];
   chapterDrafts: StoredChapterDraft[];

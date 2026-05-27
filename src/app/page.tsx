@@ -193,11 +193,18 @@ export default async function HomePage() {
               拆章节节奏、爽点和主循环，沉淀可迁移模板，再用任务卡、章节台账和项目状态管理持续推进连载。
             </p>
             <div className="public-privacy-note">
-              <strong>本地优先，保护创作隐私</strong>
-              <span>作品、草稿、设定和项目数据保存在你的电脑里，不上传到我们的服务器。</span>
+              <strong>{desktopRuntime ? "本地优先，保护创作隐私" : "网页入口，快速进入工作台"}</strong>
+              <span>
+                {desktopRuntime
+                  ? "作品、草稿、设定和项目数据保存在你的电脑里，不上传到我们的服务器。"
+                  : "无需安装客户端，登录后即可使用拆书、模板和长篇创作管理能力。"}
+              </span>
             </div>
             <div className="hero-actions">
-              <Link href="/download" className="button primary">
+              <Link href="/activate" className="button primary">
+                进入工作台
+              </Link>
+              <Link href="/download" className="button">
                 下载客户端
               </Link>
             </div>
@@ -244,9 +251,9 @@ export default async function HomePage() {
             <p>
               拆书用户先看懂爆款，作者先创建新书，策划可以把两条流程接起来，最后都沉淀为可复用资产。
             </p>
-            {/* <Link href="/login" className="button">
+            <Link href="/activate" className="button">
               进入工作台
-            </Link> */}
+            </Link>
           </div>
 
           <div className="public-audience-list">

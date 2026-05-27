@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { LicenseActivationForm } from "@/components/license-activation-form";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getSubscriptionActivationStatus } from "@/lib/desktop-license-status";
+import { getCurrentUser } from "@/lib/projects";
 
 function normalizeActivationError(value?: string) {
   const message = String(value ?? "").trim();
@@ -31,22 +32,20 @@ export default async function ActivatePage({
 }: {
   searchParams: Promise<{ error?: string; next?: string; mode?: string }>;
 }) {
-  if (!isDesktopRuntime()) {
-    redirect("/download");
-  }
-
   const params = await searchParams;
+  const desktopRuntime = isDesktopRuntime();
   const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
-  const replaceExisting = params.mode === "replace";
+  const replaceExisting = desktopRuntime && params.mode === "replace";
   const rawError = params.error ?? "";
   const normalizedError = normalizeActivationError(rawError);
-  const status = await getSubscriptionActivationStatus();
+  const status = desktopRuntime ? await getSubscriptionActivationStatus() : null;
+  const currentUser = desktopRuntime ? status?.currentUser : await getCurrentUser();
 
-  if (!replaceExisting && status.currentUser) {
+  if (!replaceExisting && currentUser) {
     redirect(nextPath);
   }
 
-  if (!replaceExisting && status.activated) {
+  if (desktopRuntime && !replaceExisting && status?.activated) {
     redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
   }
 
@@ -59,7 +58,7 @@ export default async function ActivatePage({
     redirect(`${cleanUrl.pathname}${cleanUrl.search}`);
   }
 
-  const initialError = normalizedError || status.message || "";
+  const initialError = normalizedError || status?.message || "";
 
   return (
     <section className="auth-page license-auth-page">
@@ -70,7 +69,7 @@ export default async function ActivatePage({
             <strong>AI 网文写作助手</strong>
           </Link>
           <nav>
-            <span>授权激活</span>
+            <span>{desktopRuntime ? "授权激活" : "网页授权"}</span>
           </nav>
         </header>
 
@@ -86,13 +85,29 @@ export default async function ActivatePage({
         <div className="auth-card license-card">
           <div className="auth-card-head">
             <div>
-              <h2>授权码激活</h2>
-              <p>{replaceExisting ? "输入新的授权码，本机作品和设置会继续保留。" : "输入交付给你的一次性授权码，验证后进入写作工作台。"}</p>
+              <h2>{desktopRuntime ? "授权码激活" : "授权码进入工作台"}</h2>
+              <p>
+                {replaceExisting
+                  ? "输入新的授权码，本机作品和设置会继续保留。"
+                  : desktopRuntime
+                    ? "输入交付给你的一次性授权码，验证后进入写作工作台。"
+                    : "输入交付给你的授权码，验证后进入网页工作台。"}
+              </p>
             </div>
-            <div className="chip">{replaceExisting ? "更换授权" : "授权码"}</div>
+            <div className="chip">{replaceExisting ? "更换授权" : desktopRuntime ? "授权码" : "网页入口"}</div>
           </div>
 
-          <LicenseActivationForm nextPath={nextPath} initialError={initialError} replaceExisting={replaceExisting} />
+          <LicenseActivationForm
+            nextPath={nextPath}
+            initialError={initialError}
+            replaceExisting={replaceExisting}
+            endpoint={desktopRuntime ? "/api/license/activate" : "/api/license/web-login"}
+            submitLabel={desktopRuntime ? undefined : "验证并进入工作台"}
+            submittingLabel={desktopRuntime ? undefined : "正在验证授权码..."}
+            helperText={desktopRuntime
+              ? undefined
+              : "网页入口只面向指定用户。授权码会绑定到你的网页工作台账号。"}
+          />
         </div>
 
         <footer className="auth-immersive-footer"></footer>

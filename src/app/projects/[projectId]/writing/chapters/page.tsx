@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
+import { FullBookExportActions } from "@/components/full-book-export-actions";
 import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
 
@@ -105,6 +106,7 @@ export default async function WritingChapterDirectoryPage({
                     跳转
                   </button>
                 </form>
+                <FullBookExportActions projectName={writingState.project.name} drafts={drafts} compact />
               </div>
             </div>
 

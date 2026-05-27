@@ -30,12 +30,15 @@ import {
 import { novelTaxonomy, qidianTaxonomyByReader, type TargetReader } from "@/lib/novel-taxonomy";
 import {
   assertEditedTextComplete,
+  compressChapterDraftToTarget,
   countDraftCharacters,
   editDraftTextWithAi,
   extractChapterStateUpdateWithAi,
   generateChapterDraftWithAi,
+  generateLongFormPlanWithAi,
   generateWritingTaskCardWithAi,
-  minimumDraftCharacters,
+  maximumDraftCharacters,
+  minimumSavableDraftCharacters,
   reviewChapterDraftWithAi,
   prepareChapterDraftContentForSave,
   sanitizeChapterDraftDiction,
@@ -124,6 +127,7 @@ import type {
   StoredCharacterProfile,
   StoredForeshadowing,
   StoredPlotState,
+  StoredLongFormPlan,
   CustomRelationGraphNodeType,
   CustomRelationGraphTone,
   StoredCustomRelationGraphNode,
@@ -171,6 +175,7 @@ export type {
   StoredCharacterProfile,
   StoredForeshadowing,
   StoredPlotState,
+  StoredLongFormPlan,
   CustomRelationGraphNodeType,
   CustomRelationGraphTone,
   StoredCustomRelationGraphNode,
@@ -529,7 +534,7 @@ export async function activateSubscriptionLicense(
     if (license.customerName) {
       user.name = license.customerName;
     }
-    user.plan = user.plan ?? "studio";
+    user.plan = "studio";
     user.updatedAt = timestamp;
   }
 
@@ -553,6 +558,99 @@ export async function activateSubscriptionLicense(
   await writeStore(store);
   await setSessionCookie(token);
   clearDesktopActivationStatusCache();
+  return toAuthUser(user);
+}
+
+function webLicenseMachineHash(codeHash: string) {
+  return normalizeMachineHash(`web:${codeHash}`);
+}
+
+function webLicenseEmail(license: { customerContact?: string; customerId: string }) {
+  const contact = normalizeLicenseText(license.customerContact).toLowerCase();
+
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+    return contact;
+  }
+
+  return activationEmail(license.customerId);
+}
+
+export async function activateWebLicenseSession(input: LicenseActivationInput) {
+  if (isDesktopRuntime()) {
+    throw new Error("当前客户端请使用本机授权入口");
+  }
+
+  const normalizedCode = normalizeActivationCode(input.activationCode);
+
+  if (!normalizedCode) {
+    throw new Error("请填写授权码");
+  }
+
+  const codeHash = hashActivationCode(normalizedCode);
+  const machineHash = webLicenseMachineHash(codeHash);
+  const license = await activateLicenseWithCenter({
+    activationCode: normalizedCode,
+    machineHash,
+    clientName: normalizeLicenseText([input.clientName, "网页授权登录"].filter(Boolean).join(" | "))
+  });
+  const store = await readStore();
+  const timestamp = now();
+  let user = store.users.find(
+    (item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId
+  );
+
+  if (!user) {
+    const { salt, hash } = hashPassword(randomUUID());
+    user = {
+      id: randomUUID(),
+      email: webLicenseEmail(license),
+      name: license.customerName || `授权客户 ${license.codePreview}`,
+      passwordSalt: salt,
+      passwordHash: hash,
+      role: "user",
+      plan: "studio",
+      creditsBalance: 0,
+      licenseCustomerId: license.customerId,
+      licenseCodeHash: codeHash,
+      licenseMachineHash: machineHash,
+      licenseActivatedAt: license.activatedAt || timestamp,
+      licenseExpiresAt: license.expiresAt || undefined,
+      onboardingCompletedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.users.push(user);
+  } else {
+    user.licenseCustomerId = license.customerId;
+    user.licenseCodeHash = codeHash;
+    user.licenseMachineHash = machineHash;
+    user.licenseActivatedAt = user.licenseActivatedAt || license.activatedAt || timestamp;
+    user.licenseExpiresAt = license.expiresAt || undefined;
+    user.licenseSignedOutAt = undefined;
+    user.plan = "studio";
+    if (license.customerName) {
+      user.name = license.customerName;
+    }
+    user.updatedAt = timestamp;
+  }
+
+  if (store.projects.every((item) => !item.ownerUserId)) {
+    claimLegacyWorkspace(store, user.id);
+  }
+
+  const token = randomUUID();
+  store.sessions = store.sessions.filter((item) => item.userId !== user.id || item.expiresAt > timestamp);
+  store.sessions.push({
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  });
+
+  await writeStore(store);
+  await setSessionCookie(token);
   return toAuthUser(user);
 }
 
@@ -760,6 +858,7 @@ function removeUserWorkspaceData(store: AppStore, userId: string) {
   store.characterProfiles = store.characterProfiles.filter((item) => !ownedProjectIds.has(item.projectId));
   store.foreshadowings = store.foreshadowings.filter((item) => !ownedProjectIds.has(item.projectId));
   store.plotStates = store.plotStates.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => !ownedProjectIds.has(item.projectId));
   store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => !ownedProjectIds.has(item.projectId));
   store.writingTaskCards = store.writingTaskCards.filter((item) => !ownedProjectIds.has(item.projectId));
   store.chapterDrafts = store.chapterDrafts.filter((item) => !ownedProjectIds.has(item.projectId));
@@ -832,6 +931,8 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
   store.characterProfiles.push(...arrayFromBackup<StoredCharacterProfile>(data, "characterProfiles").filter((item) => importedProjectIds.has(item.projectId)));
   store.foreshadowings.push(...arrayFromBackup<StoredForeshadowing>(data, "foreshadowings").filter((item) => importedProjectIds.has(item.projectId)));
   store.plotStates.push(...arrayFromBackup<StoredPlotState>(data, "plotStates").filter((item) => importedProjectIds.has(item.projectId)));
+  store.longFormPlans ??= [];
+  store.longFormPlans.push(...arrayFromBackup<StoredLongFormPlan>(data, "longFormPlans").filter((item) => importedProjectIds.has(item.projectId)));
   store.customRelationGraphs = [
     ...(store.customRelationGraphs ?? []),
     ...arrayFromBackup<StoredCustomRelationGraph>(data, "customRelationGraphs").filter((item) => importedProjectIds.has(item.projectId))
@@ -1169,6 +1270,9 @@ function createDomainReadRepository(store: AppStore) {
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
         foreshadowings: store.foreshadowings
+          .filter((item) => item.projectId === projectId)
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+        longFormPlans: (store.longFormPlans ?? [])
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
         customRelationGraphs: (store.customRelationGraphs ?? [])
@@ -2064,6 +2168,7 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     characterProfiles: store.characterProfiles.filter((item) => ownedProjectIds.has(item.projectId)),
     foreshadowings: store.foreshadowings.filter((item) => ownedProjectIds.has(item.projectId)),
     plotStates: store.plotStates.filter((item) => ownedProjectIds.has(item.projectId)),
+    longFormPlans: (store.longFormPlans ?? []).filter((item) => ownedProjectIds.has(item.projectId)),
     customRelationGraphs: (store.customRelationGraphs ?? []).filter((item) => ownedProjectIds.has(item.projectId)),
     writingTaskCards: store.writingTaskCards.filter((item) => ownedProjectIds.has(item.projectId)),
     chapterDrafts: store.chapterDrafts.filter((item) => ownedProjectIds.has(item.projectId)),
@@ -2098,6 +2203,7 @@ async function purgeUserAccount(store: AppStore, userId: string) {
   store.characterProfiles = store.characterProfiles.filter((item) => !ownedProjectIds.has(item.projectId));
   store.foreshadowings = store.foreshadowings.filter((item) => !ownedProjectIds.has(item.projectId));
   store.plotStates = store.plotStates.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => !ownedProjectIds.has(item.projectId));
   store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => !ownedProjectIds.has(item.projectId));
   store.writingTaskCards = store.writingTaskCards.filter((item) => !ownedProjectIds.has(item.projectId));
   store.chapterDrafts = store.chapterDrafts.filter((item) => !ownedProjectIds.has(item.projectId));
@@ -2416,6 +2522,26 @@ function normalizeInitialCharacters(input: InitialProjectStateInput) {
   }));
 }
 
+function buildProjectPromiseText(project: StoredProject) {
+  return compactStateText(
+    [project.name, project.description].map((item) => item.trim()).filter(Boolean).join("｜"),
+    260
+  );
+}
+
+function extractMechanismPromiseFromText(value: string) {
+  const sentences = value
+    .replace(/【[^】]+】/g, "")
+    .split(/(?<=[。！？!?；;])|[｜\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const mechanismSentence = sentences.find((sentence) =>
+    /系统|金手指|机制|规则|绑定|对应|兑换|自动|触发|条件|靠|凭|通过|升级|变强|收益|奖励/.test(sentence)
+  );
+
+  return mechanismSentence ? compactStateText(mechanismSentence, 180) : "";
+}
+
 function normalizeWorkLengthPlan(input: InitialProjectStateInput) {
   const type = input.workLengthType === "short" || input.workLengthType === "medium" || input.workLengthType === "long" || input.workLengthType === "epic"
     ? input.workLengthType
@@ -2447,6 +2573,80 @@ function normalizeWorkLengthPlan(input: InitialProjectStateInput) {
   };
 }
 
+function inferTargetTotalWordsFromState(project: StoredProject, bible: StoredWritingBible, explicitValue?: number) {
+  const explicit = Number(explicitValue);
+
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.min(5_000_000, Math.max(50_000, Math.round(explicit)));
+  }
+
+  const text = [
+    project.description,
+    bible.workType,
+    bible.corePleasure,
+    bible.styleGuide,
+    bible.immutableSettings
+  ].join("\n");
+  const wanMatch = text.match(/目标约\s*(\d+(?:\.\d+)?)\s*万字|(\d+(?:\.\d+)?)\s*万字左右|(\d+(?:\.\d+)?)\s*万字/);
+
+  if (wanMatch) {
+    const wan = Number(wanMatch[1] ?? wanMatch[2] ?? wanMatch[3]);
+    if (Number.isFinite(wan) && wan > 0) {
+      return Math.min(5_000_000, Math.max(50_000, Math.round(wan * 10_000)));
+    }
+  }
+
+  if (/30万/.test(text)) {
+    return 300_000;
+  }
+
+  if (/超长篇|百万|100万/.test(text)) {
+    return 1_000_000;
+  }
+
+  if (/长篇|50万/.test(text)) {
+    return 500_000;
+  }
+
+  if (/短篇|10万/.test(text)) {
+    return 100_000;
+  }
+
+  return 300_000;
+}
+
+function estimateChapterCount(targetTotalWords: number) {
+  return Math.max(20, Math.ceil(targetTotalWords / 1800));
+}
+
+function buildDefaultLongFormProgressionRules(targetTotalWords: number, estimatedChapters: number) {
+  const isMediumOrLong = targetTotalWords >= 100_000 || estimatedChapters >= 60;
+  const isLong = targetTotalWords >= 300_000 || estimatedChapters >= 120;
+
+  if (!isMediumOrLong) {
+    return [
+      "前10章先建立机制可信度和第一阶段压力，不要用连续突破替代剧情推进。"
+    ];
+  }
+
+  return [
+    "长期阶梯口径：简介或创作圣经里的等级、阈值、奖励、职位、地图、势力、权限、关系或目标清单，默认是全书长期规则/上限表，不是第一卷进度表；不得按列出顺序自动排进前期章节。",
+    "默认节奏：除非用户明确选择短篇、开局满级、快穿、极限快节奏等特殊模式，前10章最多允许一次正式大阶段跨档，不要连续两次正式大突破。",
+    "默认节奏：多个命名成长阶段应按目标篇幅拉开距离；如果提前触碰下一阶段门槛，只能写成接近门槛、资格、临时收益、风险预告或下一章目标。",
+    "收益口径：一次性收获、短期任务、预期收益、临时合作或试用资格不能直接等同稳定指标/长期权限/永久资源，只能作为进度、资格、临时助力或后续目标。",
+    "章节功能：前10章不能每章都安排数值上涨或正式跨档，必须穿插日常压力、关系铺垫、机制限制、误判、信息差和下一步目标。",
+    "突破口径：凡是正式提升成长层级、身份、地图、权限或核心资源，必须有稳定来源、触发条件、结算周期或代价后果；否则降级为小收益或线索。"
+  ].concat(
+    isLong
+      ? [
+          "长篇预算：前30章默认仍是第一阶段主循环建立期，重点是验证机制、稳定读者期待和制造第一阶段压力，不是快速兑现核心成长表。",
+          "长篇预算：第一卷默认只消耗长期成长阶梯的前段资源；中后期档位、终局目标或高阶敌人不得直接设为第一卷完成目标，除非用户明确要求极快节奏。",
+          "大阶段跨档应按卷或阶段收束安排；小收益可以较高频，中收益需要铺垫，大阶段不要靠阈值表或任务清单自动连跳。"
+        ]
+      : []
+  );
+}
+
 function applyInitialProjectState(
   store: AppStore,
   project: StoredProject,
@@ -2462,9 +2662,12 @@ function applyInitialProjectState(
   const tags = cleanList(input.tags);
   const protagonistCharacters = normalizeInitialCharacters(input).slice(0, 8);
   const protagonists = protagonistCharacters.map((character) => character.name);
+  const projectPromise = buildProjectPromiseText(project);
   const coreSellingPoint = input.coreSellingPoint?.trim() ?? "";
   const openingHook = input.openingHook?.trim() ?? "";
   const goldenFinger = input.goldenFinger?.trim() ?? "";
+  const effectiveCoreSellingPoint = coreSellingPoint || projectPromise;
+  const effectiveGoldenFinger = goldenFinger || extractMechanismPromiseFromText(projectPromise);
   const writingGoal = input.writingGoal?.trim() ?? "";
   const workLengthPlan = normalizeWorkLengthPlan(input);
   const outlineId = input.outlineId?.trim() ?? "";
@@ -2496,7 +2699,7 @@ function applyInitialProjectState(
     project.genre ? `主分类：${project.genre}` : "",
     categoryDescription ? `题材边界：${categoryDescription}` : "",
     `作品体量：${workLengthPlan.label}，目标约${workLengthPlan.display}`,
-    coreSellingPoint,
+    effectiveCoreSellingPoint ? `核心承诺：${effectiveCoreSellingPoint}` : "",
     tags.length ? `作品标签：${tags.join("、")}` : "",
     openingHook ? `开局情绪：${openingHook}` : ""
   ].filter(Boolean).join("\n") || bible.corePleasure;
@@ -2507,20 +2710,28 @@ function applyInitialProjectState(
     "后续需要继续补充关键人物真正想要什么、害怕失去什么、愿意付出什么代价。"
   ].filter(Boolean).join("\n");
   bible.worldRules = worldSetting || bible.worldRules;
-  bible.goldenFingerRules = goldenFinger || bible.goldenFingerRules;
+  bible.goldenFingerRules = effectiveGoldenFinger || bible.goldenFingerRules;
   bible.immutableSettings = [
     "不改变主角核心身份、底层欲望和已公开事实。",
+    projectPromise ? `作品承诺：${projectPromise}` : "",
+    "不改变项目简介、核心卖点、金手指机制和开局承诺；后续支线必须服务这些核心承诺。",
     "不让人物提前知道未揭露真相。",
     ...genreBoundaryRules,
     worldSetting ? "世界规则以「世界规则」字段为准，不随章节临时改写。" : "",
-    goldenFinger ? `关键机制：${goldenFinger}` : "",
+    effectiveGoldenFinger ? `关键机制：${effectiveGoldenFinger}` : "",
     openingHook ? `开局钩子必须被承接：${openingHook}` : "",
+    "收益合规：能力、境界、财富、资源、地位、权限、情报或关系收益必须写清来源、触发条件、代价/限制，并符合关键机制。",
+    "禁止机制偷换：不能只保留机制名词，却让主角实际靠另一套资源、奇遇、副本或外力完成核心成长。",
+    "早期节奏：前 5 章优先建立机制、压力和第一轮小台阶；10 万字以上作品不要过早连续大境界突破，可先写资格、试用、预期收益、小额增长或机制验证。",
+    "章节功能允许轮换：可写日常经营、关系铺垫、机制试错、小收益和低强度压力；不要每章都强行新敌人、新地图、大战斗或大突破。",
     `体量边界：按${workLengthPlan.label} ${workLengthPlan.display}规划节奏，不要无限开新地图、新体系或新支线；接近后期时主动收束主线、回收伏笔并准备完结。`
   ].filter(Boolean).join("\n") || bible.immutableSettings;
   bible.narrativeTaboos = cleanList([
     bible.narrativeTaboos,
     project.genre ? `禁止偏离主分类：${project.genre}` : "",
     tags.length ? `禁止无视或反向改写作品标签：${tags.join("、")}` : "",
+    "禁止用通用副本、通用秘境、通用组织替代书名和简介已经承诺的核心看点。",
+    "禁止让连续支线、新地图、新组织或新危机取代项目简介中的核心卖点和主线承诺。",
     "禁止为了制造爽点临时改换目标读者、题材频道、核心人设或力量体系。"
   ]).join("\n") || bible.narrativeTaboos;
   bible.styleGuide = [
@@ -2533,7 +2744,7 @@ function applyInitialProjectState(
   ].filter(Boolean).join("\n");
   bible.updatedAt = timestamp;
 
-  plotState.mainGoal = outlineLogline || coreSellingPoint || `完成${workLengthPlan.label} ${workLengthPlan.display}的完整主线：建立压制、反击、升级、终局回收和完结路径。`;
+  plotState.mainGoal = outlineLogline || effectiveCoreSellingPoint || `完成${workLengthPlan.label} ${workLengthPlan.display}的完整主线：建立压制、反击、升级、终局回收和完结路径。`;
   plotState.shortTermGoal = outlineChapters[0] || openingHook || "补齐开局压制、第一次反击和章末钩子。";
   plotState.currentStage = outlineChapters[0] ? `大纲第1章：${outlineChapters[0]}` : openingHook || "新书开局设定阶段";
   plotState.currentEnemy = "待明确的第一阶段压力源";
@@ -2541,7 +2752,7 @@ function applyInitialProjectState(
   plotState.openThreads = cleanList([
     ...plotState.openThreads,
     openingHook ? `开局钩子：${openingHook}` : "",
-    goldenFinger ? `金手指限制：${goldenFinger}` : "",
+    effectiveGoldenFinger ? `金手指限制：${effectiveGoldenFinger}` : "",
     ...foreshadowingPlan.map((item) => `大纲伏笔：${item}`)
   ]);
   plotState.unresolvedQuestions = cleanList([
@@ -2554,10 +2765,10 @@ function applyInitialProjectState(
     ...outlineChapters.map((chapter, index) => `大纲第${index + 1}章：${chapter}`),
     `按${workLengthPlan.label} ${workLengthPlan.display}规划阶段节奏，避免无边界扩写`,
     openingHook ? "兑现开局钩子的第一轮情绪回报" : "",
-    coreSellingPoint ? "围绕核心卖点设计前 10 章节奏" : "",
+    effectiveCoreSellingPoint ? `围绕核心承诺设计前 10 章节奏：${compactStateText(effectiveCoreSellingPoint, 100)}` : "",
     ...plotState.nextMilestones
   ]);
-  plotState.nextStageGoal = outlineChapters[0] || coreSellingPoint || plotState.nextStageGoal;
+  plotState.nextStageGoal = outlineChapters[0] || effectiveCoreSellingPoint || plotState.nextStageGoal;
   plotState.updatedAt = timestamp;
 
   protagonistCharacters.forEach((character, index) => {
@@ -2572,10 +2783,10 @@ function applyInitialProjectState(
       identity: character.role,
       currentGoal: writingGoal || "等待补充当前目标",
       longTermGoal: "等待补充长期目标",
-      secret: goldenFinger ? `可能与关键机制相关：${goldenFinger}` : "",
+      secret: effectiveGoldenFinger ? `可能与关键机制相关：${effectiveGoldenFinger}` : "",
       relationshipToProtagonist: index === 0 ? "本人" : `${character.role} / 重要关系人`,
       attitude: "待补充",
-      abilityBoundary: goldenFinger || "待补充能力边界",
+      abilityBoundary: effectiveGoldenFinger || "待补充能力边界",
       voice: "待补充说话习惯",
       knownInformation: "只知道开局阶段已经明确的信息，不能提前知道未揭露真相。",
       unknownInformation: "第一阶段反派真相、伏笔答案、后续地图信息。",
@@ -2626,6 +2837,14 @@ function getLatestWritingTaskCard(store: AppStore, projectId: string) {
   return store.writingTaskCards
     .filter((card) => card.projectId === projectId)
     .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0]
+    ?? null;
+}
+
+function getLatestLongFormPlan(store: AppStore, projectId: string) {
+  store.longFormPlans ??= [];
+  return store.longFormPlans
+    .filter((plan) => plan.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
     ?? null;
 }
 
@@ -3533,6 +3752,10 @@ function uniqueReviewIssues(issues: ReviewIssue[]) {
   });
 }
 
+function mergeReviewIssues(currentIssues: ReviewIssue[], previousIssues: ReviewIssue[]) {
+  return uniqueReviewIssues([...currentIssues, ...previousIssues]);
+}
+
 function extractLinesByKeywords(content: string, keywords: string[], limit = 6) {
   return cleanStateEntries(
     splitDraftSentences(content).filter((sentence) =>
@@ -3540,6 +3763,75 @@ function extractLinesByKeywords(content: string, keywords: string[], limit = 6) 
     ),
     limit
   );
+}
+
+function ledgerToReviewEvidence(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return "";
+  }
+
+  return [
+    ledger.title,
+    ledger.events.join("\n"),
+    ledger.newCharacters.join("\n"),
+    ledger.newClues.join("\n"),
+    ledger.payoff,
+    ledger.cliffhanger,
+    ledger.stateChanges.join("\n")
+  ].join("\n");
+}
+
+function normalizeReviewEvidence(value: string) {
+  return value
+    .replace(/\s+/g, "")
+    .replace(/[，,。！？!?；;：:“”"'‘’（）()【】\[\]《》<>—\-_/\\|、]/g, "")
+    .trim();
+}
+
+function settingEvidenceFragments(value: string) {
+  const genericWords = new Set([
+    "规则",
+    "等级",
+    "宗门",
+    "家族",
+    "公司",
+    "黑市",
+    "地图",
+    "势力",
+    "系统",
+    "境界",
+    "要求",
+    "详情",
+    "一名"
+  ]);
+
+  return uniqueList(
+    value
+      .split(/\s+|[，,。！？!?；;：:“”"'‘’（）()【】\[\]《》<>—\-_/\\|、]/)
+      .map(normalizeReviewEvidence)
+      .filter((item) => item.length >= 4 && !genericWords.has(item))
+  );
+}
+
+function isSettingLineRecorded(line: string, knownText: string) {
+  const normalizedKnownText = normalizeReviewEvidence(knownText);
+  const normalizedLine = normalizeReviewEvidence(line);
+
+  if (!normalizedKnownText || !normalizedLine) {
+    return false;
+  }
+
+  if (normalizedKnownText.includes(normalizedLine)) {
+    return true;
+  }
+
+  const lineAnchors = [
+    ...settingEvidenceFragments(line),
+    normalizedLine.length >= 16 ? normalizedLine.slice(0, 16) : "",
+    normalizedLine.length >= 16 ? normalizedLine.slice(-16) : ""
+  ].filter((item) => item.length >= 6);
+
+  return lineAnchors.some((anchor) => normalizedKnownText.includes(anchor));
 }
 
 function appendStateText(current: string, additions: string[], limit = 8) {
@@ -4099,6 +4391,7 @@ async function createAndApplyLedgerForDraft(
   const timestamp = now();
   const bible = store.writingBibles.find((item) => item.projectId === input.projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === input.projectId)!;
+  const longFormPlan = getLatestLongFormPlan(store, input.projectId);
   const lastLedger = getLatestChapterLedgerBefore(store, input.projectId, input.draft.chapterNumber);
   const characters = charactersForChapterContext(store, input.projectId, input.draft.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, input.projectId, input.draft.chapterNumber);
@@ -4113,6 +4406,7 @@ async function createAndApplyLedgerForDraft(
     taskCard: input.taskCard,
     bible,
     plotState: plotStateContext,
+    longFormPlan,
     lastLedger,
     characters,
     foreshadowings
@@ -4188,19 +4482,81 @@ function resetWritingMemoryAfterChapterDelete(
   project: StoredProject,
   startChapter: number
 ) {
-  rollbackPlotStateAfterChapterDelete(store, project, startChapter);
-
   const timestamp = now();
+  const bible = store.writingBibles.find((item) => item.projectId === project.id);
+  const plotState = store.plotStates.find((item) => item.projectId === project.id);
+  const remainingLedgers = store.chapterLedgers
+    .filter((item) => item.projectId === project.id && item.chapterNumber < startChapter)
+    .sort((a, b) => a.chapterNumber - b.chapterNumber || a.updatedAt.localeCompare(b.updatedAt));
+  const latestLedger = remainingLedgers.at(-1) ?? null;
+  const stableText = [
+    project.name,
+    project.description,
+    bible?.corePleasure,
+    bible?.worldRules,
+    bible?.goldenFingerRules,
+    bible?.powerSystem,
+    bible?.immutableSettings,
+    bible?.narrativeTaboos,
+    bible?.styleGuide
+  ].filter(Boolean).join("\n");
+  const remainingLedgerText = remainingLedgers
+    .map((ledger) =>
+      [
+        ledger.title,
+        ...ledger.events,
+        ...ledger.newCharacters,
+        ...ledger.newClues,
+        ledger.payoff,
+        ledger.cliffhanger,
+        ...ledger.stateChanges
+      ].join("\n")
+    )
+    .join("\n");
+  const supportText = `${stableText}\n${remainingLedgerText}`;
+  const textSupportsName = (name: string) => {
+    const baseName = baseCharacterName(name);
+    return Boolean(baseName && baseName.length >= 2 && supportText.includes(baseName));
+  };
+  const pruneMainCharacterLine = (line: string) => {
+    if (!/主要人物/.test(line)) {
+      return line;
+    }
+
+    const kept = line
+      .replace(/^主要人物[：:]\s*/, "")
+      .split(/、|，/)
+      .map((item) => item.trim())
+      .filter((item) => {
+        const name = baseCharacterName(item.split(/[：:]/).at(-1) ?? item);
+        return Boolean(name && supportText.includes(name));
+      });
+
+    return kept.length > 0 ? `主要人物：${kept.join("、")}` : "";
+  };
+  if (bible?.protagonistDesire) {
+    bible.protagonistDesire = bible.protagonistDesire
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map(pruneMainCharacterLine)
+      .filter(Boolean)
+      .join("\n") || "后续需要继续补充关键人物真正想要什么、害怕失去什么、愿意付出什么代价。";
+    bible.updatedAt = timestamp;
+  }
   const hasDeletedChapterRef = (entry: string) =>
     extractChapterNumbers(entry).some((chapterNumber) => chapterNumber >= startChapter);
   const stripDeletedChapterLines = (value: string) =>
     splitLines(value).filter((line) => !hasDeletedChapterRef(line));
-  const latestLedger = getLatestChapterLedgerBefore(store, project.id, startChapter);
   const noPreviousChapters = !latestLedger;
 
   store.characterProfiles = store.characterProfiles
     .filter((character) => {
       if (character.projectId !== project.id) {
+        return true;
+      }
+
+      if (textSupportsName(character.name)) {
         return true;
       }
 
@@ -4217,8 +4573,20 @@ function resetWritingMemoryAfterChapterDelete(
         /需在状态管理页补全人物卡|首次进入重要剧情/.test(
           `${character.currentState}\n${character.knownInformation}`
         );
+      const looksDerived =
+        autoCreated ||
+        /第\s*[一二三四五六七八九十百千万\d]+\s*章|章节|台账|任务卡|钩子|出场|状态更新|关系推进|线索|伏笔|秘境|遗阵|主殿|天机阁|散修联盟/.test(
+          [
+            character.identity,
+            character.currentGoal,
+            character.knownInformation,
+            character.relationshipToProtagonist,
+            character.lastAppearance,
+            character.currentState
+          ].join("\n")
+        );
 
-      return !(touchedDeletedChapter && autoCreated);
+      return !(touchedDeletedChapter || looksDerived);
     })
     .map((character) => {
       if (character.projectId !== project.id) {
@@ -4242,7 +4610,7 @@ function resetWritingMemoryAfterChapterDelete(
 
       return {
         ...character,
-        currentGoal: noPreviousChapters ? "待根据重写章节更新" : character.currentGoal,
+        currentGoal: noPreviousChapters ? "待根据重写章节更新" : compactStateText(character.currentGoal, 80) || "待补充",
         knownInformation:
           knownInformation ||
           (noPreviousChapters
@@ -4255,7 +4623,22 @@ function resetWritingMemoryAfterChapterDelete(
     });
 
   store.foreshadowings = store.foreshadowings
-    .filter((item) => !(item.projectId === project.id && hasDeletedChapterRef(item.plantedChapter)))
+    .filter((item) => {
+      if (item.projectId !== project.id) {
+        return true;
+      }
+
+      if (hasDeletedChapterRef(item.plantedChapter)) {
+        return false;
+      }
+
+      const name = normalizeForeshadowingName(item.name);
+      const supported =
+        (name && supportText.includes(name)) ||
+        (item.hiddenInformation && supportText.includes(compactStateText(item.hiddenInformation, 24)));
+
+      return supported;
+    })
     .map((item) => {
       if (item.projectId !== project.id) {
         return item;
@@ -4282,19 +4665,85 @@ function resetWritingMemoryAfterChapterDelete(
       };
     });
 
-  if (noPreviousChapters) {
-    const plotState = store.plotStates.find((item) => item.projectId === project.id);
+  store.customRelationGraphs = (store.customRelationGraphs ?? [])
+    .map((graph) => {
+      if (graph.projectId !== project.id) {
+        return graph;
+      }
+
+      const nodes = graph.nodes.filter(
+        (node) =>
+          node.type === "core" ||
+          supportText.includes(node.label) ||
+          supportText.includes(node.meta) ||
+          supportText.includes(node.sub)
+      );
+      const nodeIds = new Set(nodes.map((node) => node.id));
+      const edges = graph.edges.filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to));
+
+      return {
+        ...graph,
+        nodes,
+        edges,
+        updatedAt: timestamp
+      };
+    })
+    .filter((graph) => graph.projectId !== project.id || graph.nodes.length >= 2);
+
+  if (plotState) {
     const openForeshadowingNames = store.foreshadowings
       .filter((item) => item.projectId === project.id && item.status !== "closed")
       .map((item) => item.name);
+    const ledgerClues = cleanStateEntries(remainingLedgers.flatMap((ledger) => ledger.newClues), 10);
+    const ledgerChanges = cleanStateEntries(remainingLedgers.flatMap((ledger) => ledger.stateChanges), 10);
+    const latestHook = latestLedger ? compactStateText(latestLedger.cliffhanger, 110) : "";
+    const revealKeywords = ["回收", "揭开", "真相", "曝光", "确认", "水落石出"];
 
-    if (plotState) {
-      plotState.unresolvedQuestions = openForeshadowingNames.slice(0, 12);
-      plotState.openThreads = openForeshadowingNames.slice(0, 12);
-      plotState.resolvedThreads = [];
-      plotState.relationshipChanges = [];
-      plotState.updatedAt = timestamp;
-    }
+    plotState.shortTermGoal = latestHook
+      ? `承接第 ${latestLedger?.chapterNumber} 章钩子：${latestHook}，但必须回扣主线：${compactStateText(plotState.mainGoal, 100) || "当前核心承诺"}`
+      : "承接开局设定，生成下一章任务卡。";
+    plotState.currentStage = latestLedger
+      ? ledgerChanges[0] || latestLedger.events.at(-1) || `已保留到第 ${latestLedger.chapterNumber} 章`
+      : "新书开局阶段";
+    plotState.currentEnemy = supportText.includes(plotState.currentEnemy)
+      ? plotState.currentEnemy
+      : "待明确的第一阶段压力源";
+    plotState.unresolvedQuestions = uniqueList([
+      ...openForeshadowingNames,
+      ...ledgerClues,
+      latestHook
+    ]).slice(0, 12);
+    plotState.openThreads = uniqueList([
+      ...openForeshadowingNames,
+      ...ledgerClues,
+      latestHook
+    ]).slice(0, 12);
+    plotState.resolvedThreads = cleanStateEntries(
+      ledgerChanges.filter((entry) => revealKeywords.some((keyword) => entry.includes(keyword))),
+      8
+    );
+    plotState.nextMilestones = uniqueList([
+      latestHook ? `处理第 ${latestLedger?.chapterNumber} 章钩子，并让它服务主线：${latestHook}` : "",
+      ...ledgerChanges.slice(0, 3)
+    ]).slice(0, 8);
+    plotState.nextStageGoal = latestHook || plotState.mainGoal || "推进第一阶段主线。";
+    plotState.powerSystemState = cleanPowerSystemEntries(
+      splitLines([bible?.powerSystem, bible?.goldenFingerRules, ...remainingLedgers.flatMap((ledger) => ledger.stateChanges)].filter(Boolean).join("\n")),
+      6
+    ).join("\n");
+    plotState.mapAndForces = cleanMapAndForceEntries(
+      splitLines([bible?.worldRules, ...remainingLedgers.flatMap((ledger) => [...ledger.events, ...ledger.newClues, ...ledger.stateChanges])].filter(Boolean).join("\n")),
+      6
+    ).join("\n");
+    plotState.resourceState = cleanResourceEntries(
+      splitLines(remainingLedgers.flatMap((ledger) => [ledger.payoff, ...ledger.newClues, ...ledger.stateChanges]).join("\n")),
+      6
+    ).join("\n");
+    plotState.relationshipChanges = cleanStateEntries(
+      remainingLedgers.flatMap((ledger) => ledger.stateChanges).filter((entry) => /关系|态度|信任|敌意|盟友|背叛|合作/.test(entry)),
+      8
+    );
+    plotState.updatedAt = timestamp;
   }
 }
 
@@ -4312,7 +4761,7 @@ async function executeAnalyzeProjectJob(
   );
 
   const chapterRuns: Array<AnalysisRunResult<ChapterAnalysisResult>> = useAi
-    ? await runChapterAiAnalysis(chapters)
+    ? await runChapterAiAnalysis(chapters, project)
     : chapters.map((chapter) => ({
         analysis: analyzeChapter(chapter),
         usedAi: false,
@@ -4353,7 +4802,7 @@ async function executeAnalyzeProjectJob(
       return chapterA - chapterB;
     });
   const storyRun = useAi
-    ? await analyzeStoryWithAi(allProjectAnalyses)
+    ? await analyzeStoryWithAi(allProjectAnalyses, analysisProjectContext(project))
     : {
         analysis: buildStoryAnalysis(allProjectAnalyses),
         usedAi: false,
@@ -4405,16 +4854,24 @@ async function executeAnalyzeProjectJob(
   };
 }
 
-async function runChapterAiAnalysis(chapters: StoredChapter[]) {
+function analysisProjectContext(project: StoredProject) {
+  return {
+    genre: project.genre,
+    description: project.description
+  };
+}
+
+async function runChapterAiAnalysis(chapters: StoredChapter[], project: StoredProject) {
   const results: Array<AnalysisRunResult<ChapterAnalysisResult>> = new Array(chapters.length);
   const concurrency = Math.min(3, Math.max(1, chapters.length));
   let nextIndex = 0;
+  const projectContext = analysisProjectContext(project);
 
   async function worker() {
     while (nextIndex < chapters.length) {
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await analyzeChapterWithAi(chapters[index]);
+      results[index] = await analyzeChapterWithAi(chapters[index], projectContext);
     }
   }
 
@@ -4466,7 +4923,7 @@ async function executeAnalyzeProjectJobStep(
   let tokenUsage = progress.tokenUsage;
 
   if (nextChapter) {
-    const run = await analyzeChapterWithAi(nextChapter);
+    const run = await analyzeChapterWithAi(nextChapter, analysisProjectContext(project));
 
     if (!run.usedAi) {
       const failedUsage = getAiTokenUsage(run.analysis);
@@ -4560,7 +5017,7 @@ async function executeAnalyzeProjectJobStep(
   project.updatedAt = job.updatedAt;
   await writeStore(store);
 
-  const storyRun = await analyzeStoryWithAi(orderedAnalyses);
+  const storyRun = await analyzeStoryWithAi(orderedAnalyses, analysisProjectContext(project));
 
   if (!storyRun.usedAi) {
     const failedUsage = getAiTokenUsage(storyRun.analysis);
@@ -4696,6 +5153,8 @@ export function formatAiJobType(type: string) {
       return "生成大纲";
     case "generate_task_card":
       return "生成任务卡";
+    case "generate_long_form_plan":
+      return "生成长篇规划";
     case "project_creation_assist":
       return "新书立项辅助";
     case "generate_chapter":
@@ -5279,6 +5738,7 @@ export async function getProjectWritingState(projectId: string) {
     plotState: result.plotState,
     characters: result.characters,
     foreshadowings: result.foreshadowings,
+    longFormPlans: result.longFormPlans,
     customRelationGraphs: result.customRelationGraphs,
     taskCards: result.taskCards,
     drafts: result.drafts,
@@ -6273,10 +6733,13 @@ export async function cleanupProjectWritingState(projectId: string) {
   const ledgerChanges = cleanStateEntries(ledgers.flatMap((ledger) => ledger.stateChanges), 10);
   const latestHook = latestLedger ? compactStateText(latestLedger.cliffhanger, 100) : "";
   const descriptionGoal = compactStateText(plotState.mainGoal, 120);
+  const nextStageAnchor = compactStateText(plotState.nextStageGoal || descriptionGoal, 120);
 
   Object.assign(plotState, {
     mainGoal: descriptionGoal || "建立主角的第一轮逆袭循环",
-    shortTermGoal: latestHook ? `承接第 ${latestLedger?.chapterNumber} 章钩子：${latestHook}` : plotState.shortTermGoal,
+    shortTermGoal: latestHook
+      ? `承接第 ${latestLedger?.chapterNumber} 章钩子：${latestHook}，但必须回扣主线：${descriptionGoal || nextStageAnchor || "当前核心承诺"}`
+      : plotState.shortTermGoal,
     currentStage: ledgerChanges[0] || plotState.currentStage,
     unresolvedQuestions: uniqueList([
       ...keptForeshadowings.map((item) => item.name),
@@ -6290,26 +6753,143 @@ export async function cleanupProjectWritingState(projectId: string) {
     ]).slice(0, 12),
     resolvedThreads: cleanStateEntries(plotState.resolvedThreads, 8),
     nextMilestones: uniqueList([
-      latestHook ? `处理第 ${latestLedger?.chapterNumber} 章钩子：${latestHook}` : "",
+      nextStageAnchor ? `继续推进阶段目标：${nextStageAnchor}` : "",
+      latestHook ? `处理第 ${latestLedger?.chapterNumber} 章钩子，并让它服务主线：${latestHook}` : "",
       ...ledgerChanges.slice(0, 3)
     ]).slice(0, 8),
-    nextStageGoal: latestHook || plotState.nextStageGoal,
+    nextStageGoal: nextStageAnchor || plotState.nextStageGoal,
     powerSystemState: cleanPowerSystemEntries(splitLines(plotState.powerSystemState), 6).join("\n"),
     mapAndForces: cleanMapAndForceEntries(splitLines(plotState.mapAndForces), 6).join("\n"),
     resourceState: cleanResourceEntries(splitLines(plotState.resourceState), 6).join("\n"),
     relationshipChanges: cleanStateEntries(plotState.relationshipChanges, 8),
     updatedAt: timestamp
   });
+
+  resetWritingMemoryAfterChapterDelete(store, project, (latestLedger?.chapterNumber ?? 0) + 1);
   project.updatedAt = timestamp;
 
   await writeStore(store);
 
+  const finalCharacterCount = store.characterProfiles.filter((item) => item.projectId === projectId).length;
+  const finalForeshadowingCount = store.foreshadowings.filter((item) => item.projectId === projectId).length;
+
   return {
-    removedCharacters: initialCharacterCount - keptCharacterIds.size,
-    removedForeshadowings: initialForeshadowingCount - keptForeshadowings.length,
-    characters: keptCharacterIds.size,
-    foreshadowings: keptForeshadowings.length
+    removedCharacters: initialCharacterCount - finalCharacterCount,
+    removedForeshadowings: initialForeshadowingCount - finalForeshadowingCount,
+    characters: finalCharacterCount,
+    foreshadowings: finalForeshadowingCount
   };
+}
+
+export async function generateLongFormPlan(
+  projectId: string,
+  input?: { targetTotalWords?: number },
+  options?: { existingJobId?: string; retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(store, project);
+  store.longFormPlans ??= [];
+
+  const timestamp = now();
+  const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
+  const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const targetTotalWords = inferTargetTotalWordsFromState(project, bible, input?.targetTotalWords);
+  const estimatedChapters = estimateChapterCount(targetTotalWords);
+  const storyAnalysis = store.storyAnalyses
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+  const characters = store.characterProfiles
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const foreshadowings = store.foreshadowings
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const job = options?.existingJobId
+    ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
+    : createAiJob(store, {
+        userId: currentUser.id,
+        projectId,
+        type: "generate_long_form_plan",
+        payload: { targetTotalWords, estimatedChapters },
+        model: getActiveAiModel(store, "local-long-form-plan", currentUser.id),
+        retryOfJobId: options?.retryOfJobId
+      });
+
+  if (!job) {
+    throw new Error("任务不存在");
+  }
+
+  if (!options?.existingJobId) {
+    await writeStore(store);
+    startAiJob(job);
+    await writeStore(store);
+  }
+
+  if (!hasConfiguredAiSettings(store, currentUser.id)) {
+    const message = "AI 未配置，无法生成长篇规划";
+    failAiJob(job, message);
+    refundAiJobCredits(store, job, "长篇规划生成失败返还");
+    await writeStore(store);
+    throw new Error(message);
+  }
+
+  let aiPlan: Awaited<ReturnType<typeof generateLongFormPlanWithAi>>;
+
+  try {
+    aiPlan = await generateLongFormPlanWithAi({
+      projectName: project.name,
+      projectDescription: project.description,
+      targetTotalWords,
+      estimatedChapters,
+      bible,
+      plotState,
+      characters,
+      foreshadowings,
+      storyAnalysis
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "长篇规划 AI 生成失败";
+    failAiJob(job, message);
+    refundAiJobCredits(store, job, "长篇规划生成失败返还");
+    await writeStore(store);
+    throw new Error(message);
+  }
+
+  const plan: StoredLongFormPlan = {
+    id: randomUUID(),
+    projectId,
+    targetTotalWords,
+    estimatedChapters,
+    planningBasis: aiPlan.planningBasis || `按目标 ${targetTotalWords} 字、约 ${estimatedChapters} 章规划阶段节奏。`,
+    corePromise: aiPlan.corePromise || project.description || bible.corePleasure,
+    volumePlan: cleanList(aiPlan.volumePlan).slice(0, 12),
+    progressionPacing: cleanList(aiPlan.progressionPacing).slice(0, 20),
+    rewardPacing: cleanList(aiPlan.rewardPacing).slice(0, 16),
+    first10Chapters: cleanList(aiPlan.first10Chapters).slice(0, 12),
+    first100Pacing: aiPlan.first100Pacing || "前100章按开局机制验证、小收益、中收益、大爽点、阶段收束轮换推进。",
+    post100Pacing: aiPlan.post100Pacing || "100章后按全书卷纲进入后期推进：收束支线、回收伏笔、提高核心压力、控制最终成长档位并准备终局。",
+    progressionRules: cleanList([
+      ...buildDefaultLongFormProgressionRules(targetTotalWords, estimatedChapters),
+      ...aiPlan.progressionRules
+    ]).slice(0, 24),
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  store.longFormPlans.push(plan);
+  project.updatedAt = timestamp;
+  finishAiJob(job, withAiBillingOutput(store, job, {
+    usedAi: true,
+    usedFallback: false,
+    longFormPlanId: plan.id,
+    targetTotalWords,
+    estimatedChapters
+  }, getAiTokenUsage(aiPlan)));
+  await writeStore(store);
+  return plan;
 }
 
 export async function generateWritingTaskCard(
@@ -6338,6 +6918,7 @@ export async function generateWritingTaskCard(
   const timestamp = now();
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const longFormPlan = getLatestLongFormPlan(store, projectId);
   const useAnalysisContext = input?.useAnalysisContext !== false;
   const storyAnalysis = useAnalysisContext
     ? store.storyAnalyses
@@ -6460,14 +7041,33 @@ export async function generateWritingTaskCard(
     requiredCharacters: relevantCharacters.length > 0 ? relevantCharacters : ["主角", "主要对手"],
     pleasurePoint:
       input?.pleasurePoint?.trim() ||
-      `使用“${storyAnalysis?.topPleasureTypes[0] || bible.corePleasure}”制造一次明确情绪回报。`,
+      `使用“${storyAnalysis?.topPleasureTypes[0] || bible.corePleasure}”制造一次明确情绪回报，并写清收益来源、触发条件、是否符合关键机制；本章也可以只是小收益、线索或机制试错，不必强行大突破。`,
     foreshadowingTasks:
       openForeshadowings.length > 0
         ? openForeshadowings.map((item) => `${item.name}：保持${item.status === "partial" ? "部分回收" : "未回收"}状态`)
         : plotStateContext.unresolvedQuestions.length > 0
           ? plotStateContext.unresolvedQuestions.slice(0, 3).map((item) => `围绕未解悬念继续埋设：${item}`)
           : ["埋设一条可在后续章节回收的线索"],
-    rulesNotToBreak: splitLines(`${bible.narrativeTaboos}\n${bible.immutableSettings}`),
+    rulesNotToBreak: uniqueList([
+      ...splitLines(`${bible.narrativeTaboos}\n${bible.immutableSettings}`),
+      project.description.trim()
+        ? `核心承诺锚点：本章不能偏离作品简介里的主角身份、初始压力、核心卖点和关键机制；支线必须服务「${project.description.trim()}」。`
+        : "",
+      plotStateContext.mainGoal
+        ? `主线回扣要求：本章的新地图、新组织、新危机或新收益，必须能解释为服务当前主线「${plotStateContext.mainGoal}」。`
+        : "",
+      "禁止只顺着上一章钩子无限扩支线；如果开启支线，必须写清它如何回到核心承诺。",
+      "本章所有收益必须回答：收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否导致节奏越级。",
+      targetChapterNumber <= 5
+        ? `当前是第 ${targetChapterNumber} 章，仍属于开局早期；如果作品是 10 万字以上，优先写资格、试用、预期收益、小额增长或机制验证，不要过早连续大阶段突破。`
+        : "",
+      "禁止机制偷换：不能只保留关键机制名词，却让核心成长实际来自另一套资源、奇遇、副本或外力。",
+      longFormPlan
+        ? `长篇规划约束：目标约 ${longFormPlan.targetTotalWords} 字 / ${longFormPlan.estimatedChapters} 章。本章必须符合成长节奏、收益频率和前100章节奏；如冲突，优先降级为小收益、线索、资格或机制试错。`
+        : "尚未生成长篇规划；本章默认保守推进，不要连续大升级、大地图跳转或让支线替代主线。",
+      ...(longFormPlan?.progressionRules ?? []),
+      "章节功能可以轮换：允许日常经营、关系铺垫、机制试错、小收益和低强度压力，不要每章都强行新敌人、新地图、大战斗或大突破。"
+    ]),
     endingHook: withCharacterTaskRequirement(
       input?.endingHook?.trim() ||
         `章末抛出一个新信息，让当前阶段的“${plotStateContext.currentEnemy || "压力源"}”升级。`,
@@ -6484,6 +7084,7 @@ export async function generateWritingTaskCard(
         projectDescription: project.description,
         bible,
         plotState: plotStateContext,
+        longFormPlan,
         lastLedger,
         latestDraft: lastDraft,
         characters: allCharacters,
@@ -6706,6 +7307,7 @@ export async function generateChapterDraft(
   const timestamp = now();
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const longFormPlan = getLatestLongFormPlan(store, projectId);
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
@@ -6750,8 +7352,11 @@ export async function generateChapterDraft(
   try {
     aiDraft = await generateChapterDraftWithAi({
       taskCard,
+      projectName: project.name,
+      projectDescription: project.description,
       bible,
       plotState: plotStateContext,
+      longFormPlan,
       lastLedger,
       previousDraftTail: getPreviousDraftTail(store, projectId, taskCard.chapterNumber),
       characters,
@@ -6766,25 +7371,25 @@ export async function generateChapterDraft(
     throw new Error(message);
   }
 
+  const title = aiDraft.title || taskCard.title;
+  const content = prepareChapterDraftContentForSave(aiDraft.content, targetWordCount);
+
   if (
     aiDraft &&
-    countDraftCharacters(aiDraft.content) < minimumDraftCharacters(targetWordCount)
+    countDraftCharacters(content) < minimumSavableDraftCharacters(targetWordCount)
   ) {
-    const message = `正文生成结果偏短：当前 ${countDraftCharacters(aiDraft.content)} 字，最低要求 ${minimumDraftCharacters(targetWordCount)} 字。请降低目标字数或重新生成。`;
+    const message = `正文生成结果偏短：当前 ${countDraftCharacters(content)} 字，最低保存要求 ${minimumSavableDraftCharacters(targetWordCount)} 字。请降低目标字数或重新生成。`;
     failAiJob(job, message, withAiBillingOutput(store, job, {
       usedAi: true,
       usedFallback: false,
       failed: true,
       chapterNumber: taskCard.chapterNumber,
       targetWordCount,
-      actualCharacters: countDraftCharacters(aiDraft.content)
+      actualCharacters: countDraftCharacters(content)
     }, getAiTokenUsage(aiDraft)));
     await writeStore(store);
     throw new Error(message);
   }
-
-  const title = aiDraft.title || taskCard.title;
-  const content = prepareChapterDraftContentForSave(aiDraft.content, targetWordCount);
 
   const draft: StoredChapterDraft = {
     id: randomUUID(),
@@ -6844,14 +7449,17 @@ export async function prepareChapterDraftStream(
 
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const longFormPlan = getLatestLongFormPlan(store, projectId);
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
   const targetWordCount = normalizeDraftTargetWordCount(options?.targetWordCount);
   const context: ChapterDraftContext = {
     taskCard,
+    projectName: project.name,
     projectDescription: project.description,
     bible,
     plotState: plotStateForChapterContext(plotState, foreshadowings, taskCard.chapterNumber, lastLedger),
+    longFormPlan,
     lastLedger,
     previousDraftTail: getPreviousDraftTail(store, projectId, taskCard.chapterNumber),
     characters: charactersForChapterContext(store, projectId, taskCard.chapterNumber),
@@ -6920,6 +7528,7 @@ export async function saveStreamedChapterDraft(input: {
   const foreshadowings = foreshadowingsForChapterContext(store, input.projectId, taskCard.chapterNumber);
   const draftContext: ChapterDraftContext = {
     taskCard,
+    projectName: project.name,
     projectDescription: project.description,
     bible: store.writingBibles.find((item) => item.projectId === input.projectId)!,
     plotState: plotStateForChapterContext(
@@ -6936,10 +7545,20 @@ export async function saveStreamedChapterDraft(input: {
   };
   const payload = getJobInputRecord(job);
   const targetWordCount = Number(payload?.targetWordCount ?? 0) || undefined;
-  const content = prepareChapterDraftContentForSave(
+  let tokenUsage = input.tokenUsage;
+  let content = prepareChapterDraftContentForSave(
     sanitizeChapterDraftDiction(input.content.trim(), draftContext),
     targetWordCount
   );
+
+  if (
+    input.usedAi &&
+    countDraftCharacters(content) > maximumDraftCharacters(targetWordCount)
+  ) {
+    const compressed = await compressChapterDraftToTarget(content, draftContext, normalizeDraftTargetWordCount(targetWordCount));
+    content = compressed.content;
+    tokenUsage = combineAiTokenUsages([tokenUsage, compressed.usage]);
+  }
 
   if (!content) {
     const message = "AI 没有返回正文，未保存为章节草稿";
@@ -6951,16 +7570,16 @@ export async function saveStreamedChapterDraft(input: {
       chapterNumber: taskCard.chapterNumber,
       targetWordCount,
       actualCharacters: 0
-    }, input.tokenUsage));
+    }, tokenUsage));
     await writeStore(store);
     throw new Error(message);
   }
 
   if (
     input.usedAi &&
-    countDraftCharacters(content) < minimumDraftCharacters(targetWordCount)
+    countDraftCharacters(content) < minimumSavableDraftCharacters(targetWordCount)
   ) {
-    const message = `正文生成结果偏短：当前 ${countDraftCharacters(content)} 字，最低要求 ${minimumDraftCharacters(targetWordCount)} 字。请降低目标字数或重新生成。`;
+    const message = `正文生成结果偏短：当前 ${countDraftCharacters(content)} 字，最低保存要求 ${minimumSavableDraftCharacters(targetWordCount)} 字。请降低目标字数或重新生成。`;
     failAiJob(job, message, withAiBillingOutput(store, job, {
       usedAi: true,
       usedFallback: false,
@@ -6969,7 +7588,7 @@ export async function saveStreamedChapterDraft(input: {
       chapterNumber: taskCard.chapterNumber,
       targetWordCount,
       actualCharacters: countDraftCharacters(content)
-    }, input.tokenUsage));
+    }, tokenUsage));
     await writeStore(store);
     throw new Error(message);
   }
@@ -6995,7 +7614,7 @@ export async function saveStreamedChapterDraft(input: {
     taskCard,
     useAi: input.usedAi && hasConfiguredAiSettings(store, currentUser.id)
   });
-  const tokenUsage = combineAiTokenUsages([input.tokenUsage, stateUpdate.tokenUsage]);
+  const finalTokenUsage = combineAiTokenUsages([tokenUsage, stateUpdate.tokenUsage]);
   finishAiJob(job, withAiBillingOutput(store, job, {
     usedAi: input.usedAi,
     usedFallback: false,
@@ -7008,7 +7627,7 @@ export async function saveStreamedChapterDraft(input: {
     stateUpdated: true,
     stateUpdateUsedAi: stateUpdate.usedAi,
     stateUpdateError: stateUpdate.error
-  }, tokenUsage));
+  }, finalTokenUsage));
   await writeStore(store);
   return draft;
 }
@@ -7093,7 +7712,9 @@ export async function reviewChapterDraft(
   const taskCard = store.writingTaskCards.find((item) => item.id === draft.taskCardId);
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const longFormPlan = getLatestLongFormPlan(store, projectId);
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, draft.chapterNumber);
+  const currentLedger = store.chapterLedgers.find((item) => item.draftId === draft.id) ?? null;
   const characters = charactersForChapterContext(store, projectId, draft.chapterNumber);
   const reviewCharacters = characters.map((character) =>
     withCharacterGenderConstraint(
@@ -7130,6 +7751,9 @@ export async function reviewChapterDraft(
   }
   const timestamp = now();
   const issues: ReviewIssue[] = [];
+  const previousReview = store.reviewReports
+    .filter((item) => item.draftId === draft.id)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
 
   if (taskCard && !draftEndingAppearsToCarryHook(draft.content, taskCard.endingHook)) {
     issues.push({
@@ -7217,23 +7841,54 @@ export async function reviewChapterDraft(
       bible.worldRules,
       bible.powerSystem,
       bible.immutableSettings,
+      bible.goldenFingerRules,
+      plotStateContext.currentMap,
+      plotStateContext.currentStage,
+      plotStateContext.mainGoal,
+      plotStateContext.shortTermGoal,
       plotStateContext.mapAndForces,
-      plotStateContext.powerSystemState
+      plotStateContext.powerSystemState,
+      plotStateContext.resourceState,
+      plotStateContext.openThreads.join("\n"),
+      plotStateContext.nextMilestones.join("\n"),
+      ledgerToReviewEvidence(currentLedger),
+      ledgerToReviewEvidence(lastLedger),
+      taskCard?.chapterGoal ?? "",
+      taskCard?.mainPlotProgress ?? "",
+      taskCard?.pleasurePoint ?? "",
+      taskCard?.foreshadowingTasks.join("\n") ?? "",
+      taskCard?.rulesNotToBreak.join("\n") ?? "",
+      reviewCharacters.map((character) => [
+        character.name,
+        character.identity,
+        character.currentGoal,
+        character.relationshipToProtagonist,
+        character.knownInformation,
+        character.currentState
+      ].join("\n")).join("\n"),
+      foreshadowings.map((item) => [
+        item.name,
+        item.relatedLocation,
+        item.hiddenInformation,
+        item.revealMethod
+      ].join("\n")).join("\n")
     ].join("\n");
-    return !knownSettingText.includes(line.slice(0, 12));
+    return !isSettingLineRecorded(line, knownSettingText);
   });
 
   if (newSettingLines.length > 0) {
     issues.push({
       type: "未入库新设定",
       location: "设定描写段",
-      severity: "medium",
-      suggestion: `本章可能引入了未登记的新设定：${newSettingLines[0]}。如果保留，请同步更新世界观、战力体系或地图势力。`
+      severity: "low",
+      suggestion: `本章疑似出现需要长期复用的新设定：${newSettingLines[0]}。系统会先通过章节台账自动同步；如果它只是一次性岗位、地点或道具，可忽略；如果后续还会反复使用，再到状态页补进世界观、战力体系、资源状态或地图势力。`
     });
   }
 
   const aiReview = hasConfiguredAiSettings(store, currentUser.id)
     ? await reviewChapterDraftWithAi({
+        projectName: project.name,
+        projectDescription: project.description,
         draft,
         taskCard:
           taskCard ??
@@ -7254,7 +7909,9 @@ export async function reviewChapterDraft(
           } as StoredWritingTaskCard),
         bible,
         plotState: plotStateContext,
+        longFormPlan,
         lastLedger,
+        currentLedger,
         characters: reviewCharacters,
         foreshadowings
       })
@@ -7264,6 +7921,8 @@ export async function reviewChapterDraft(
   const finalIssues = uniqueReviewIssues(
     aiIssues.length > 0 ? [...localPronounIssues, ...aiIssues] : issues
   );
+  const previousIssuesToCarry = (previousReview?.issues ?? []).filter((issue) => issue.type !== "未入库新设定");
+  const mergedIssues = mergeReviewIssues(finalIssues, previousIssuesToCarry);
   const aiOverall = aiReview?.overall?.trim() ?? "";
   const finalOverall =
     aiOverall && (localPronounIssues.length > 0 || !/代词|性别|她\/她的|他\/他的|女性|男性/.test(aiOverall))
@@ -7288,7 +7947,7 @@ export async function reviewChapterDraft(
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
     overall: finalOverall,
-    issues: finalIssues,
+    issues: mergedIssues,
     shouldUpdateState,
     stateUpdateSuggestions: finalStateSuggestions,
     createdAt: timestamp,
@@ -7304,7 +7963,8 @@ export async function reviewChapterDraft(
     usedAi: Boolean(aiReview),
     usedFallback: !aiReview,
     reviewReportId: report.id,
-    issues: report.issues.length
+    issues: report.issues.length,
+    preservedIssues: previousReview ? Math.max(0, report.issues.length - finalIssues.length) : 0
   }, getAiTokenUsage(aiReview)));
   await writeStore(store);
   return report;
@@ -7777,6 +8437,7 @@ export async function deleteProject(projectId: string) {
   store.characterProfiles = store.characterProfiles.filter((item) => item.projectId !== projectId);
   store.foreshadowings = store.foreshadowings.filter((item) => item.projectId !== projectId);
   store.plotStates = store.plotStates.filter((item) => item.projectId !== projectId);
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => item.projectId !== projectId);
   store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => item.projectId !== projectId);
   store.writingTaskCards = store.writingTaskCards.filter((item) => item.projectId !== projectId);
   store.chapterDrafts = store.chapterDrafts.filter((item) => item.projectId !== projectId);
@@ -8043,6 +8704,33 @@ export async function enqueueWritingTaskCardJob(
   return job;
 }
 
+export async function enqueueLongFormPlanJob(
+  projectId: string,
+  input?: Parameters<typeof generateLongFormPlan>[1],
+  options?: { retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(store, project);
+  const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
+  const targetTotalWords = inferTargetTotalWordsFromState(project, bible, input?.targetTotalWords);
+  const estimatedChapters = estimateChapterCount(targetTotalWords);
+  const job = createAiJob(store, {
+    userId: currentUser.id,
+    projectId,
+    type: "generate_long_form_plan",
+    payload: { targetTotalWords, estimatedChapters },
+    model: getActiveAiModel(store, "local-long-form-plan", currentUser.id),
+    retryOfJobId: options?.retryOfJobId
+  });
+
+  project.updatedAt = now();
+  await writeStore(store);
+  return job;
+}
+
 export async function enqueueChapterDraftJob(
   projectId: string,
   taskCardId?: string,
@@ -8247,6 +8935,22 @@ export async function processAiJob(jobId: string) {
       return { job: updatedJob, projectId: job.projectId, result: card };
     }
 
+    if (job.type === "generate_long_form_plan") {
+      if (!job.projectId) {
+        throw new Error("任务缺少项目归属");
+      }
+
+      const payload = getJobInputRecord(job);
+      const plan = await generateLongFormPlan(job.projectId, {
+        targetTotalWords: Number(payload?.targetTotalWords ?? 0) || undefined
+      }, {
+        existingJobId: job.id
+      });
+      const latestStore = await readStore();
+      const updatedJob = latestStore.aiJobs.find((item) => item.id === job.id) ?? job;
+      return { job: updatedJob, projectId: job.projectId, result: plan };
+    }
+
     if (job.type === "generate_chapter") {
       if (!job.projectId) {
         throw new Error("任务缺少项目归属");
@@ -8440,6 +9144,18 @@ export async function retryAiJob(jobId: string) {
           ...(input?.input && typeof input.input === "object" ? (input.input as object) : {}),
           chapterNumber: Number(input?.chapterNumber ?? 0) || undefined
         } as Parameters<typeof generateWritingTaskCard>[1], { retryOfJobId: job.id })
+      };
+
+    case "generate_long_form_plan":
+      if (!job.projectId) {
+        throw new Error("该任务缺少项目归属，无法重试");
+      }
+      return {
+        projectId: job.projectId,
+        jobType: job.type,
+        job: await enqueueLongFormPlanJob(job.projectId, {
+          targetTotalWords: Number(input?.targetTotalWords ?? 0) || undefined
+        }, { retryOfJobId: job.id })
       };
 
     case "generate_chapter":

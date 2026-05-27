@@ -13,6 +13,7 @@ import type {
   StoredChapterLedger,
   StoredCharacterProfile,
   StoredForeshadowing,
+  StoredLongFormPlan,
   StoredPlotState,
   StoredReviewReport,
   StoredStoryAnalysis,
@@ -25,6 +26,7 @@ type TaskCardContext = {
   projectDescription?: string;
   bible: StoredWritingBible;
   plotState: StoredPlotState;
+  longFormPlan?: StoredLongFormPlan | null;
   lastLedger: StoredChapterLedger | null;
   latestDraft: StoredChapterDraft | null;
   characters: StoredCharacterProfile[];
@@ -43,10 +45,12 @@ type TaskCardContext = {
 };
 
 export type ChapterDraftContext = {
+  projectName?: string;
   projectDescription?: string;
   taskCard: StoredWritingTaskCard;
   bible: StoredWritingBible;
   plotState: StoredPlotState;
+  longFormPlan?: StoredLongFormPlan | null;
   lastLedger: StoredChapterLedger | null;
   previousDraftTail?: string;
   characters: StoredCharacterProfile[];
@@ -59,6 +63,7 @@ export type ChapterStateUpdateContext = {
   taskCard: StoredWritingTaskCard;
   bible: StoredWritingBible;
   plotState: StoredPlotState;
+  longFormPlan?: StoredLongFormPlan | null;
   lastLedger: StoredChapterLedger | null;
   characters: StoredCharacterProfile[];
   foreshadowings: StoredForeshadowing[];
@@ -106,11 +111,15 @@ export type ChapterStateUpdateResult = {
 };
 
 type ReviewContext = {
+  projectName?: string;
+  projectDescription?: string;
   draft: StoredChapterDraft;
   taskCard: StoredWritingTaskCard;
   bible: StoredWritingBible;
   plotState: StoredPlotState;
+  longFormPlan?: StoredLongFormPlan | null;
   lastLedger: StoredChapterLedger | null;
+  currentLedger?: StoredChapterLedger | null;
   characters: StoredCharacterProfile[];
   foreshadowings: StoredForeshadowing[];
 };
@@ -118,6 +127,18 @@ type ReviewContext = {
 export type EditContext = {
   mode: string;
   originalText: string;
+};
+
+type LongFormPlanContext = {
+  projectName: string;
+  projectDescription?: string;
+  targetTotalWords: number;
+  estimatedChapters: number;
+  bible: StoredWritingBible;
+  plotState: StoredPlotState;
+  characters: StoredCharacterProfile[];
+  foreshadowings: StoredForeshadowing[];
+  storyAnalysis?: StoredStoryAnalysis | null;
 };
 
 function asTextList(value: unknown) {
@@ -363,6 +384,176 @@ function buildChapterPatternReferences(chapterAnalyses?: StoredChapterAnalysis[]
   }));
 }
 
+function buildLongFormPlanSummary(plan?: StoredLongFormPlan | null) {
+  if (!plan) {
+    return null;
+  }
+
+  return {
+    targetTotalWords: plan.targetTotalWords,
+    estimatedChapters: plan.estimatedChapters,
+    planningBasis: plan.planningBasis,
+    corePromise: plan.corePromise,
+    volumePlan: plan.volumePlan,
+    progressionPacing: plan.progressionPacing,
+    rewardPacing: plan.rewardPacing,
+    first10Chapters: plan.first10Chapters,
+    first100Pacing: plan.first100Pacing,
+    post100Pacing: plan.post100Pacing,
+    progressionRules: plan.progressionRules
+  };
+}
+
+function buildLongFormPlanRules(plan?: StoredLongFormPlan | null, chapterNumber?: number) {
+  if (!plan) {
+    return [
+      "当前项目尚未生成长篇规划。任务卡应保持保守节奏：先稳住核心承诺、关键机制和当前阶段目标，避免连续开新地图或大阶段跃迁。"
+    ];
+  }
+
+  const first10Rule =
+    chapterNumber && chapterNumber <= 10 && plan.first10Chapters.length > 0
+      ? `当前是第 ${chapterNumber} 章，必须优先对齐长篇规划的前10章功能：${plan.first10Chapters.join("；")}`
+      : "";
+
+  return [
+    `长篇规划基准：目标约 ${plan.targetTotalWords} 字，预计 ${plan.estimatedChapters} 章；核心承诺：${plan.corePromise || plan.planningBasis}`,
+    first10Rule,
+    chapterNumber && chapterNumber > 100
+      ? plan.post100Pacing
+        ? `100章后收束节奏参考：${plan.post100Pacing}`
+        : plan.first100Pacing
+          ? `前100章后的章节仍需承接全书卷纲；已有前100章参考：${plan.first100Pacing}`
+          : ""
+      : plan.first100Pacing
+        ? `前100章节奏参考：${plan.first100Pacing}`
+        : "",
+    plan.post100Pacing && (!chapterNumber || chapterNumber <= 100)
+      ? `100章后规划只作为远期边界，不要提前兑现：${plan.post100Pacing}`
+      : "",
+    plan.progressionPacing.length
+      ? `成长/境界/资源节奏上限：${plan.progressionPacing.join("；")}`
+      : "",
+    plan.rewardPacing.length ? `收益释放频率：${plan.rewardPacing.join("；")}` : "",
+    ...plan.progressionRules,
+    "如果本章任务与长篇规划冲突，优先降低收益等级、推迟大突破、收束支线或改成线索/资格/试用/小收益。"
+  ].filter(Boolean);
+}
+
+function buildLongFormPlanningGuardRules(context: Pick<LongFormPlanContext, "targetTotalWords" | "estimatedChapters">) {
+  const isMediumOrLong = context.targetTotalWords >= 100_000 || context.estimatedChapters >= 60;
+  const isLong = context.targetTotalWords >= 300_000 || context.estimatedChapters >= 120;
+
+  if (!isMediumOrLong) {
+    return [
+      "即使是短中篇，前10章也应先建立机制可信度和第一阶段压力，不要用连续突破替代剧情推进。"
+    ];
+  }
+
+  return [
+    "默认先区分“小台阶”和“大阶段”：小台阶可以是资格、试用、接近门槛、局部能力、一次性资源、关系变化、线索；大阶段是作品内命名层级、身份、地图、权限或核心资源的正式跨档。",
+    "必须先识别简介或创作圣经里的成长阶梯、奖励阈值、等级表、职位表、地图表、关系表或资源表：这些默认是“全书长期规则/上限表”，不是前期章节进度表，不能按列出的顺序自动排进第一卷。",
+    "除非用户明确选择短篇、开局满级、快穿、极限快节奏等特殊模式，前10章最多允许一次正式大阶段跨档；不要连续两次正式大突破。",
+    "如果成长体系有多个命名阶段，前10章默认只验证机制并稳定第一个成长阶段；后续大阶段应按目标篇幅拉开距离，而不是被阈值表或任务清单自动连跳。",
+    "如果关键机制依赖某个可量化指标或持续状态，必须区分“临时收益”和“稳定指标”：一次性收获、短期任务、预期收益、试用资格或临时合作不能直接等同为长期稳定指标，只能写成接近门槛、进度条、资格、临时助力或风险预告。",
+    "前10章功能应写“本章剧情功能”，不要把每章都写成数值上涨和正式跨档；至少保留日常压力、关系铺垫、机制限制、误判、信息差和下一步目标。",
+    "收益频率要服务长篇预算：小收益可以较高频，中收益需要阶段铺垫，大阶段突破必须按卷或阶段收束安排，不能靠数值阈值自动连跳。"
+  ].concat(
+    isLong
+      ? [
+          "当前目标属于长篇体量，前30章默认仍是第一阶段主循环建立期；第1卷的任务是让读者相信机制、主角处境和压力升级，不是把核心成长表快速兑现。",
+          "长篇体量下，第一卷默认只消耗长期成长阶梯的前段资源；不得把简介里列出的中后期档位、终局目标或高阶敌人直接设成第一卷完成目标。",
+          "长篇规划中必须写出“卡点”：关键指标或核心资源达到门槛前的稳定性验证、结算周期、资格审核、代价、风险或外部阻力。"
+        ]
+      : []
+  );
+}
+
+export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
+  const planningGuardRules = buildLongFormPlanningGuardRules(context);
+  const response = await requestAiJson<
+    Partial<
+      Pick<
+        StoredLongFormPlan,
+        | "planningBasis"
+        | "corePromise"
+        | "volumePlan"
+        | "progressionPacing"
+        | "rewardPacing"
+        | "first10Chapters"
+        | "first100Pacing"
+        | "post100Pacing"
+        | "progressionRules"
+      >
+    >
+  >({
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是长篇网文总纲规划师。请严格输出 JSON。你的任务是在正文正式连续生成前，为新书制定“长篇规划 / 长期成长节奏规划”，防止 AI 越写越偏、升级过快、地图乱开、支线吞主线。规划必须通用，不能针对某个题材硬编码；如果作品存在能力、资源、地位、关系、权限、地图、势力或认知成长体系，必须按预计篇幅预算小台阶和大阶段。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            projectName: context.projectName,
+            projectDescription: context.projectDescription,
+            targetTotalWords: context.targetTotalWords,
+            estimatedChapters: context.estimatedChapters,
+            bible: context.bible,
+            plotState: context.plotState,
+            characters: context.characters.slice(0, 8),
+            foreshadowings: context.foreshadowings.slice(0, 10),
+            storyReference: buildStoryReference(context.storyAnalysis),
+            planningRules: [
+              "先提炼本书的核心承诺：主角靠什么获得成长、读者期待反复看到什么、主线最终要兑现什么。",
+              "如果 projectDescription 或 bible 中列出了等级、阈值、奖励、职位、地图、势力、关系、权限、目标清单，必须先判断它是长期规则表、阶段目标表还是当前章节任务；默认按长期规则表处理，不能直接变成第一卷进度。",
+              "如果作品存在任何成长阶梯，必须把“当前阶段允许提升什么、不允许越过什么、什么情况允许例外”写进 progressionPacing。",
+              "volumePlan 必须体现“长期阶梯分配”：第一卷只建立核心循环和前段成长，后续卷逐步消耗中段、高段、终局档位；除非用户明确要求快节奏，不要第一卷吃完多个核心档位。",
+              "按目标总字数和预计章节数规划：每卷/阶段要有开始目标、阶段压力、阶段回报、阶段收束，不要只列地图名。",
+              "前 10 章主要负责建立主角处境、关键机制、第一轮小收益、第一阶段压力和读者期待；不要连续大突破，不要过早开大型副本替代核心承诺。",
+              ...planningGuardRules,
+              "前 100 章需要有清晰的节奏表：哪些章节段落做机制验证、小爽点、中爽点、大爽点、地图/势力升级、伏笔埋设与回收。",
+              "100章后也必须规划：写清后期阶段如何升级、如何收束支线、如何回收伏笔、如何逼近终局；不能只规划前100章。",
+              "rewardPacing 必须写清小收益、中收益、大收益的大致频率；收益可以是能力、境界、金钱、资源、地位、情报、关系或权限。",
+              "progressionRules 必须写成后续任务卡能直接执行的硬约束，例如：第几章前只允许小台阶，第几章左右才允许大阶段，越级必须有成本和后果。",
+              "不要照搬拆书来源作品的人物、地点、专有设定、具体桥段；拆书只能作为商业节奏参考。"
+            ],
+            outputSchema: {
+              planningBasis: "string：为什么按这个篇幅和节奏规划",
+              corePromise: "string：本书核心承诺和长期爽点循环",
+              volumePlan: "string[]：每项包含卷/阶段、章节范围、阶段目标、阶段回报、收束条件",
+              progressionPacing: "string[]：成长层级/能力/资源/地位/权限/关系/地图等节奏，必须写章节范围和允许上限；必须说明哪些档位属于长期后置，不得前期兑现",
+              rewardPacing: "string[]：小收益/中收益/大收益频率与类型",
+              first10Chapters: "string[]：前10章每章功能，不写正文；长篇体量下不得安排进入第二个命名大阶段，不得每章都写数值上涨",
+              first100Pacing: "string：前100章节奏表，按章节段落说明",
+              post100Pacing: "string：100章后到完结的后期节奏，必须说明后期阶段目标、成长上限、支线收束、伏笔回收、终局推进",
+              progressionRules: "string[]：任务卡生成时必须遵守的硬规则"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.22,
+    maxTokens: 3200
+  });
+
+  return attachAiTokenUsage({
+    planningBasis: String(response.planningBasis ?? "").trim(),
+    corePromise: String(response.corePromise ?? "").trim(),
+    volumePlan: asTextList(response.volumePlan),
+    progressionPacing: asTextList(response.progressionPacing),
+    rewardPacing: asTextList(response.rewardPacing),
+    first10Chapters: asTextList(response.first10Chapters).slice(0, 12),
+    first100Pacing: String(response.first100Pacing ?? "").trim(),
+    post100Pacing: String(response.post100Pacing ?? "").trim(),
+    progressionRules: asTextList(response.progressionRules)
+  }, getAiTokenUsage(response));
+}
+
 function normalizeDraftTargetWordCount(value?: number) {
   if (!Number.isFinite(value)) {
     return 2500;
@@ -372,7 +563,7 @@ function normalizeDraftTargetWordCount(value?: number) {
 }
 
 function estimateDraftMaxTokens(targetWordCount: number) {
-  return Math.min(12000, Math.max(3600, Math.ceil(targetWordCount * 2.2)));
+  return Math.min(6500, Math.max(1200, Math.ceil(targetWordCount * 1.15)));
 }
 
 function estimateDraftContinuationMaxTokens(targetWordCount: number, currentCharacters: number) {
@@ -387,7 +578,7 @@ function estimateDraftContinuationMaxTokens(targetWordCount: number, currentChar
 }
 
 function estimateDraftClosingMaxTokens() {
-  return 900;
+  return 260;
 }
 
 export function countDraftCharacters(content: string) {
@@ -396,6 +587,18 @@ export function countDraftCharacters(content: string) {
 
 export function minimumDraftCharacters(targetWordCount?: number) {
   return Math.floor(normalizeDraftTargetWordCount(targetWordCount) * 0.7);
+}
+
+export function minimumDraftExpansionCharacters(targetWordCount?: number) {
+  return Math.floor(normalizeDraftTargetWordCount(targetWordCount) * 0.85);
+}
+
+export function minimumSavableDraftCharacters(targetWordCount?: number) {
+  const target = normalizeDraftTargetWordCount(targetWordCount);
+  const minimum = minimumDraftCharacters(target);
+  const cleanupTolerance = Math.max(12, Math.ceil(target * 0.02));
+
+  return Math.max(1, minimum - cleanupTolerance);
 }
 
 export function maximumDraftCharacters(targetWordCount?: number) {
@@ -437,7 +640,7 @@ export function assertEditedTextComplete(originalText: string, revisedText: stri
 }
 
 function isDraftTooShort(content: string, targetWordCount?: number) {
-  return countDraftCharacters(content) < minimumDraftCharacters(targetWordCount);
+  return countDraftCharacters(content) < minimumDraftExpansionCharacters(targetWordCount);
 }
 
 function isDraftTooLong(content: string, targetWordCount?: number) {
@@ -464,7 +667,8 @@ export function isChapterDraftEndingIncomplete(content: string) {
     return true;
   }
 
-  const quotes = (text.match(/[“”]/g) ?? []).join("");
+  const quoteCheckText = text.slice(-360);
+  const quotes = (quoteCheckText.match(/[“”]/g) ?? []).join("");
   const leftQuotes = (quotes.match(/“/g) ?? []).length;
   const rightQuotes = (quotes.match(/”/g) ?? []).length;
 
@@ -595,30 +799,6 @@ export function prepareChapterDraftContentForSave(content: string, targetWordCou
   return formatChapterDraftParagraphs(text);
 }
 
-function limitDraftLengthToCompleteSentence(content: string, targetWordCount?: number) {
-  const maxCharacters = maximumDraftCharacters(targetWordCount);
-
-  if (countDraftCharacters(content) <= maxCharacters) {
-    return content.trim();
-  }
-
-  let count = 0;
-  let cutIndex = content.length;
-
-  for (let index = 0; index < content.length; index += 1) {
-    if (!/\s/.test(content[index])) {
-      count += 1;
-    }
-
-    if (count > maxCharacters) {
-      cutIndex = index;
-      break;
-    }
-  }
-
-  return trimChapterDraftToLastCompleteSentence(content.slice(0, cutIndex));
-}
-
 export async function compressChapterDraftToTarget(
   content: string,
   context: ChapterDraftContext,
@@ -651,6 +831,8 @@ export async function compressChapterDraftToTarget(
               "保留主要场景和关键对话，删掉重复解释、重复心理活动、同义铺垫和多余环境描写。",
               "不要删除任务卡要求的章末钩子。",
               "压缩后仍然必须是完整小说正文，不能变成梗概。",
+              "必须保留本章起因、推进、转折、爽点释放和章末落点，不能把正文压到剧情写了一半就结束。",
+              "如果无法同时满足字数上限和完整剧情，优先保证剧情完整、前后文通顺，允许略微超过字数上限。",
               "结尾必须以完整句子结束。"
             ],
             outputSchema: {
@@ -671,18 +853,14 @@ export async function compressChapterDraftToTarget(
     targetWordCount
   );
   const compressedCharacters = countDraftCharacters(compressed);
-  const limitedContent = limitDraftLengthToCompleteSentence(content, targetWordCount);
-  const limitedCharacters = countDraftCharacters(limitedContent);
+  const compressedIsUsable =
+    compressed &&
+    compressedCharacters >= minCharacters &&
+    compressedCharacters <= Math.ceil(maxCharacters * 1.12) &&
+    !isChapterDraftEndingIncomplete(compressed);
 
   return {
-    content:
-      compressed &&
-      compressedCharacters >= minCharacters &&
-      compressedCharacters <= Math.ceil(maxCharacters * 1.08)
-        ? compressed
-        : limitedCharacters >= minCharacters
-          ? limitedContent
-        : content,
+    content: compressedIsUsable ? compressed : content,
     usage: getAiTokenUsage(response)
   };
 }
@@ -792,6 +970,19 @@ function fixCharacterPronouns(content: string, characters: StoredCharacterProfil
 
 function buildNarrativeDictionRules(context: ChapterDraftContext) {
   const pronounRules = buildCharacterPronounRules(context.characters);
+  const premiseAnchorRules = buildPremiseAnchorRules({
+    projectName: context.projectName,
+    projectDescription: context.projectDescription,
+    bible: context.bible,
+    plotState: context.plotState
+  });
+  const mechanismIntegrityRules = buildMechanismIntegrityRules({
+    chapterNumber: context.taskCard.chapterNumber,
+    projectName: context.projectName,
+    projectDescription: context.projectDescription,
+    bible: context.bible,
+    plotState: context.plotState
+  });
   const rules = [
     "正文称谓、对白和物件必须符合当前题材、时代感和世界观，不要混入与题材不符的现代口语。",
     "亲属、师门、家族、宗门称谓必须稳定，不能同一人物一会儿现代口语一会儿古风称谓。",
@@ -800,9 +991,11 @@ function buildNarrativeDictionRules(context: ChapterDraftContext) {
       : "",
     `本书作品类型固定为「${context.bible.workType}」，目标读者固定为「${context.bible.targetReader}」，正文不得擅自切换题材频道、时代背景、主角类型或核心卖点。`,
     context.projectDescription
-      ? `项目简介是方向参考：正文不要与「${context.projectDescription}」中的主角身份、初始危机和核心卖点明显冲突；具体桥段以任务卡为准。`
+      ? `项目简介是核心承诺参考：正文不要与「${context.projectDescription}」中的主角身份、初始危机、金手指机制和核心卖点明显冲突；具体桥段以任务卡为准。`
       : "",
     "创作圣经 immutableSettings、narrativeTaboos、corePleasure、styleGuide 中的主分类、题材边界、作品标签和禁止项都是硬约束；如果任务卡与圣经冲突，优先遵守圣经。",
+    ...premiseAnchorRules,
+    ...mechanismIntegrityRules,
     "每段尽量控制在 1-4 句；一个自然段接近 200 字时必须换段，不要写成一大段散文，也不要连续堆很多长句。",
     "优先写动作、对话、冲突、结果和信息推进，不要用华丽词藻、排比句、总结腔或抒情腔去撑篇幅。",
     "语言要像正常网文，不要刻意堆砌比喻、成语、抽象修辞或过度精致的句式。"
@@ -819,6 +1012,69 @@ function buildNarrativeDictionRules(context: ChapterDraftContext) {
   return rules.filter(Boolean);
 }
 
+function buildPremiseAnchorRules(context: {
+  projectName?: string;
+  projectDescription?: string;
+  bible: Pick<
+    StoredWritingBible,
+    "corePleasure" | "goldenFingerRules" | "immutableSettings" | "narrativeTaboos" | "worldRules" | "styleGuide"
+  >;
+  plotState?: Pick<StoredPlotState, "mainGoal" | "shortTermGoal" | "currentStage" | "nextStageGoal">;
+}) {
+  const anchor = [
+    context.projectName ? `书名：${context.projectName}` : "",
+    context.projectDescription ? `项目简介：${context.projectDescription}` : "",
+    context.bible.corePleasure ? `核心爽点：${context.bible.corePleasure}` : "",
+    context.bible.goldenFingerRules ? `金手指/关键机制：${context.bible.goldenFingerRules}` : "",
+    context.plotState?.mainGoal ? `当前主线目标：${context.plotState.mainGoal}` : "",
+    context.plotState?.shortTermGoal ? `短期目标：${context.plotState.shortTermGoal}` : "",
+    context.plotState?.currentStage ? `当前阶段：${context.plotState.currentStage}` : ""
+  ].filter(Boolean);
+
+  if (anchor.length === 0) {
+    return [];
+  }
+
+  return [
+    `核心承诺锚点如下：${anchor.join("；")}`,
+    "不要求机械重复核心承诺里的原词，但每章必须让本章目标、冲突、收益或章末钩子至少有一项在功能上服务核心承诺，不能只沿着上一章支线继续扩写。",
+    "如果书名和简介已经给出明确反差卖点、成长方式、主角身份或读者期待，任务卡和正文必须优先兑现这些承诺，而不是用通用副本、通用秘境、通用敌人替代。",
+    "可以开启支线、新地图、新组织或新危机，但它们必须服务核心卖点、金手指机制、主角底层目标或当前主线目标；不能连续多章让支线替代主线。",
+    "如果上一章钩子与核心承诺锚点发生冲突，优先把钩子改写成服务核心承诺的压力或选择，而不是顺着钩子改换故事类型。",
+    "主角能力、资源、地位或关系的提升必须遵守创作圣经中的关键机制和阶段节奏，不能为了爽点临时换一套升级来源。"
+  ];
+}
+
+function buildMechanismIntegrityRules(context: {
+  chapterNumber?: number;
+  projectName?: string;
+  projectDescription?: string;
+  bible: Pick<StoredWritingBible, "corePleasure" | "goldenFingerRules" | "powerSystem" | "immutableSettings">;
+  plotState?: Pick<StoredPlotState, "mainGoal" | "shortTermGoal" | "currentStage" | "powerSystemState" | "resourceState">;
+}) {
+  const mechanism = [
+    context.bible.goldenFingerRules ? `关键机制：${context.bible.goldenFingerRules}` : "",
+    context.bible.powerSystem ? `战力/能力体系：${context.bible.powerSystem}` : "",
+    context.plotState?.powerSystemState ? `当前能力状态：${context.plotState.powerSystemState}` : "",
+    context.plotState?.resourceState ? `当前资源状态：${context.plotState.resourceState}` : ""
+  ].filter(Boolean);
+
+  if (mechanism.length === 0) {
+    return [];
+  }
+
+  return [
+    `机制合规基准如下：${mechanism.join("；")}`,
+    "本章凡是让主角获得能力、资源、地位、境界、金钱、权限、情报或关系收益，都必须写清收益来源、触发条件、代价/限制，以及为什么符合关键机制。",
+    "不得只保留机制名词，却把收益来源偷换成另一套升级方式；如果收益来源不属于关键机制，必须写成外部诱因、线索或临时助力，不能直接替代核心成长方式。",
+    "升级和收益必须符合当前阶段节奏；如果一章内跨越多个大阶段、连续突破或获得超出当前阶段的核心资源，必须有明确铺垫、成本和后果，否则应降级为小收益或线索。",
+    context.chapterNumber && context.chapterNumber <= 5
+      ? `当前仍是第 ${context.chapterNumber} 章早期开局；如果作品是 10 万字以上的中长篇，优先建立机制、压力和第一轮小台阶，不要过早兑现完整大阶段突破。可以把收益拆成资格、试用、预期收益、小额增长、验证机制或风险成本。`
+      : "",
+    "章末钩子可以制造更大期待，但不能用未铺垫的大机缘直接绕过关键机制。"
+  ].filter(Boolean);
+}
+
 export function sanitizeChapterDraftDiction(content: string, context: ChapterDraftContext) {
   const pronounFixed = fixCharacterPronouns(content, context.characters);
 
@@ -832,6 +1088,20 @@ export function sanitizeChapterDraftDiction(content: string, context: ChapterDra
 }
 
 export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
+  const premiseAnchorRules = buildPremiseAnchorRules({
+    projectName: context.projectName,
+    projectDescription: context.projectDescription,
+    bible: context.bible,
+    plotState: context.plotState
+  });
+  const mechanismIntegrityRules = buildMechanismIntegrityRules({
+    chapterNumber: context.chapterNumber,
+    projectName: context.projectName,
+    projectDescription: context.projectDescription,
+    bible: context.bible,
+    plotState: context.plotState
+  });
+  const longFormPlanRules = buildLongFormPlanRules(context.longFormPlan, context.chapterNumber);
   const response = await requestAiJson<Partial<StoredWritingTaskCard>>({
     messages: [
       {
@@ -839,15 +1109,16 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
         content:
           "你是网文长篇创作助手。请严格输出 JSON。你的任务是基于创作圣经、主线状态、最近章节台账、拆书结构参考和伏笔表，生成一张“新作品”的本章任务卡。拆书分析只能作为结构参考，用来迁移冲突循环、爽点功能、节奏密度和钩子类型；严禁照搬或续写原书内容，严禁复用原书人物名、地点名、专有设定、具体线索、章节事件、原文表达和同款章末钩子。用户输入不为空时必须优先遵守；用户输入为空时自动补全，但必须围绕当前项目的创作圣经和主线状态生成全新的剧情任务。"
       },
-            {
-              role: "user",
-              content: JSON.stringify(
-                {
-                  projectName: context.projectName,
-                  projectDescription: context.projectDescription,
-                  bible: context.bible,
-                  plotState: context.plotState,
-                  lastLedger: context.lastLedger,
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            projectName: context.projectName,
+            projectDescription: context.projectDescription,
+            bible: context.bible,
+            plotState: context.plotState,
+            longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
+            lastLedger: context.lastLedger,
             latestDraft: context.latestDraft,
             characters: context.characters,
             chapterCharacterConstraints: context.chapterCharacterConstraints ?? [],
@@ -860,7 +1131,15 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             migrationRules: [
               "必须先从拆书结果抽象出结构功能，再迁移到当前新书变量。",
               "任务卡里的本章目标、承接、主线推进、爽点和章末钩子都必须服务当前 projectName、projectDescription、bible、plotState。",
-              "如果 projectDescription 不为空，它是本书开局方向参考，任务卡不要明显违背简介里的主角身份、初始危机和核心卖点。",
+              "如果 projectDescription 不为空，它是本书核心承诺参考，任务卡不要明显违背简介里的主角身份、初始危机、金手指机制和核心卖点。",
+              ...premiseAnchorRules,
+              ...mechanismIntegrityRules,
+              ...longFormPlanRules,
+              "任务卡的 chapterGoal 必须写清本章如何推进核心承诺锚点；mainPlotProgress 必须写清这章推进的是主线还是支线，以及支线如何回到主线。",
+              "任务卡的 pleasurePoint 必须写清：本章收益是什么、收益来源是什么、触发条件是什么、是否符合关键机制、是否存在越级风险；如果只是铺垫章，可以明确写“小收益/线索/误会加深”，不要强行突破。",
+              "最近章节台账只提供连续性，不等于自动变成新主线；如果上一章钩子开启了支线，本章必须说明它如何回扣核心承诺，或如何在本章/下章收束。",
+              "章节功能可以轮换：允许日常经营、关系铺垫、信息差误会、资源小收益、机制试错、低强度压制，不要每章都强行新敌人、新地图、大战斗或大境界突破。",
+              "前10章应优先稳住题材卖点、主角日常循环、关键机制反馈和第一阶段压力；除非大纲明确要求，不要过早开启大型副本或连续升级地图。",
               "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
               "不得为了套用拆书结构而改变当前新书的目标读者、主分类、主题标签、角色标签、时代背景、核心人设或力量体系。",
               "如果 chapterCharacterConstraints 不为空，本章任务卡必须显式使用这些人物约束，并把相关人物写入 requiredCharacters。",
@@ -916,23 +1195,29 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
         },
         {
           role: "user",
-              content: JSON.stringify(
-                {
-                  targetWordCount,
-                  maxCharacters,
-                  taskCard: context.taskCard,
-                  projectDescription: context.projectDescription,
-                  bible: context.bible,
-                  plotState: context.plotState,
-                  lastLedger: context.lastLedger,
+          content: JSON.stringify(
+            {
+              targetWordCount,
+              maxCharacters,
+              taskCard: context.taskCard,
+              projectName: context.projectName,
+              projectDescription: context.projectDescription,
+              bible: context.bible,
+              plotState: context.plotState,
+              longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
+              lastLedger: context.lastLedger,
               previousDraftTail: context.previousDraftTail,
               characters: context.characters,
               foreshadowings: context.foreshadowings,
               writingRules: [
                 `正文目标约 ${targetWordCount} 字，最高不得超过 ${maxCharacters} 字；篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
+                `必须在 ${maxCharacters} 字以内自然收束并写出章末落点，不要写到被系统长度限制截断。`,
+                "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
                 ...buildNarrativeDictionRules(context),
+                ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
                 "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
                 "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
+                "允许章节功能轮换：不是每章都必须大战、打脸或升级；可以写机制试错、日常经营、关系铺垫、低强度压力和小收益，但必须服务核心承诺。",
                 "正文必须围绕本章任务卡推进，不要写成大纲或总结。",
                 "正文必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得把故事写成另一个频道或另一个题材。",
                 "正文里凡是发生人物关系、伏笔、主线推进、战力能力、资源收益、知情边界变化，必须写清“谁、发生了什么、变化前后”，便于章节后沉淀到状态图谱。",
@@ -948,8 +1233,8 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
           )
         }
       ],
-    temperature: 0.48,
-    maxTokens: estimateDraftMaxTokens(targetWordCount)
+      temperature: 0.48,
+      maxTokens: estimateDraftMaxTokens(targetWordCount)
     });
 
     const title = String(response.title ?? "").trim();
@@ -970,19 +1255,24 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
           },
           {
             role: "user",
-              content: JSON.stringify(
-                {
-                  targetWordCount,
-                  minCharacters,
-                  currentCharacters: countDraftCharacters(content),
-                  currentContent: content,
-                  taskCard: context.taskCard,
-                  projectDescription: context.projectDescription,
-                  bible: context.bible,
-                  plotState: context.plotState,
-                  continuationRules: [
+            content: JSON.stringify(
+              {
+                targetWordCount,
+                minCharacters,
+                currentCharacters: countDraftCharacters(content),
+                currentContent: content,
+                taskCard: context.taskCard,
+                projectName: context.projectName,
+                projectDescription: context.projectDescription,
+                bible: context.bible,
+                plotState: context.plotState,
+                longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
+                continuationRules: [
                   "只续写正文后半段，不要重复已有内容。",
+                  `续写后整章最高不得超过 ${maxCharacters} 字。`,
+                  "如果当前正文已经接近或超过最高字数，只补完整句和章末落点，不要继续展开新战斗、新设定或新对话。",
                   ...buildNarrativeDictionRules(context),
+                  ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
                   "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
                   "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
                   "如果已有内容过早收尾，要把结尾钩子自然后移到补写内容最后。",
@@ -1048,18 +1338,25 @@ export async function* streamChapterDraftTextWithAi(
             targetWordCount,
             maxCharacters,
             taskCard: context.taskCard,
+            projectName: context.projectName,
+            projectDescription: context.projectDescription,
             bible: context.bible,
             plotState: context.plotState,
+            longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
             lastLedger: context.lastLedger,
             previousDraftTail: context.previousDraftTail,
             characters: context.characters,
             foreshadowings: context.foreshadowings,
             writingRules: [
               `正文目标约 ${targetWordCount} 字，最高不得超过 ${maxCharacters} 字；篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
+              `必须在 ${maxCharacters} 字以内自然收束并写出章末落点，不要写到被系统长度限制截断。`,
+              "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
               ...buildNarrativeDictionRules(context),
+              ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
               "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
               "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
               "先承接上一章钩子，再推进本章目标。",
+              "允许章节功能轮换：不是每章都必须大战、打脸或升级；可以写机制试错、日常经营、关系铺垫、低强度压力和小收益，但必须服务核心承诺。",
               "必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得把故事写成另一个频道或另一个题材。",
               "爽点必须有压制和释放，不要空泛总结。",
               "人物不能知道自己不知道的信息。",
@@ -1085,7 +1382,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
 ) {
   const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
   const currentCharacters = countDraftCharacters(currentContent);
-  const minCharacters = minimumDraftCharacters(targetWordCount);
+  const minCharacters = minimumDraftExpansionCharacters(targetWordCount);
   const maxCharacters = maximumDraftCharacters(targetWordCount);
 
   yield* requestAiTextStream({
@@ -1105,14 +1402,19 @@ export async function* streamChapterDraftExpansionTextWithAi(
             currentCharacters,
             currentContent,
             taskCard: context.taskCard,
+            projectName: context.projectName,
+            projectDescription: context.projectDescription,
             bible: context.bible,
             plotState: context.plotState,
+            longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
             characters: context.characters,
             foreshadowings: context.foreshadowings,
             continuationRules: [
               "只续写正文后半段，不要重复已有内容。",
               `续写后整章最高不得超过 ${maxCharacters} 字。`,
+              "如果当前正文已经接近或超过最高字数，只补完整句和章末落点，不要继续展开新战斗、新设定或新对话。",
               ...buildNarrativeDictionRules(context),
+              ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
               "续写也必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得补写成另一个频道或另一个题材。",
               "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
               "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
@@ -1126,10 +1428,10 @@ export async function* streamChapterDraftExpansionTextWithAi(
         )
       }
     ],
-        temperature: 0.42,
-        maxTokens: estimateDraftContinuationMaxTokens(targetWordCount, currentCharacters),
-        onUsage
-      });
+    temperature: 0.42,
+    maxTokens: estimateDraftContinuationMaxTokens(targetWordCount, currentCharacters),
+    onUsage
+  });
 }
 
 export async function* streamChapterDraftClosingTextWithAi(
@@ -1175,6 +1477,12 @@ export async function* streamChapterDraftClosingTextWithAi(
 }
 
 export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdateContext) {
+  const mechanismIntegrityRules = buildMechanismIntegrityRules({
+    chapterNumber: context.draft.chapterNumber,
+    bible: context.bible,
+    plotState: context.plotState
+  });
+  const longFormPlanRules = buildLongFormPlanRules(context.longFormPlan, context.draft.chapterNumber);
   const response = await requestAiJson<Partial<ChapterStateUpdateResult>>({
     messages: [
       {
@@ -1194,6 +1502,7 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
             taskCard: context.taskCard,
             bible: context.bible,
             plotState: context.plotState,
+            longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
             lastLedger: context.lastLedger,
             existingCharacters: context.characters.map((character) => ({
               name: character.name,
@@ -1232,13 +1541,17 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
             extractionRules: [
               "events 只写本章真实发生的关键事件，3-6 条。",
               "events 必须服务章节因果网：每条尽量包含触发原因、人物行动和直接结果，不要只写氛围。",
+              "提取状态时必须以现有 plotState.mainGoal、shortTermGoal、currentStage 和任务卡为参照；不要因为本章出现新地图、新组织或新危机，就自动把它升级为新的长期主线。",
+              ...mechanismIntegrityRules,
+              ...longFormPlanRules,
+              "角色对外撒谎、遮掩、误导、猜测或临时编造的说法，不能当成真实设定入库；必须标注为“某角色对外宣称/误导信息”，真实状态以旁白、系统提示和已发生事件为准。",
               "newCharacters 只写本章首次出现或第一次进入重要剧情的人物姓名，不要把“主角”“众人”“敌人”当人物名。",
               "characterUpdates 必须覆盖本章出场的重要人物，记录他们本章后的当前状态、已知信息、未知信息、秘密、能力边界、与主角关系或态度变化。",
               "relationshipChanges 只记录关系真的变化、立场变化或被明确加深的内容，必须写出双方姓名，格式建议：第N章：A 与 B 因某事件关系变化为……",
               "mapAndForceUpdates 只记录顶层地点、势力、组织、阵营、地图推进相关变化，必须写出地点或势力名称；不要把前厅、后山、枯井、房间、院落等内部场景单独写成地图/势力节点，内部场景只放在 events 或 foreshadowingUpdates.relatedLocation 中。",
-              "stateChanges 必须覆盖主线/支线推进网：写清本章推进了哪条主线或支线、当前阶段发生了什么变化、下一步压力是什么。",
-              "powerSystemUpdates 只记录战力、能力边界、金手指、限制、代价变化，必须写清变化前后、新增限制、代价或能力边界；如果本章没有这类变化就返回空数组。",
-              "resourceUpdates 只记录资源/收益网：功法、丹药、装备、线索、证据、名额、权限、财富、声望等获得/失去/消耗；如果本章没有这类变化就返回空数组。",
+              "stateChanges 必须覆盖主线/支线推进网：写清本章推进了哪条主线或支线、当前阶段发生了什么变化、下一步压力是什么；如果只是临时支线，要标明它服务哪条既有主线，不要改写主线目标。",
+              "powerSystemUpdates 只记录战力、能力边界、金手指、限制、代价变化，必须写清变化前后、收益来源、触发条件、新增限制、代价或能力边界；如果本章没有这类变化就返回空数组。",
+              "resourceUpdates 只记录资源/收益网：功法、丹药、装备、线索、证据、名额、权限、财富、声望等获得/失去/消耗，必须写清来源和是否符合关键机制；如果本章没有这类变化就返回空数组。",
               "foreshadowingUpdates 记录新埋伏笔、部分回收、已回收伏笔，并写清 relatedCharacters、relatedLocation、hiddenInformation 或 revealMethod。",
               "knownInformation 和 unknownInformation 是知情/秘密网核心字段：不能空泛写“待补充”，必须根据正文写人物本章后明确知道/不知道的信息；没有变化时沿用已有边界。",
               "cliffhanger 必须提取章末钩子；没有明显钩子时写最后留下的未解决压力。",
@@ -1312,6 +1625,20 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
 
 export async function reviewChapterDraftWithAi(context: ReviewContext) {
   try {
+    const premiseAnchorRules = buildPremiseAnchorRules({
+      projectName: context.projectName,
+      projectDescription: context.projectDescription,
+      bible: context.bible,
+      plotState: context.plotState
+    });
+    const mechanismIntegrityRules = buildMechanismIntegrityRules({
+      chapterNumber: context.draft.chapterNumber,
+      projectName: context.projectName,
+      projectDescription: context.projectDescription,
+      bible: context.bible,
+      plotState: context.plotState
+    });
+    const longFormPlanRules = buildLongFormPlanRules(context.longFormPlan, context.draft.chapterNumber);
     const response = await requestAiJson<Partial<StoredReviewReport> & { issues?: unknown }>({
       messages: [
         {
@@ -1325,14 +1652,27 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
             {
               draft: context.draft,
               taskCard: context.taskCard,
+              projectDescription: context.projectDescription,
               bible: context.bible,
               plotState: context.plotState,
+              longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
               lastLedger: context.lastLedger,
+              currentLedger: context.currentLedger,
               characters: context.characters,
               foreshadowings: context.foreshadowings,
               reviewRules: [
                 "必须检查正文是否偏离创作圣经中的目标读者、作品类型、主分类、题材边界、作品标签和禁止偏离项。",
+                ...premiseAnchorRules,
+                ...mechanismIntegrityRules,
+                ...longFormPlanRules,
+                "必须检查正文是否只是在延续上一章支线，却没有让本章目标、收益、冲突或章末钩子回到核心承诺；如果是，应标为 high severity 的“主线偏移风险”。",
+                "必须逐项核验本章收益：收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否造成阶段越级；如果来源偷换或越级过快，应标为 high severity 的“关键机制失真”。",
+                "如果正文保留了关键机制的名词，但实际让主角靠另一套资源、奇遇、外力或副本收益完成核心成长，应指出这是机制偷换，并建议改成符合关键机制的小收益、线索或外部诱因。",
+                "如果角色为了遮掩真相对外编造收益来源，正文必须明确这是借口或误导，不能让读者或项目台账误以为真实成长来源已经变成另一套机制。",
+                "不要按固定题材关键词审稿；判断标准是桥段功能是否服务项目简介、核心爽点、关键机制和当前主线目标。",
                 "如果正文把故事写成另一个频道、另一个题材，或无视主题/角色标签，应作为 high severity 问题指出。",
+                "不要把已经进入当前章节台账、主线状态、资源状态、地图势力、人物档案或伏笔表的信息标为“未入库”；只有长期复用的信息完全没有被记录时，才提醒用户确认补充。",
+                "一次性岗位、临时地点、普通道具、普通交易或过场公司名称，不要默认要求用户手动同步；除非它会成为长期势力、长期规则、关键资源来源或主线线索。",
                 "如果任务卡 rulesNotToBreak 与正文冲突，应指出冲突位置和改法。",
                 "AI 味要单独检查：长段落、抽象总结、书面腔、模板式推进、过度解释、句式平均、缺少具体动作和对话，都要明确指出。",
                 "如果正文存在明显 AI 味，即使章末钩子也有问题，也不能只报钩子；AI 味问题必须单独列出。",

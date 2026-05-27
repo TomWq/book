@@ -7,6 +7,14 @@ import { formatReviewText } from "@/lib/review-display";
 
 const styleOptions = ["快节奏强爽点", "悬疑推进", "轻松爽文", "热血升级", "压迫反转", "细腻情绪"];
 
+function formatWanWords(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "未设置";
+  }
+
+  return `${Math.round(value / 10000)} 万字`;
+}
+
 export default async function ProjectStatePage({
   params
 }: {
@@ -40,6 +48,7 @@ export default async function ProjectStatePage({
   const latestLedger = state.ledgers[0];
   const latestReview = state.reviews[0];
   const latestCharacter = state.characters[0];
+  const latestLongFormPlan = state.longFormPlans[0] ?? null;
   const keySettingCount = [
     state.bible.corePleasure,
     state.bible.protagonistDesire,
@@ -119,6 +128,131 @@ export default async function ProjectStatePage({
 
       <div className="state-layout">
         <div className="state-main">
+      <details id="long-form-plan" className="state-editor-section" open={!latestLongFormPlan}>
+        <summary>
+          <span>
+            <strong>长篇规划 / 总纲节奏</strong>
+            <small>全书卷纲、成长上限、收益频率、前100章和100章后收束。</small>
+          </span>
+          <span className="state-section-tag">
+            {latestLongFormPlan
+              ? `${formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 ${latestLongFormPlan.estimatedChapters} 章`
+              : "未生成"}
+          </span>
+        </summary>
+        <div className="list">
+          {latestLongFormPlan ? (
+            <>
+              <div className="list-item">
+                <div className="row">
+                  <strong>
+                    目标 {formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 {latestLongFormPlan.estimatedChapters} 章
+                  </strong>
+                  <span className="pill success">任务卡已接入</span>
+                </div>
+                <div className="muted">{latestLongFormPlan.corePromise || latestLongFormPlan.planningBasis}</div>
+              </div>
+              <div className="writing-context-grid">
+                <div className="task-block compact-context-card">
+                  <div className="task-title">卷 / 阶段规划</div>
+                  <div className="muted clamped-text three-lines">
+                    {latestLongFormPlan.volumePlan.slice(0, 3).join("；") || "暂无阶段规划"}
+                  </div>
+                </div>
+                <div className="task-block compact-context-card">
+                  <div className="task-title">成长节奏</div>
+                  <div className="muted clamped-text three-lines">
+                    {latestLongFormPlan.progressionPacing.slice(0, 3).join("；") || "暂无成长节奏"}
+                  </div>
+                </div>
+                <div className="task-block compact-context-card">
+                  <div className="task-title">收益频率</div>
+                  <div className="muted clamped-text three-lines">
+                    {latestLongFormPlan.rewardPacing.slice(0, 3).join("；") || "暂无收益频率"}
+                  </div>
+                </div>
+                <div className="task-block compact-context-card">
+                  <div className="task-title">前100章节奏</div>
+                  <div className="muted clamped-text three-lines">
+                    {latestLongFormPlan.first100Pacing || "暂无前100章节奏"}
+                  </div>
+                </div>
+                <div className="task-block compact-context-card">
+                  <div className="task-title">100章后收束</div>
+                  <div className="muted clamped-text three-lines">
+                    {latestLongFormPlan.post100Pacing || "暂无100章后规划"}
+                  </div>
+                </div>
+              </div>
+              <details className="writing-context-details">
+                <summary>查看规划硬约束</summary>
+                <div className="writing-context-full">
+                  <div className="task-block">
+                    <div className="task-title">前10章功能</div>
+                    <div className="meta-row">
+                      {latestLongFormPlan.first10Chapters.length > 0 ? (
+                        latestLongFormPlan.first10Chapters.map((item) => (
+                          <span key={item} className="chip">
+                            {item}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="chip">暂无前10章规划</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="task-block">
+                    <div className="task-title">任务卡硬规则</div>
+                    <div className="meta-row">
+                      {latestLongFormPlan.progressionRules.length > 0 ? (
+                        latestLongFormPlan.progressionRules.map((item) => (
+                          <span key={item} className="chip">
+                            {item}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="chip">暂无硬规则</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </>
+          ) : (
+            <div className="empty-state">
+              <strong>还没有长篇规划</strong>
+              <span>建议开写前先生成一次。它会作为任务卡的远期边界，但不会替代每章台账和主线状态。</span>
+            </div>
+          )}
+
+          <ApiForm
+            className="forms writing-form"
+            endpoint={`/api/projects/${projectId}/writing`}
+            body={{ action: "generate_long_form_plan" }}
+            resetOnSuccess
+            pendingTitle="正在生成长篇规划"
+            pendingDescription="正在规划总篇幅、卷结构、成长上限、收益频率、前100章和后期收束。"
+          >
+            <div className="writing-form-grid">
+              <div className="field">
+                <div className="field-label">目标总字数</div>
+                <input
+                  name="targetTotalWords"
+                  inputMode="numeric"
+                  placeholder={latestLongFormPlan ? String(latestLongFormPlan.targetTotalWords) : "例如：300000"}
+                />
+                <div className="field-hint">可留空，系统会从创作圣经/作品体量里推断；30 万字就填 300000。</div>
+              </div>
+            </div>
+            <div className="hero-actions writing-submit-row">
+              <button className="button primary" type="submit">
+                {latestLongFormPlan ? "重新生成长篇规划" : "生成长篇规划"}
+              </button>
+            </div>
+          </ApiForm>
+        </div>
+      </details>
+
       <details id="project-info" className="state-editor-section">
         <summary>
           <span>

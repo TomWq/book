@@ -73,8 +73,8 @@ export async function AppShell({ children }: { children: ReactNode }) {
                   输入激活码
                 </Link>
               ) : (
-                <Link href="/download" className="button primary">
-                  下载客户端
+                <Link href="/activate" className="button primary">
+                  输入授权码
                 </Link>
               )}
             </span>

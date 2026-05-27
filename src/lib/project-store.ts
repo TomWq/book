@@ -19,6 +19,7 @@ export const initialStore: AppStore = {
   characterProfiles: [],
   foreshadowings: [],
   plotStates: [],
+  longFormPlans: [],
   customRelationGraphs: [],
   writingTaskCards: [],
   chapterDrafts: [],

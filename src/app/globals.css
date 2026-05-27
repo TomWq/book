@@ -2981,7 +2981,7 @@ form[aria-busy="true"] button[type="submit"] {
 
 .download-grid {
   display: grid;
-  grid-template-columns: minmax(340px, 1.08fr) minmax(330px, 0.92fr);
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -2999,6 +2999,7 @@ form[aria-busy="true"] button[type="submit"] {
     0 18px 46px rgba(0, 0, 0, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.07);
   backdrop-filter: blur(14px);
+  overflow: hidden;
 }
 
 .download-card.disabled {
@@ -3060,7 +3061,6 @@ form[aria-busy="true"] button[type="submit"] {
   max-width: none;
   font-size: 14px;
   line-height: 1.45;
-  white-space: nowrap;
 }
 
 .download-primary-main > .download-card-meta {
@@ -3147,8 +3147,7 @@ form[aria-busy="true"] button[type="submit"] {
   font-size: 11px;
   font-weight: 800;
   line-height: 1.45;
-  overflow-wrap: normal;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .download-card-button {
@@ -3210,7 +3209,6 @@ form[aria-busy="true"] button[type="submit"] {
 .download-secondary-card h2 {
   font-size: 19px;
   font-weight: 900;
-  white-space: nowrap;
 }
 
 .download-secondary-card .download-card-version {
@@ -4311,6 +4309,19 @@ form[aria-busy="true"] button[type="submit"] {
   display: grid;
   place-items: center;
   padding: 34px 16px;
+}
+
+.action-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(31, 94, 255, 0.06), transparent 34%),
+    rgba(241, 246, 253, 0.46);
+  backdrop-filter: blur(6px) saturate(1.05);
 }
 
 .app-shell-auth .route-loading-stage {
@@ -5625,10 +5636,42 @@ form[aria-busy="true"] button[type="submit"] {
   background: #fff9ed;
 }
 
+.review-apply-item.focused {
+  border-color: rgba(31, 94, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(31, 94, 255, 0.08);
+}
+
 .review-apply-copy {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+.review-apply-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-apply-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.review-status-pill {
+  min-height: 22px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.review-apply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .field textarea.editable-draft-textarea {
@@ -5723,6 +5766,10 @@ form[aria-busy="true"] button[type="submit"] {
 
   .review-apply-item {
     grid-template-columns: 1fr;
+  }
+
+  .review-apply-actions {
+    justify-content: flex-start;
   }
 
   .draft-preview-overlay {
@@ -9129,6 +9176,54 @@ form[aria-busy="true"] button[type="submit"] {
   flex-wrap: wrap;
 }
 
+.ai-provider-recommend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(198, 209, 228, 0.72);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(248, 250, 252, 0.96)),
+    linear-gradient(90deg, rgba(31, 94, 255, 0.055), rgba(77, 190, 208, 0.035));
+  color: var(--muted);
+}
+
+.ai-provider-recommend-mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(31, 94, 255, 0.08);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-provider-recommend div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ai-provider-recommend strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ai-provider-recommend span {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-provider-recommend .button {
+  flex: 0 0 auto;
+}
+
 .chip-button {
   cursor: pointer;
 }
@@ -10023,6 +10118,28 @@ form[aria-busy="true"] button[type="submit"] {
   justify-self: end;
   color: var(--muted);
   font-size: 12px;
+}
+
+.target-word-guide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  text-align: right;
+}
+
+.target-word-recommend {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid rgba(31, 94, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(31, 94, 255, 0.08);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .field-label-row {
@@ -11109,6 +11226,12 @@ form[aria-busy="true"] button[type="submit"] {
   box-shadow: 0 20px 54px rgba(0, 0, 0, 0.28);
 }
 
+:root[data-theme="dark"] .action-loading-overlay {
+  background:
+    radial-gradient(circle at 50% 38%, rgba(77, 190, 208, 0.08), transparent 34%),
+    rgba(12, 18, 27, 0.48);
+}
+
 :root[data-theme="dark"] .loading-bookmark {
   background: rgba(77, 190, 208, 0.12);
 }
@@ -11199,6 +11322,11 @@ form[aria-busy="true"] button[type="submit"] {
 :root[data-theme="dark"] .review-apply-item.manual {
   border-color: rgba(212, 168, 95, 0.36);
   background: rgba(212, 168, 95, 0.12);
+}
+
+:root[data-theme="dark"] .target-word-recommend {
+  border-color: rgba(77, 190, 208, 0.28);
+  background: rgba(77, 190, 208, 0.12);
 }
 
 :root[data-theme="dark"] .field textarea.editable-draft-textarea,
@@ -11426,6 +11554,17 @@ form[aria-busy="true"] button[type="submit"] {
 :root[data-theme="dark"] .release-package-list {
   border-color: var(--line);
   background: var(--bg-elevated);
+}
+
+:root[data-theme="dark"] .ai-provider-recommend {
+  border-color: rgba(148, 163, 184, 0.24);
+  background:
+    linear-gradient(180deg, rgba(31, 41, 55, 0.72), rgba(17, 24, 39, 0.94)),
+    linear-gradient(90deg, rgba(74, 112, 255, 0.1), rgba(77, 190, 208, 0.06));
+}
+
+:root[data-theme="dark"] .ai-provider-recommend-mark {
+  background: rgba(96, 165, 250, 0.12);
 }
 
 :root[data-theme="dark"] .release-package-row {
@@ -11862,6 +12001,7 @@ form[aria-busy="true"] button[type="submit"] {
   .download-slogan {
     min-height: 250px;
     justify-content: center;
+    transform: none;
   }
 
   .download-calligraphy {
@@ -11879,6 +12019,22 @@ form[aria-busy="true"] button[type="submit"] {
 
   .download-card {
     grid-template-columns: 1fr;
+  }
+
+  .download-secondary-card {
+    grid-template-columns: 1fr;
+  }
+
+  .download-secondary-heading,
+  .download-secondary-card p,
+  .download-secondary-card > .download-card-meta,
+  .download-secondary-card .download-card-button {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .download-secondary-card p {
+    max-width: none;
   }
 
   .download-card-button {

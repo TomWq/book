@@ -25,7 +25,9 @@ export default async function AiSettingsPage() {
         <div className="hero-top">
           <div>
             <h1>配置你自己的 AI 服务</h1>
-            <p>保存兼容 OpenAI 的请求地址、API Key 和模型名，客户端会用这组配置完成拆书、创作和审稿。</p>
+            <p>
+              保存兼容 OpenAI 的请求地址、API Key 和模型名，{desktopRuntime ? "客户端" : "网页工作台"}会用这组配置完成拆书、创作和审稿。
+            </p>
           </div>
           <div className="hero-actions">
             <span className="chip">当前模型 {settings.model || "未配置"}</span>

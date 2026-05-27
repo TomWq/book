@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
 import { DraftRevisionEditor } from "@/components/draft-revision-editor";
+import { FullBookExportActions } from "@/components/full-book-export-actions";
 import { Panel } from "@/components/panel";
 import { StreamDraftButton } from "@/components/stream-draft-button";
 import { getProjectAnalysis, getProjectWritingState } from "@/lib/projects";
@@ -87,6 +88,14 @@ function findLineByPrefix(value: string | undefined, prefix: string) {
     .trim() ?? "";
 }
 
+function formatWanWords(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "未设置";
+  }
+
+  return `${Math.round(value / 10000)} 万字`;
+}
+
 export default async function ProjectWritingPage({
   params
 }: {
@@ -152,6 +161,7 @@ export default async function ProjectWritingPage({
     .slice(0, 4);
   const storyAnalysis = analysisState.storyAnalysis;
   const hasAnalysisContext = analysisState.chapterAnalyses.length > 0 || Boolean(storyAnalysis);
+  const latestLongFormPlan = writingState.longFormPlans[0] ?? null;
   const protagonistSummary = writingState.characters.length > 0
     ? writingState.characters.slice(0, 3).map((character) => character.name).join("、")
     : firstReadableText(findLineByPrefix(writingState.bible.protagonistDesire, "核心主角：")) || "主角待补充";
@@ -172,6 +182,7 @@ export default async function ProjectWritingPage({
     `人物 ${writingState.characters.length}`,
     `伏笔 ${writingState.foreshadowings.length}`,
     `章节 ${chapterDirectoryAll.length}`,
+    latestLongFormPlan ? "已有长篇规划" : "缺少长篇规划",
     hasAnalysisContext ? `拆书 ${analysisState.chapterAnalyses.length}` : "未接入拆书"
   ];
 
@@ -253,6 +264,18 @@ export default async function ProjectWritingPage({
               ? `可引用 ${analysisState.chapterAnalyses.length.toLocaleString("zh-CN")} 个章节拆解结果。任务卡只借鉴结构、节奏和爽点功能，不照搬原书内容。`
               : "当前项目还没有有效拆书分析。任务卡会只参考创作圣经、主线状态、人物和伏笔。"}
           </div>
+          <div className={latestLongFormPlan ? "quote-box compact-note" : "quote-box warning-box compact-note"}>
+            <div className="row">
+              <span>
+                {latestLongFormPlan
+                  ? `长篇规划已接入：${formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 ${latestLongFormPlan.estimatedChapters} 章。`
+                  : "还没有生成长篇规划；任务卡会保守推进，但建议先到状态页补总纲。"}
+              </span>
+              <Link className="button small-button" href={`/projects/${projectId}/state#long-form-plan`}>
+                管理长篇规划
+              </Link>
+            </div>
+          </div>
         </div>
       </Panel>
 
@@ -266,9 +289,19 @@ export default async function ProjectWritingPage({
               body={{ action: "generate_task_card", chapterNumber: taskCardChapterNumber }}
               booleanFields={["useAnalysisContext"]}
               resetOnSuccess
+              pendingTitle={`正在生成第 ${taskCardChapterNumber} 章任务卡`}
+              pendingDescription="正在读取创作圣经、人物状态、伏笔和主线进度。"
             >
               <div className="quote-box">
                 当前准备生成第 {taskCardChapterNumber} 章任务卡。不确定怎么填时可以直接点生成；只在你想强制指定本章目标、爽点或章末钩子时再填写对应项。
+              </div>
+              <div className="quote-box compact-note">
+                任务卡会自动校验“收益机制”：本章如果有能力、境界、金钱、资源、地位、权限、情报或关系收益，必须写清收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否越级。
+              </div>
+              <div className={latestLongFormPlan ? "quote-box compact-note" : "quote-box warning-box compact-note"}>
+                {latestLongFormPlan
+                  ? "已接入长篇规划：任务卡会参考总篇幅、前100章节奏、成长上限和收益频率。"
+                  : "建议先生成上方长篇规划；没有规划时会保守推进，但无法明确约束多少章小提升、多少章大提升。"}
               </div>
               <label className="option-row">
                 <input name="useAnalysisContext" type="checkbox" defaultChecked />
@@ -299,8 +332,14 @@ export default async function ProjectWritingPage({
                   <input name="mainPlotProgress" placeholder="本章必须推动哪条主线？" />
                 </div>
                 <div className="field">
-                  <div className="field-label">要释放的爽点</div>
-                  <input name="pleasurePoint" placeholder="例如：主角用信息差反压对手。" />
+                  <div className="field-label">要释放的爽点 / 收益机制</div>
+                  <input
+                    name="pleasurePoint"
+                    placeholder="例如：小收益：拿到试用岗位；来源：面试通过；触发：正式入职；符合关键机制：收入提升；越级：否。"
+                  />
+                  <div className="field-hint">
+                    可留空自动生成；如果手动填写，建议包含：收益是什么 / 来源是什么 / 触发条件 / 是否符合关键机制 / 是否越级。
+                  </div>
                 </div>
                 <div className="field">
                   <div className="field-label">章末钩子</div>
@@ -334,6 +373,10 @@ export default async function ProjectWritingPage({
                 <div className="task-block">
                   <div className="task-title">主线推进</div>
                   <div className="muted">{activeTaskCard.mainPlotProgress}</div>
+                </div>
+                <div className="task-block">
+                  <div className="task-title">爽点 / 收益机制</div>
+                  <div className="muted">{activeTaskCard.pleasurePoint}</div>
                 </div>
                 <div className="task-block">
                   <div className="task-title">禁止违反</div>
@@ -401,15 +444,20 @@ export default async function ProjectWritingPage({
                     chapterNumber={activeDraft.chapterNumber}
                     title={activeDraft.title}
                   />
+                  <FullBookExportActions projectName={writingState.project.name} drafts={writingState.drafts} />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
                     body={{ action: "create_ledger", draftId: activeDraft.id }}
                     label="生成章节台账"
+                    pendingTitle="正在生成章节台账"
+                    pendingDescription="正在提取本章事件、人物变化、伏笔和章末钩子。"
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
                     body={{ action: "review_draft", draftId: activeDraft.id }}
-                    label="一致性审稿"
+                    label={activeReview ? "重新审稿并合并建议" : "一致性审稿"}
+                    pendingTitle={activeReview ? "正在重新审稿" : "正在一致性审稿"}
+                    pendingDescription="正在检查设定、人物状态、章末钩子和 AI 味表达。"
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
@@ -448,6 +496,8 @@ export default async function ProjectWritingPage({
                       endpoint={`/api/projects/${projectId}/writing`}
                       body={{ action: "create_ledger", draftId: activeDraft.id }}
                       label="生成章节台账"
+                      pendingTitle="正在生成章节台账"
+                      pendingDescription="正在提取本章事件、人物变化、伏笔和章末钩子。"
                     />
                   ) : null}
                 </div>

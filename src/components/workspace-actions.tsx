@@ -92,11 +92,13 @@ export function WorkspaceActions({
                 AI 设置
               </Link>
               <Link href="/settings/account" onClick={() => setOpenMenu("")}>
-                数据与授权
+                {desktopRuntime ? "数据与授权" : "账号与数据"}
               </Link>
-              <Link href="/settings/account#version-update" onClick={() => setOpenMenu("")}>
-                检查更新
-              </Link>
+              {desktopRuntime ? (
+                <Link href="/settings/account#version-update" onClick={() => setOpenMenu("")}>
+                  检查更新
+                </Link>
+              ) : null}
               <Link href="/manual" onClick={() => setOpenMenu("")}>
                 使用手册
               </Link>

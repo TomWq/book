@@ -1,7 +1,8 @@
 import {
   countDraftCharacters,
   isChapterDraftEndingIncomplete,
-  minimumDraftCharacters,
+  minimumDraftExpansionCharacters,
+  minimumSavableDraftCharacters,
   prepareChapterDraftContentForSave,
   streamChapterDraftClosingTextWithAi,
   streamChapterDraftExpansionTextWithAi,
@@ -19,6 +20,7 @@ import {
 export const runtime = "nodejs";
 
 const streamDraftSavingMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_SAVING]]";
+const streamDraftFinalMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_FINAL]]";
 
 function streamText(
   handler: (enqueue: (chunk: string) => void) => Promise<void>
@@ -60,7 +62,7 @@ async function streamFallbackText(text: string, enqueue: (chunk: string) => void
 }
 
 function hasUsableDraftContent(content: string, targetWordCount?: number) {
-  return countDraftCharacters(content) >= minimumDraftCharacters(targetWordCount);
+  return countDraftCharacters(content) >= minimumSavableDraftCharacters(targetWordCount);
 }
 
 export async function POST(
@@ -122,11 +124,11 @@ export async function POST(
 
           if (
             usedAi &&
-            (countDraftCharacters(content) < minimumDraftCharacters(targetWordCount) ||
+            (countDraftCharacters(content) < minimumDraftExpansionCharacters(targetWordCount) ||
               isChapterDraftEndingIncomplete(content))
           ) {
             await appendExpansion(
-              `正文需要补足，正在续写完整结尾：当前 ${countDraftCharacters(content)} 字，最低参考 ${minimumDraftCharacters(targetWordCount)} 字`
+              `正文需要补足，正在续写完整结尾：当前 ${countDraftCharacters(content)} 字，目标参考 ${minimumDraftExpansionCharacters(targetWordCount)} 字`
             );
           }
 
@@ -138,6 +140,8 @@ export async function POST(
           const isLengthLimit = message.includes("长度限制") || message.toLowerCase().includes("length");
 
           if (content.trim()) {
+            let closingErrorMessage = "";
+
             if (isLengthLimit || isChapterDraftEndingIncomplete(content)) {
               try {
                 await appendClosing(`AI 输出被长度限制截断，正在补完整句结尾：当前 ${countDraftCharacters(content)} 字`);
@@ -146,26 +150,35 @@ export async function POST(
                   await appendClosing("补尾后结尾仍不完整，正在最后一次补完整句");
                 }
               } catch (expansionError) {
-                throw new Error(
-                  `${message}；尝试补写结尾失败：${expansionError instanceof Error ? expansionError.message : "补写失败"}，未保存为章节草稿。`
-                );
+                closingErrorMessage = expansionError instanceof Error ? expansionError.message : "补写失败";
               }
             }
 
             if (isChapterDraftEndingIncomplete(content)) {
               const completedContent = prepareChapterDraftContentForSave(content, targetWordCount);
 
-              if (completedContent && completedContent !== content) {
+              if (
+                completedContent &&
+                hasUsableDraftContent(completedContent, targetWordCount) &&
+                !isChapterDraftEndingIncomplete(completedContent)
+              ) {
+                const trimmedForSave = completedContent !== content;
                 content = completedContent;
-                enqueue("\n\n[补尾仍不稳定，已保留到最后一个完整句保存]\n\n");
+                if (trimmedForSave) {
+                  enqueue("\n\n[补尾仍不稳定，已保留到最后一个完整句保存]\n\n");
+                }
               } else {
-                throw new Error(`${message}；正文结尾仍然不完整，未保存为章节草稿。`);
+                throw new Error(
+                  closingErrorMessage
+                    ? `${message}；尝试补写结尾失败：${closingErrorMessage}，正文结尾仍然不完整，未保存为章节草稿。`
+                    : `${message}；正文结尾仍然不完整，未保存为章节草稿。`
+                );
               }
             }
 
             if (!hasUsableDraftContent(content, targetWordCount)) {
               throw new Error(
-                `${message}；已生成正文只有 ${countDraftCharacters(content)} 字，低于最低要求 ${minimumDraftCharacters(targetWordCount)} 字，未保存为章节草稿。`
+                `${message}；已生成正文只有 ${countDraftCharacters(content)} 字，低于最低保存要求 ${minimumSavableDraftCharacters(targetWordCount)} 字，未保存为章节草稿。`
               );
             }
 
@@ -182,7 +195,7 @@ export async function POST(
 
       enqueue(`\n\n${streamDraftSavingMarker}\n\n`);
 
-      await saveStreamedChapterDraft({
+      const draft = await saveStreamedChapterDraft({
         projectId: prepared.projectId,
         taskCardId: prepared.taskCard.id,
         jobId: prepared.jobId,
@@ -190,6 +203,10 @@ export async function POST(
         usedAi,
         tokenUsage: combineAiTokenUsages(tokenUsages)
       });
+
+      if (draft.content.trim() !== content.trim()) {
+        enqueue(`\n\n${streamDraftFinalMarker}\n${draft.content}`);
+      }
     });
   }
 

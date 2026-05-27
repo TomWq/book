@@ -45,6 +45,14 @@ export const AI_TASK_PRICING_DEFINITIONS: AiTaskPricingDefinition[] = [
     multiplier: 1
   },
   {
+    type: "generate_long_form_plan",
+    label: "生成长篇规划",
+    unitLabel: "次",
+    baseCredits: 300,
+    unitCredits: 0,
+    multiplier: 1
+  },
+  {
     type: "project_creation_assist",
     label: "建书辅助",
     unitLabel: "次",

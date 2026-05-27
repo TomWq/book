@@ -3,22 +3,61 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { novelTaxonomy, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
+import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
+
+type AnalysisTaxonomyStyle = "fanqie" | "qidian";
 
 function asText(value: FormDataEntryValue | null) {
   return String(value ?? "").trim();
+}
+
+function getGenreOptions(style: AnalysisTaxonomyStyle, reader: TargetReader) {
+  return style === "qidian" ? qidianTaxonomyByReader[reader] : novelTaxonomy[reader].mainCategories;
+}
+
+function hasSubCategories(category: unknown): category is { subCategories: string[] } {
+  return Boolean(
+    category &&
+      typeof category === "object" &&
+      Array.isArray((category as { subCategories?: unknown }).subCategories)
+  );
 }
 
 export function AnalysisProjectForm() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [taxonomyStyle, setTaxonomyStyle] = useState<AnalysisTaxonomyStyle>("fanqie");
   const [targetReader, setTargetReader] = useState<TargetReader>("男频");
   const [genre, setGenre] = useState(novelTaxonomy.男频.mainCategories[0].name);
+  const [subCategory, setSubCategory] = useState("");
+
+  const genreOptions = getGenreOptions(taxonomyStyle, targetReader);
+  const selectedCategory = genreOptions.find((category) => category.name === genre) ?? genreOptions[0];
+  const qidianSubCategories = taxonomyStyle === "qidian" && hasSubCategories(selectedCategory)
+    ? selectedCategory.subCategories
+    : [];
+  const selectedSubCategory = taxonomyStyle === "qidian" ? subCategory || qidianSubCategories[0] || "" : "";
+  const projectGenre = taxonomyStyle === "qidian" && selectedSubCategory ? `${genre} / ${selectedSubCategory}` : genre;
 
   function updateTargetReader(nextReader: TargetReader) {
     setTargetReader(nextReader);
-    setGenre(novelTaxonomy[nextReader].mainCategories[0].name);
+    const nextCategory = getGenreOptions(taxonomyStyle, nextReader)[0];
+    setGenre(nextCategory.name);
+    setSubCategory(hasSubCategories(nextCategory) ? nextCategory.subCategories[0] ?? "" : "");
+  }
+
+  function updateTaxonomyStyle(nextStyle: AnalysisTaxonomyStyle) {
+    setTaxonomyStyle(nextStyle);
+    const nextCategory = getGenreOptions(nextStyle, targetReader)[0];
+    setGenre(nextCategory.name);
+    setSubCategory(hasSubCategories(nextCategory) ? nextCategory.subCategories[0] ?? "" : "");
+  }
+
+  function updateGenre(nextGenre: string) {
+    setGenre(nextGenre);
+    const nextCategory = genreOptions.find((category) => category.name === nextGenre);
+    setSubCategory(hasSubCategories(nextCategory) ? nextCategory.subCategories[0] ?? "" : "");
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -31,6 +70,8 @@ export function AnalysisProjectForm() {
     const analysisGoal = asText(formData.get("analysisGoal"));
     const description = [
       sourceTitle ? `原书/来源：${sourceTitle}` : "",
+      `分类体系：${taxonomyStyle === "qidian" ? "起点体系" : "番茄体系"}`,
+      `目标读者：${targetReader}`,
       analysisGoal ? `分析目标：${analysisGoal}` : ""
     ].filter(Boolean).join("\n");
 
@@ -41,7 +82,7 @@ export function AnalysisProjectForm() {
         body: JSON.stringify({
           name: asText(formData.get("name")),
           type: "analysis",
-          genre,
+          genre: projectGenre,
           description
         })
       });
@@ -97,9 +138,41 @@ export function AnalysisProjectForm() {
       </div>
 
       <div className="field">
-        <div className="field-label">题材方向</div>
-        <select name="genre" value={genre} onChange={(event) => setGenre(event.target.value)}>
-          {novelTaxonomy[targetReader].mainCategories.map((category) => (
+        <div className="field-label">分类体系</div>
+        <div className="title-style-picker" aria-label="拆书题材分类体系">
+          <label>
+            <input
+              type="radio"
+              name="taxonomyStyle"
+              value="fanqie"
+              checked={taxonomyStyle === "fanqie"}
+              onChange={() => updateTaxonomyStyle("fanqie")}
+            />
+            <span>
+              <strong>番茄体系</strong>
+              <small>按番茄常见主分类拆解题材方向</small>
+            </span>
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="taxonomyStyle"
+              value="qidian"
+              checked={taxonomyStyle === "qidian"}
+              onChange={() => updateTaxonomyStyle("qidian")}
+            />
+            <span>
+              <strong>起点体系</strong>
+              <small>按起点大类和子类标记来源作品</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div className="field">
+        <div className="field-label">{taxonomyStyle === "qidian" ? "起点大类" : "题材方向"}</div>
+        <select name="genre" value={genre} onChange={(event) => updateGenre(event.target.value)}>
+          {genreOptions.map((category) => (
             <option key={category.name} value={category.name}>
               {category.name} - {category.description}
             </option>
@@ -107,9 +180,22 @@ export function AnalysisProjectForm() {
         </select>
       </div>
 
+      {taxonomyStyle === "qidian" ? (
+        <div className="field">
+          <div className="field-label">起点子类</div>
+          <select name="subCategory" value={selectedSubCategory} onChange={(event) => setSubCategory(event.target.value)}>
+            {qidianSubCategories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
       <div className="analysis-genre-summary">
-        <strong>{genre}</strong>
-        <span>{novelTaxonomy[targetReader].mainCategories.find((category) => category.name === genre)?.description}</span>
+        <strong>{projectGenre}</strong>
+        <span>{selectedCategory?.description}</span>
       </div>
 
       <div className="field">

@@ -90,6 +90,7 @@ export async function proxy(request: NextRequest) {
 
   const publicPaths = new Set([
     "/",
+    "/activate",
     "/download",
     "/downloads",
     "/legal",
@@ -99,6 +100,7 @@ export async function proxy(request: NextRequest) {
     "/api/download",
     "/api/jobs/worker",
     "/api/license/activate",
+    "/api/license/web-login",
     "/api/license/restore",
     "/api/license/verify"
   ]);
@@ -112,10 +114,6 @@ export async function proxy(request: NextRequest) {
     return nextWithPath(request);
   }
 
-  if (pathname === "/login" || pathname === "/register") {
-    return NextResponse.redirect(new URL("/download", request.url));
-  }
-
   if (hasSession) {
     if (pathname === adminLoginPath) {
       return NextResponse.redirect(new URL("/admin", request.url));
@@ -126,6 +124,10 @@ export async function proxy(request: NextRequest) {
 
   if (pathname === adminLoginPath) {
     return rewriteWithPath(request, "/login", "/login");
+  }
+
+  if (pathname === "/login" || pathname === "/register") {
+    return NextResponse.redirect(new URL("/activate", request.url));
   }
 
   if (publicPaths.has(pathname) || pathname.startsWith("/api/download/") || pathname.startsWith("/api/app/tauri-update/")) {
@@ -141,7 +143,7 @@ export async function proxy(request: NextRequest) {
   }
 
   const url = request.nextUrl.clone();
-  url.pathname = adminLoginPath;
+  url.pathname = "/activate";
   url.searchParams.set("next", pathname);
   return NextResponse.redirect(url);
 }

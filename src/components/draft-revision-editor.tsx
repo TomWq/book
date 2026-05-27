@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { ActionLoadingOverlay } from "@/components/api-form";
 import { formatReviewText } from "@/lib/review-display";
 
 type ReviewIssue = {
@@ -26,6 +27,10 @@ type IssueApplyAnalysis = {
   insertAfter: boolean;
   reason: string;
 };
+type IssueFocusResult = {
+  found: boolean;
+  message: string;
+};
 
 function countTextCharacters(value: string) {
   return value.replace(/\s/g, "").length;
@@ -44,14 +49,141 @@ function plainLocationText(issue: ReviewIssue) {
   return value.length >= 2 && value.length <= 400 ? value : "";
 }
 
-function issueOriginalTexts(issue: ReviewIssue) {
+function chineseNumberToInteger(value: string) {
+  const digits: Record<string, number> = {
+    零: 0,
+    一: 1,
+    二: 2,
+    两: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9
+  };
+
+  if (/^\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  if (value === "十") {
+    return 10;
+  }
+
+  const tenIndex = value.indexOf("十");
+
+  if (tenIndex >= 0) {
+    const left = value.slice(0, tenIndex);
+    const right = value.slice(tenIndex + 1);
+    return (left ? digits[left] ?? 0 : 1) * 10 + (right ? digits[right] ?? 0 : 0);
+  }
+
+  return digits[value] ?? 0;
+}
+
+function paragraphReference(issue: ReviewIssue) {
+  const match = issue.location.match(/(?:正文)?第\s*([一二两三四五六七八九十\d]{1,3})\s*段/u);
+  const number = match ? chineseNumberToInteger(match[1]) : 0;
+
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function contentParagraphs(content: string) {
+  return content
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+}
+
+function contentParagraphRanges(content: string) {
+  return Array.from(content.matchAll(/\S[\s\S]*?(?=\n{2,}|$)/g)).map((match) => {
+    const raw = match[0];
+    const rawStart = match.index ?? 0;
+    const leadingWhitespace = raw.length - raw.trimStart().length;
+    const trimmedEnd = raw.trimEnd().length;
+
+    return {
+      text: raw.trim(),
+      start: rawStart + leadingWhitespace,
+      end: rawStart + trimmedEnd
+    };
+  }).filter((item) => item.text);
+}
+
+function compactTextWithMap(value: string) {
+  const chars: string[] = [];
+  const map: number[] = [];
+
+  Array.from(value).forEach((char, index) => {
+    if (/\s/.test(char)) {
+      return;
+    }
+
+    chars.push(char);
+    map.push(index);
+  });
+
+  return {
+    text: chars.join(""),
+    map
+  };
+}
+
+function issueOriginalTexts(content: string, issue: ReviewIssue) {
   const suggestionQuotes = quotedTexts(issue.suggestion);
   const quotedOriginal =
     suggestionQuotes.length >= 2 && /将|把|在|原句|后补|补入|改为|改成|替换/.test(issue.suggestion)
       ? suggestionQuotes[0]
       : "";
-  const candidates = [...quotedTexts(issue.location), quotedOriginal, plainLocationText(issue)];
+  const paragraphNumber = paragraphReference(issue);
+  const paragraphOriginal = paragraphNumber ? contentParagraphs(content)[paragraphNumber - 1] ?? "" : "";
+  const candidates = [paragraphOriginal, quotedOriginal, ...quotedTexts(issue.location), plainLocationText(issue)];
   return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+function findIssueTextRange(content: string, issue: ReviewIssue) {
+  const analysis = analyzeIssueApply(content, issue);
+  const exactCandidates = Array.from(
+    new Set([analysis.original, ...issueOriginalTexts(content, issue)].filter(Boolean))
+  ).sort((a, b) => b.length - a.length);
+
+  for (const candidate of exactCandidates) {
+    const index = content.indexOf(candidate);
+
+    if (index >= 0) {
+      return { start: index, end: index + candidate.length };
+    }
+  }
+
+  const paragraphNumber = paragraphReference(issue);
+
+  if (paragraphNumber) {
+    const paragraph = contentParagraphRanges(content)[paragraphNumber - 1];
+
+    if (paragraph) {
+      return { start: paragraph.start, end: paragraph.end };
+    }
+  }
+
+  const compactContent = compactTextWithMap(content);
+  const compactCandidates = exactCandidates
+    .map((candidate) => compactTextWithMap(candidate).text)
+    .filter((candidate) => candidate.length >= 8)
+    .sort((a, b) => b.length - a.length);
+
+  for (const candidate of compactCandidates) {
+    const index = compactContent.text.indexOf(candidate);
+
+    if (index >= 0) {
+      const start = compactContent.map[index] ?? 0;
+      const end = (compactContent.map[index + candidate.length - 1] ?? start) + 1;
+      return { start, end };
+    }
+  }
+
+  return null;
 }
 
 function issueReplacementText(issue: ReviewIssue) {
@@ -76,12 +208,48 @@ function hasCompleteSentenceEnding(value: string) {
   return /[。！？!?…」』”’"）)]$/.test(value.trim());
 }
 
+function hasContinuationEnding(value: string) {
+  return /(?:——|—|：|:)$/.test(value.trim());
+}
+
+function hasSafeReplacementEnding(original: string, replacement: string, insertAfter: boolean) {
+  if (hasCompleteSentenceEnding(replacement)) {
+    return true;
+  }
+
+  return !insertAfter && hasContinuationEnding(original) && hasContinuationEnding(replacement);
+}
+
+function normalizedLength(value: string) {
+  return value.replace(/\s/g, "").length;
+}
+
+function isShortInlineReplacement(original: string, replacement: string, issue: ReviewIssue, insertAfter: boolean) {
+  if (insertAfter) {
+    return false;
+  }
+
+  const originalLength = normalizedLength(original);
+  const replacementLength = normalizedLength(replacement);
+  const isRewriteSuggestion = /将|把|改为|改成|替换|换成|名字|名称|称呼|全名|人名/.test(issue.suggestion);
+  const hasSentencePunctuation = /[。！？!?；;\n]/.test(`${original}${replacement}`);
+
+  return (
+    isRewriteSuggestion &&
+    originalLength >= 2 &&
+    replacementLength >= 2 &&
+    originalLength <= 30 &&
+    replacementLength <= 30 &&
+    !hasSentencePunctuation
+  );
+}
+
 function looksLikeInstruction(value: string) {
   return /建议|可以|需要|应该|尽量|补一个|补入一段|改成具体|口语化|节奏|优化|相应变化|等相应|自行|手动|检查|确认/.test(value);
 }
 
 function analyzeIssueApply(content: string, issue: ReviewIssue): IssueApplyAnalysis {
-  const original = issueOriginalTexts(issue).find((candidate) => content.includes(candidate)) ?? "";
+  const original = issueOriginalTexts(content, issue).find((candidate) => content.includes(candidate)) ?? "";
   const replacement = issueReplacementText(issue);
   const insertAfter = /后(?:补入|补上|补一段|加入|添加|增加)|之后(?:补入|补上|加入|添加|增加)/.test(
     issue.suggestion
@@ -93,7 +261,9 @@ function analyzeIssueApply(content: string, issue: ReviewIssue): IssueApplyAnaly
       original: "",
       replacement: "",
       insertAfter,
-      reason: "没有识别到正文中的完整原句。"
+      reason: paragraphReference(issue)
+        ? "已识别到段落定位，但对应段落或摘录与当前正文不一致，请手动确认。"
+        : "没有识别到正文中的完整原句。"
     };
   }
 
@@ -127,7 +297,7 @@ function analyzeIssueApply(content: string, issue: ReviewIssue): IssueApplyAnaly
     };
   }
 
-  if (!hasCompleteSentenceEnding(replacement)) {
+  if (!hasSafeReplacementEnding(original, replacement, insertAfter) && !isShortInlineReplacement(original, replacement, issue, insertAfter)) {
     return {
       canApply: false,
       original,
@@ -137,7 +307,7 @@ function analyzeIssueApply(content: string, issue: ReviewIssue): IssueApplyAnaly
     };
   }
 
-  if (!insertAfter && original.replace(/\s/g, "").length >= 30 && replacement.replace(/\s/g, "").length < original.replace(/\s/g, "").length * 0.55) {
+  if (!insertAfter && normalizedLength(original) >= 30 && normalizedLength(replacement) < normalizedLength(original) * 0.55) {
     return {
       canApply: false,
       original,
@@ -183,6 +353,7 @@ export function DraftRevisionEditor({
   reviewIssues?: ReviewIssue[];
 }) {
   const router = useRouter();
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [content, setContent] = useState(initialContent);
   const [state, setState] = useState<{
     status: "idle" | "saving" | "saved" | "error";
@@ -190,6 +361,7 @@ export function DraftRevisionEditor({
   }>({ status: "idle" });
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [issueStatuses, setIssueStatuses] = useState<Record<number, IssueApplyStatus>>({});
+  const [focusedIssueIndex, setFocusedIssueIndex] = useState<number | null>(null);
   const characterCount = countTextCharacters(content);
   const hasChanges = content !== initialContent;
 
@@ -197,21 +369,51 @@ export function DraftRevisionEditor({
     return issueStatuses[index] ?? (canAutoApplyIssue(content, issue) ? "pending" : "manual");
   }
 
+  function focusIssue(issue: ReviewIssue, index: number): IssueFocusResult {
+    const range = findIssueTextRange(content, issue);
+    const textarea = textareaRef.current;
+
+    if (!range || !textarea) {
+      setFocusedIssueIndex(null);
+      return {
+        found: false,
+        message: "没有在正文里定位到对应原句，可以按这条建议的修改方向手动搜索关键词。"
+      };
+    }
+
+    setFocusedIssueIndex(index);
+    textarea.focus();
+    textarea.setSelectionRange(range.start, range.end);
+
+    const selectionRatio = range.start / Math.max(1, content.length);
+    textarea.scrollTop = Math.max(0, selectionRatio * textarea.scrollHeight - textarea.clientHeight * 0.28);
+    textarea.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    return {
+      found: true,
+      message: `已定位到建议 ${index + 1} 对应的正文位置，选中的内容可以直接改。`
+    };
+  }
+
   function applyOne(issue: ReviewIssue, index: number) {
     const result = applyIssueToText(content, issue);
 
     if (!result.applied) {
+      const focusResult = focusIssue(issue, index);
       setIssueStatuses((current) => ({ ...current, [index]: "manual" }));
       setApplyResult({
         applied: 0,
         skipped: 1,
-        message: result.reason || "这条建议不适合自动替换，已保留给你手动修改。"
+        message: focusResult.found
+          ? `${result.reason || "这条建议不适合自动替换。"}${focusResult.message}`
+          : result.reason || focusResult.message
       });
       return;
     }
 
     setContent(result.content);
     setIssueStatuses((current) => ({ ...current, [index]: "applied" }));
+    setFocusedIssueIndex(index);
     setApplyResult({
       applied: 1,
       skipped: 0,
@@ -259,14 +461,6 @@ export function DraftRevisionEditor({
   async function saveDraft() {
     if (!hasChanges) {
       setState({ status: "idle", message: "正文没有变化，无需保存。" });
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "确定保存并替换当前章节正文吗？保存后本章原有台账和审稿结果会失效，需要重新生成。"
-    );
-
-    if (!confirmed) {
       return;
     }
 
@@ -333,11 +527,14 @@ export function DraftRevisionEditor({
                     : "pill";
 
               return (
-                <div className={`review-apply-item ${status}`} key={`${issue.type}-${issue.location}-${index}`}>
+                <div
+                  className={`review-apply-item ${status} ${focusedIssueIndex === index ? "focused" : ""}`}
+                  key={`${issue.type}-${issue.location}-${index}`}
+                >
                   <div className="review-apply-copy">
-                    <div className="meta-row">
-                      <span className={statusClass}>{statusLabel}</span>
-                      <span className="muted">建议 {index + 1}</span>
+                    <div className="review-apply-meta">
+                      <span className="review-apply-title">建议 {index + 1}</span>
+                      <span className={`${statusClass} review-status-pill`}>{statusLabel}</span>
                     </div>
                     <div className="muted">
                       {formatReviewText(issue.location) || "正文相关段落"}：{formatReviewText(issue.suggestion)}
@@ -348,14 +545,33 @@ export function DraftRevisionEditor({
                       </div>
                     ) : null}
                   </div>
-                  <button
-                    className="mini-action-button"
-                    type="button"
-                    onClick={() => applyOne(issue, index)}
-                    disabled={status === "applied" || status === "manual"}
-                  >
-                    {status === "applied" ? "已套用" : status === "manual" ? "手动处理" : "套用到编辑框"}
-                  </button>
+                  <div className="review-apply-actions">
+                    <button
+                      className="mini-action-button"
+                      type="button"
+                      onClick={() => applyOne(issue, index)}
+                      disabled={status === "applied" || status === "manual"}
+                    >
+                      {status === "applied" ? "已套用" : status === "manual" ? "手动处理" : "套用到编辑框"}
+                    </button>
+                    {status !== "applied" ? (
+                      <button
+                        className="mini-action-button"
+                        type="button"
+                        onClick={() => {
+                          const result = focusIssue(issue, index);
+                          setIssueStatuses((current) => ({ ...current, [index]: "manual" }));
+                          setApplyResult({
+                            applied: 0,
+                            skipped: result.found ? 0 : 1,
+                            message: result.message
+                          });
+                        }}
+                      >
+                        定位原文
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
@@ -370,6 +586,7 @@ export function DraftRevisionEditor({
           <span className="chip">{characterCount.toLocaleString("zh-CN")} 字</span>
         </div>
         <textarea
+          ref={textareaRef}
           className="saved-draft-textarea editable-draft-textarea"
           value={content}
           onChange={(event) => {
@@ -379,6 +596,12 @@ export function DraftRevisionEditor({
         />
       </div>
       <div className="hero-actions">
+        {state.status === "saving" ? (
+          <ActionLoadingOverlay
+            title="正在保存替换正文"
+            description="正在更新章节正文，并清理旧台账和旧审稿结果。"
+          />
+        ) : null}
         <button
           className="button primary"
           type="button"

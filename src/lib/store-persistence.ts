@@ -299,6 +299,25 @@ function ensureSqliteSchema() {
       CONSTRAINT "PlotState_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS "LongFormPlan" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "projectId" TEXT NOT NULL,
+      "targetTotalWords" INTEGER NOT NULL,
+      "estimatedChapters" INTEGER NOT NULL,
+      "planningBasis" TEXT NOT NULL,
+      "corePromise" TEXT NOT NULL,
+      "volumePlan" JSON,
+      "progressionPacing" JSON,
+      "rewardPacing" JSON,
+      "first10Chapters" JSON,
+      "first100Pacing" TEXT NOT NULL,
+      "post100Pacing" TEXT NOT NULL DEFAULT '',
+      "progressionRules" JSON,
+      "createdAt" DATETIME NOT NULL,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "LongFormPlan_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS "CustomRelationGraph" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "projectId" TEXT NOT NULL,
@@ -555,6 +574,7 @@ function ensureSqliteSchema() {
     'ALTER TABLE "PlotState" ADD COLUMN "mapAndForces" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "resourceState" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "relationshipChanges" JSON',
+    'ALTER TABLE "LongFormPlan" ADD COLUMN "post100Pacing" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "ChapterAnalysis" ADD COLUMN "entityRelations" JSON',
     'ALTER TABLE "EditReport" ADD COLUMN "draftId" TEXT'
   ].forEach((statement) => {
@@ -646,6 +666,7 @@ function syncCoreTables(store: unknown) {
   const characterProfiles = asRecordArray(store, "characterProfiles");
   const foreshadowings = asRecordArray(store, "foreshadowings");
   const plotStates = asRecordArray(store, "plotStates");
+  const longFormPlans = asRecordArray(store, "longFormPlans");
   const customRelationGraphs = asRecordArray(store, "customRelationGraphs");
   const writingTaskCards = asRecordArray(store, "writingTaskCards");
   const chapterDrafts = asRecordArray(store, "chapterDrafts");
@@ -668,6 +689,7 @@ function syncCoreTables(store: unknown) {
     db.prepare('DELETE FROM "ChapterDraft"').run();
     db.prepare('DELETE FROM "WritingTaskCard"').run();
     db.prepare('DELETE FROM "CustomRelationGraph"').run();
+    db.prepare('DELETE FROM "LongFormPlan"').run();
     db.prepare('DELETE FROM "PlotState"').run();
     db.prepare('DELETE FROM "Foreshadowing"').run();
     db.prepare('DELETE FROM "CharacterProfile"').run();
@@ -1096,6 +1118,34 @@ function syncCoreTables(store: unknown) {
       });
     });
 
+    const insertLongFormPlan = db.prepare(`
+      INSERT INTO "LongFormPlan" (
+        "id", "projectId", "targetTotalWords", "estimatedChapters", "planningBasis", "corePromise", "volumePlan", "progressionPacing", "rewardPacing", "first10Chapters", "first100Pacing", "post100Pacing", "progressionRules", "createdAt", "updatedAt"
+      ) VALUES (
+        @id, @projectId, @targetTotalWords, @estimatedChapters, @planningBasis, @corePromise, @volumePlan, @progressionPacing, @rewardPacing, @first10Chapters, @first100Pacing, @post100Pacing, @progressionRules, @createdAt, @updatedAt
+      )
+    `);
+
+    longFormPlans.forEach((item) => {
+      insertLongFormPlan.run({
+        id: text(item.id),
+        projectId: text(item.projectId),
+        targetTotalWords: integer(item.targetTotalWords),
+        estimatedChapters: integer(item.estimatedChapters),
+        planningBasis: text(item.planningBasis),
+        corePromise: text(item.corePromise),
+        volumePlan: jsonText(item.volumePlan),
+        progressionPacing: jsonText(item.progressionPacing),
+        rewardPacing: jsonText(item.rewardPacing),
+        first10Chapters: jsonText(item.first10Chapters),
+        first100Pacing: text(item.first100Pacing),
+        post100Pacing: text(item.post100Pacing),
+        progressionRules: jsonText(item.progressionRules),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      });
+    });
+
     const insertCustomRelationGraph = db.prepare(`
       INSERT INTO "CustomRelationGraph" (
         "id", "projectId", "title", "description", "nodes", "edges", "createdAt", "updatedAt"
@@ -1507,6 +1557,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
       "CharacterProfile",
       "Foreshadowing",
       "PlotState",
+      "LongFormPlan",
       "WritingTaskCard",
       "ChapterDraft",
       "ChapterLedger",
@@ -1717,6 +1768,23 @@ function readCoreStoreFromDb<T>(fallback: T) {
         mapAndForces: text(item.mapAndForces),
         resourceState: text(item.resourceState),
         relationshipChanges: parseJsonArray(item.relationshipChanges),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      })),
+      longFormPlans: rows(db, "LongFormPlan").map((item) => ({
+        id: text(item.id),
+        projectId: text(item.projectId),
+        targetTotalWords: integer(item.targetTotalWords),
+        estimatedChapters: integer(item.estimatedChapters),
+        planningBasis: text(item.planningBasis),
+        corePromise: text(item.corePromise),
+        volumePlan: parseJsonArray(item.volumePlan),
+        progressionPacing: parseJsonArray(item.progressionPacing),
+        rewardPacing: parseJsonArray(item.rewardPacing),
+        first10Chapters: parseJsonArray(item.first10Chapters),
+        first100Pacing: text(item.first100Pacing),
+        post100Pacing: text(item.post100Pacing),
+        progressionRules: parseJsonArray(item.progressionRules),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
       })),

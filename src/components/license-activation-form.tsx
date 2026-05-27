@@ -6,11 +6,19 @@ import { useRouter } from "next/navigation";
 export function LicenseActivationForm({
   nextPath,
   initialError,
-  replaceExisting = false
+  replaceExisting = false,
+  endpoint = "/api/license/activate",
+  submitLabel,
+  submittingLabel,
+  helperText
 }: {
   nextPath: string;
   initialError?: string;
   replaceExisting?: boolean;
+  endpoint?: string;
+  submitLabel?: string;
+  submittingLabel?: string;
+  helperText?: string;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -30,7 +38,7 @@ export function LicenseActivationForm({
     const formData = new FormData(event.currentTarget);
 
     try {
-      const response = await fetch("/api/license/activate", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -42,7 +50,7 @@ export function LicenseActivationForm({
 
       if (!response.ok) {
         const body = await response.json().catch(() => null);
-        setError(body?.error ? String(body.error) : "激活失败，请检查激活码");
+        setError(body?.error ? String(body.error) : "授权失败，请检查授权码");
         return;
       }
 
@@ -73,13 +81,13 @@ export function LicenseActivationForm({
           />
         </label>
         <button className="button auth-submit" type="submit" disabled={isBusy}>
-          {isSubmitting ? "正在连接授权中心..." : isPending ? "正在进入..." : replaceExisting ? "验证并更换授权" : "验证并进入"}
+          {isSubmitting ? submittingLabel || "正在连接授权中心..." : isPending ? "正在进入..." : submitLabel || (replaceExisting ? "验证并更换授权" : "验证并进入")}
         </button>
         {isSubmitting ? <div className="pill form-status">正在验证授权码，请不要关闭页面。</div> : null}
       </form>
 
       <div className="auth-switch">
-        <span>{replaceExisting ? "更换授权只替换本机授权状态，不会删除本地项目和创作数据。" : "授权码一次性使用，已用过就不能再次激活。"}</span>
+        <span>{helperText || (replaceExisting ? "更换授权只替换本机授权状态，不会删除本地项目和创作数据。" : "授权码一次性使用，已用过就不能再次激活。")}</span>
       </div>
     </>
   );
