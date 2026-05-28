@@ -28,6 +28,21 @@ function rewriteWithPath(request: NextRequest, pathname: string, headerPath = pa
   });
 }
 
+function rewriteAdminLogin(request: NextRequest, pathname: string, headerPath = pathname) {
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nw-pathname", headerPath);
+
+  const url = request.nextUrl.clone();
+  url.pathname = pathname;
+  url.searchParams.set("next", "/admin");
+
+  return NextResponse.rewrite(url, {
+    request: {
+      headers: requestHeaders
+    }
+  });
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
@@ -114,16 +129,12 @@ export async function proxy(request: NextRequest) {
     return nextWithPath(request);
   }
 
-  if (hasSession) {
-    if (pathname === adminLoginPath) {
-      return NextResponse.redirect(new URL("/admin", request.url));
-    }
-
-    return nextWithPath(request);
+  if (pathname === adminLoginPath) {
+    return rewriteAdminLogin(request, "/login", "/login");
   }
 
-  if (pathname === adminLoginPath) {
-    return rewriteWithPath(request, "/login", "/login");
+  if (hasSession) {
+    return nextWithPath(request);
   }
 
   if (pathname === "/login" || pathname === "/register") {

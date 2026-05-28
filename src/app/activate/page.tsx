@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AppIconMark } from "@/components/app-icon-mark";
 import { LicenseActivationForm } from "@/components/license-activation-form";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getSubscriptionActivationStatus } from "@/lib/desktop-license-status";
@@ -33,7 +34,8 @@ export default async function ActivatePage({
   searchParams: Promise<{ error?: string; next?: string; mode?: string }>;
 }) {
   const params = await searchParams;
-  const desktopRuntime = isDesktopRuntime();
+  const forceWebEntry = params.mode === "web";
+  const desktopRuntime = isDesktopRuntime() && !forceWebEntry;
   const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
   const replaceExisting = desktopRuntime && params.mode === "replace";
   const rawError = params.error ?? "";
@@ -65,7 +67,7 @@ export default async function ActivatePage({
       <div className="auth-immersive">
         <header className="auth-immersive-nav">
           <Link href="/activate" className="auth-immersive-brand">
-            <span>书</span>
+            <AppIconMark className="auth-brand-icon" />
             <strong>AI 网文写作助手</strong>
           </Link>
           <nav>
@@ -90,8 +92,8 @@ export default async function ActivatePage({
                 {replaceExisting
                   ? "输入新的授权码，本机作品和设置会继续保留。"
                   : desktopRuntime
-                    ? "输入交付给你的一次性授权码，验证后进入写作工作台。"
-                    : "输入交付给你的授权码，验证后进入网页工作台。"}
+                    ? "输入交付给你的一次性桌面授权码，验证后进入写作工作台。"
+                    : "输入交付给你的网页特邀授权码，验证后进入网页工作台。"}
               </p>
             </div>
             <div className="chip">{replaceExisting ? "更换授权" : desktopRuntime ? "授权码" : "网页入口"}</div>
@@ -106,7 +108,7 @@ export default async function ActivatePage({
             submittingLabel={desktopRuntime ? undefined : "正在验证授权码..."}
             helperText={desktopRuntime
               ? undefined
-              : "网页入口只面向指定用户。授权码会绑定到你的网页工作台账号。"}
+              : "网页入口只面向特邀用户。请使用网页特邀授权码，桌面授权码不能在这里使用。"}
           />
         </div>
 

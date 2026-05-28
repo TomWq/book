@@ -242,7 +242,7 @@ export function AiProfileManager({ profiles }: { profiles: AiProfile[] }) {
           <div className="field-label">请求地址</div>
           <input value={editing.baseUrl} placeholder="例如：https://api.openai.com/v1" onChange={(event) => setEditing({ ...editing, baseUrl: event.target.value })} />
         </div>
-        <div className="ai-provider-recommend" aria-label="第三方接口推荐">
+        {/* <div className="ai-provider-recommend" aria-label="第三方接口推荐">
           <span className="ai-provider-recommend-mark" aria-hidden="true">AI</span>
           <div>
             <strong>兼容接口推荐</strong>
@@ -251,7 +251,7 @@ export function AiProfileManager({ profiles }: { profiles: AiProfile[] }) {
           <button className="button small-button" type="button" onClick={() => void openExternalUrl(recommendedProviderUrl)}>
             了解一下
           </button>
-        </div>
+        </div> */}
         <div className="split-panels">
           <div className="field">
             <div className="field-label">API Key</div>

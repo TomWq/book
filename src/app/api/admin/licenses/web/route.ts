@@ -1,4 +1,4 @@
-import { generateAdminLicenseCodes, updateAdminLicenseCode } from "@/lib/projects";
+import { generateAdminLicenseCodes } from "@/lib/projects";
 
 export const runtime = "nodejs";
 
@@ -14,31 +14,13 @@ export async function POST(request: Request) {
       durationHours: Number(body.durationHours ?? 0),
       expiresAt: String(body.expiresAt ?? ""),
       notes: String(body.notes ?? ""),
-      purpose: String(body.purpose ?? "desktop") as "desktop" | "web"
+      purpose: "web"
     });
 
     return Response.json(result);
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "生成授权码失败" },
-      { status: 400 }
-    );
-  }
-}
-
-export async function PATCH(request: Request) {
-  const body = await request.json().catch(() => ({}));
-
-  try {
-    const result = await updateAdminLicenseCode({
-      licenseId: String(body.licenseId ?? ""),
-      action: String(body.action ?? "") as "disable" | "delete" | "resetMachine" | "setWebPurpose" | "setDesktopPurpose"
-    });
-
-    return Response.json(result);
-  } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "更新授权码失败" },
       { status: 400 }
     );
   }

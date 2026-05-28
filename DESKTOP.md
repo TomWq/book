@@ -39,7 +39,6 @@ macOS 本机可以打两个 Mac 包：
 
 ```bash
 npm run tauri:build:mac:arm64
-npm run tauri:build:mac:x64
 ```
 
 Windows 包建议走 GitHub Actions 原生 Windows runner：
@@ -54,8 +53,6 @@ GitHub Actions 会构建：
 ```text
 macOS Apple 芯片 DMG
 macOS Apple 芯片 updater 包和 .sig
-macOS Intel DMG
-macOS Intel updater 包和 .sig
 Windows x64 NSIS Setup.exe
 Windows x64 Setup.exe.sig
 ```

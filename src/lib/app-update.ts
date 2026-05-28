@@ -3,7 +3,7 @@ import path from "node:path";
 import packageJson from "../../package.json";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 
-export type AppDownloadKey = "win32X64" | "darwinArm64" | "darwinX64" | "generic";
+export type AppDownloadKey = "win32X64" | "darwinArm64" | "generic";
 
 export type AppUpdateFile = {
   label?: string;
@@ -22,7 +22,6 @@ export type AppUpdateFile = {
 export type AppUpdateDownloads = {
   win32X64?: string;
   darwinArm64?: string;
-  darwinX64?: string;
   generic?: string;
 };
 
@@ -33,16 +32,12 @@ const downloadTargets: Record<string, AppDownloadKey> = {
   "mac-arm64": "darwinArm64",
   "darwin-arm64": "darwinArm64",
   "mac-apple": "darwinArm64",
-  "mac-x64": "darwinX64",
-  "darwin-x64": "darwinX64",
-  "mac-intel": "darwinX64",
   generic: "generic"
 };
 
 const downloadKeyPaths: Record<AppDownloadKey, string> = {
   win32X64: "/api/download/windows",
   darwinArm64: "/api/download/mac-arm64",
-  darwinX64: "/api/download/mac-x64",
   generic: "/api/download/generic"
 };
 
@@ -57,7 +52,6 @@ export type AppUpdateManifest = {
   files?: {
     win32X64?: AppUpdateFile;
     darwinArm64?: AppUpdateFile;
-    darwinX64?: AppUpdateFile;
     generic?: AppUpdateFile;
   };
 };
@@ -167,7 +161,6 @@ function getEnvUpdateManifest(): AppUpdateManifest {
     downloads: {
       win32X64: normalizeUrl(process.env.APP_UPDATE_DOWNLOAD_WIN_URL),
       darwinArm64: normalizeUrl(process.env.APP_UPDATE_DOWNLOAD_MAC_ARM64_URL),
-      darwinX64: normalizeUrl(process.env.APP_UPDATE_DOWNLOAD_MAC_X64_URL),
       generic: normalizeUrl(process.env.APP_UPDATE_DOWNLOAD_URL)
     }
   };
@@ -194,7 +187,7 @@ export function getLocalUpdateManifest(): AppUpdateManifest {
 export function resolveAppDownloadKey(value: string | undefined | null): AppDownloadKey | null {
   const key = String(value ?? "").trim();
 
-  if (key === "win32X64" || key === "darwinArm64" || key === "darwinX64" || key === "generic") {
+  if (key === "win32X64" || key === "darwinArm64" || key === "generic") {
     return key;
   }
 
@@ -216,10 +209,6 @@ export function getAppDownloadKeyForPlatform(platform: string, arch: string): Ap
 
   if (platform === "darwin" && arch === "arm64") {
     return "darwinArm64";
-  }
-
-  if (platform === "darwin" && arch === "x64") {
-    return "darwinX64";
   }
 
   return "generic";
@@ -246,13 +235,11 @@ export function toPublicUpdateManifest(manifest: AppUpdateManifest, baseUrl?: st
     downloads: {
       win32X64: getManifestDownloadUrl(manifest, "win32X64") ? getAppDownloadUrl("win32X64", baseUrl) : "",
       darwinArm64: getManifestDownloadUrl(manifest, "darwinArm64") ? getAppDownloadUrl("darwinArm64", baseUrl) : "",
-      darwinX64: getManifestDownloadUrl(manifest, "darwinX64") ? getAppDownloadUrl("darwinX64", baseUrl) : "",
       generic: getManifestDownloadUrl(manifest, "generic") ? getAppDownloadUrl("generic", baseUrl) : ""
     },
     files: {
       win32X64: rewriteFile("win32X64", manifest.files?.win32X64),
       darwinArm64: rewriteFile("darwinArm64", manifest.files?.darwinArm64),
-      darwinX64: rewriteFile("darwinX64", manifest.files?.darwinX64),
       generic: rewriteFile("generic", manifest.files?.generic)
     }
   };
@@ -290,13 +277,11 @@ function normalizeManifest(value: unknown): AppUpdateManifest {
     downloads: {
       win32X64: normalizeUrl(readString(rawDownloads, "win32X64")),
       darwinArm64: normalizeUrl(readString(rawDownloads, "darwinArm64")),
-      darwinX64: normalizeUrl(readString(rawDownloads, "darwinX64")),
       generic: normalizeUrl(readString(rawDownloads, "generic"))
     },
     files: {
       win32X64: normalizeFile(files.win32X64),
       darwinArm64: normalizeFile(files.darwinArm64),
-      darwinX64: normalizeFile(files.darwinX64),
       generic: normalizeFile(files.generic)
     }
   };
@@ -357,10 +342,6 @@ function pickDownloadUrl(manifest: AppUpdateManifest, platform: string, arch: st
     return manifest.downloads.darwinArm64 || manifest.downloads.generic || "";
   }
 
-  if (platform === "darwin" && arch === "x64") {
-    return manifest.downloads.darwinX64 || manifest.downloads.generic || "";
-  }
-
   return manifest.downloads.generic || "";
 }
 
@@ -371,10 +352,6 @@ function pickDownloadFile(manifest: AppUpdateManifest, platform: string, arch: s
 
   if (platform === "darwin" && arch === "arm64") {
     return manifest.files?.darwinArm64 ?? manifest.files?.generic;
-  }
-
-  if (platform === "darwin" && arch === "x64") {
-    return manifest.files?.darwinX64 ?? manifest.files?.generic;
   }
 
   return manifest.files?.generic;

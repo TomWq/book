@@ -113,7 +113,7 @@ assertIncludes("src/lib/app-update.ts", [
   "compareAppVersions",
   "updaterSignature"
 ]);
-assertIncludes("src/app/download/page.tsx", ["Windows 版", "Mac 版", "Mac Intel 版"]);
+assertIncludes("src/app/download/page.tsx", ["Windows 版", "Mac 版", "Apple 芯片"]);
 assertIncludes("src/components/version-update-card.tsx", ["检查更新", "下载新版"]);
 assertIncludes("src/lib/store-persistence.ts", [
   "resolveSqliteFilePath",

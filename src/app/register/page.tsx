@@ -1,4 +1,5 @@
 import { AuthForm } from "@/components/auth-form";
+import { AppIconMark } from "@/components/app-icon-mark";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getCurrentUser } from "@/lib/projects";
 import Link from "next/link";
@@ -22,7 +23,7 @@ export default async function RegisterPage({
       <div className="auth-immersive">
         <header className="auth-immersive-nav">
           <Link href="/" className="auth-immersive-brand">
-            <span>书</span>
+            <AppIconMark className="auth-brand-icon" />
             <strong>AI 网文写作助手</strong>
             {/* <em>作者专区</em> */}
           </Link>

@@ -1,5 +1,5 @@
 import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import type { AppStore, StoredUser } from "@/lib/project-types";
+import type { AppStore, LicenseCodePurpose, StoredUser } from "@/lib/project-types";
 
 export type AuthUserView = {
   id: string;
@@ -11,6 +11,7 @@ export type AuthUserView = {
   role: "user" | "admin";
   plan: "trial" | "creator" | "studio";
   licenseCustomerId?: string;
+  licenseCodePurpose?: LicenseCodePurpose;
   licenseActivatedAt?: string;
   licenseExpiresAt?: string;
 };
@@ -43,6 +44,7 @@ export function toAuthUser(user: StoredUser): AuthUserView {
     role: user.role,
     plan: user.plan ?? "trial",
     licenseCustomerId: user.licenseCustomerId,
+    licenseCodePurpose: user.licenseCodePurpose,
     licenseActivatedAt: user.licenseActivatedAt,
     licenseExpiresAt: user.licenseExpiresAt
   };

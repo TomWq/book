@@ -22,7 +22,10 @@ export type LicenseActivationInput = {
   activationCode: string;
   machineHash?: string;
   clientName?: string;
+  purpose?: LicenseCodePurpose;
 };
+
+export type LicenseCodePurpose = "desktop" | "web";
 
 export type LicenseVerificationInput = {
   licenseId?: string;
@@ -35,6 +38,7 @@ export type LicenseActivationResult = {
   licenseId: string;
   customerId: string;
   codePreview: string;
+  purpose: LicenseCodePurpose;
   status: string;
   activatedAt: string;
   expiresAt?: string;
@@ -45,6 +49,10 @@ export type LicenseActivationResult = {
 
 function now() {
   return new Date().toISOString();
+}
+
+export function normalizeLicenseCodePurpose(value: unknown): LicenseCodePurpose {
+  return value === "web" ? "web" : "desktop";
 }
 
 function getLicenseStatusRefreshIntervalMs() {
@@ -84,6 +92,10 @@ function ensureLicenseExpiryStarted(license: StoredLicenseCode, activatedAt: str
   const baseTime = Number.isFinite(activatedTime) ? activatedTime : Date.now();
   license.expiresAt = new Date(baseTime + durationMinutes * 60 * 1000).toISOString();
   return true;
+}
+
+function defaultLegacyLicensePurpose(): LicenseCodePurpose {
+  return "desktop";
 }
 
 function hasMachineResetLog(store: AppStore, licenseId: string) {
@@ -161,6 +173,7 @@ export function syncLegacyConfiguredCodes(store: AppStore) {
       id: randomUUID(),
       codeHash,
       codePreview: previewActivationCode(code),
+      purpose: defaultLegacyLicensePurpose(),
       customerName: "本地演示授权",
       customerContact: "",
       status: "unused",
@@ -181,6 +194,7 @@ export function syncLegacyConfiguredCodes(store: AppStore) {
       id: randomUUID(),
       codeHash,
       codePreview: `${codeHash.slice(0, 6)}...`,
+      purpose: defaultLegacyLicensePurpose(),
       customerName: "本地演示授权",
       customerContact: "",
       status: "unused",
@@ -799,6 +813,7 @@ export function syncLocalLicenseSnapshot(
       id: licenseId,
       codeHash: input.codeHash,
       codePreview: input.license.codePreview || `${input.codeHash.slice(0, 6)}...`,
+      purpose: defaultLegacyLicensePurpose(),
       customerName: input.license.customerName,
       customerContact: input.license.customerContact,
       status: toUsedStatus(input.license.status),
@@ -817,6 +832,7 @@ export function syncLocalLicenseSnapshot(
 
   record.status = toUsedStatus(input.license.status);
   record.codePreview = input.license.codePreview || record.codePreview;
+  record.purpose = normalizeLicenseCodePurpose(record.purpose);
   record.customerName = input.license.customerName ?? record.customerName;
   record.customerContact = input.license.customerContact ?? record.customerContact;
   record.activationCount = Math.max(record.activationCount, 1);
@@ -830,6 +846,7 @@ export function syncLocalLicenseSnapshot(
 export async function activateLicenseWithCenter(input: LicenseActivationInput): Promise<LicenseActivationResult> {
   const normalizedCode = normalizeActivationCode(input.activationCode);
   const machineHash = normalizeMachineHash(input.machineHash);
+  const expectedPurpose = normalizeLicenseCodePurpose(input.purpose);
 
   if (!normalizedCode) {
     throw new Error("请填写授权码");
@@ -875,6 +892,12 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
     throw new Error("授权码不存在，请检查后重试");
   }
 
+  if (normalizeLicenseCodePurpose(license.purpose) !== expectedPurpose) {
+    log("failed", "wrong_purpose");
+    await writeStore(store);
+    throw new Error(expectedPurpose === "web" ? "该授权码仅用于客户端激活入口，请使用本机授权入口" : "该授权码仅用于网页特邀入口，请使用网页授权入口");
+  }
+
   if (license.status === "disabled") {
     log("failed", "disabled");
     await writeStore(store);
@@ -904,6 +927,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
         licenseId: license.id,
         customerId: license.id,
         codePreview: license.codePreview,
+        purpose: normalizeLicenseCodePurpose(license.purpose),
         status: license.status,
         activatedAt: license.activatedAt ?? timestamp,
         expiresAt: license.expiresAt,
@@ -933,6 +957,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
         licenseId: license.id,
         customerId: license.id,
         codePreview: license.codePreview,
+        purpose: normalizeLicenseCodePurpose(license.purpose),
         status: license.status,
         activatedAt: license.activatedAt,
         expiresAt: license.expiresAt,
@@ -961,6 +986,7 @@ export async function activateLicenseWithCenter(input: LicenseActivationInput): 
     licenseId: license.id,
     customerId: license.id,
     codePreview: license.codePreview,
+    purpose: normalizeLicenseCodePurpose(license.purpose),
     status: license.status,
     activatedAt: license.activatedAt,
     expiresAt: license.expiresAt,
@@ -1055,6 +1081,7 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
     licenseId: license.id,
     customerId: license.id,
     codePreview: license.codePreview,
+    purpose: normalizeLicenseCodePurpose(license.purpose),
     status: license.status,
     activatedAt: license.activatedAt ?? timestamp,
     expiresAt: license.expiresAt,
@@ -1090,6 +1117,7 @@ export function buildAdminLicenseCenter(
       id: license.id,
       plainCode: license.plainCode,
       codePreview: license.codePreview,
+      purpose: normalizeLicenseCodePurpose(license.purpose),
       customerName: license.customerName ?? "",
       customerContact: license.customerContact ?? "",
       status: normalizeLicenseStatus(license.status),

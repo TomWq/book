@@ -305,6 +305,14 @@ async function getCurrentUserFromStore(store: AppStore) {
     await writeStore(store);
   }
 
+  if (!user.licenseCodePurpose && user.licenseCodeHash) {
+    const license = store.licenseCodes.find((item) => item.codeHash === user.licenseCodeHash);
+    if (license?.purpose) {
+      user.licenseCodePurpose = license.purpose;
+      await writeStore(store);
+    }
+  }
+
   if (licenseState.status !== "active") {
     store.sessions = store.sessions.filter((item) => item.userId !== user.id);
     await writeStore(store);
@@ -517,6 +525,7 @@ export async function activateSubscriptionLicense(
       creditsBalance: 0,
       licenseCustomerId: license.customerId,
       licenseCodeHash: codeHash,
+      licenseCodePurpose: "desktop",
       licenseMachineHash: machineHash,
       licenseActivatedAt: license.activatedAt || timestamp,
       licenseExpiresAt: license.expiresAt || undefined,
@@ -528,6 +537,7 @@ export async function activateSubscriptionLicense(
   } else {
     user.licenseCustomerId = options?.replaceExisting ? license.customerId : user.licenseCustomerId || license.customerId;
     user.licenseCodeHash = options?.replaceExisting ? codeHash : user.licenseCodeHash || codeHash;
+    user.licenseCodePurpose = "desktop";
     user.licenseMachineHash = options?.replaceExisting ? machineHash : user.licenseMachineHash || machineHash;
     user.licenseActivatedAt = options?.replaceExisting ? license.activatedAt || timestamp : user.licenseActivatedAt || license.activatedAt || timestamp;
     user.licenseExpiresAt = license.expiresAt || undefined;
@@ -576,10 +586,6 @@ function webLicenseEmail(license: { customerContact?: string; customerId: string
 }
 
 export async function activateWebLicenseSession(input: LicenseActivationInput) {
-  if (isDesktopRuntime()) {
-    throw new Error("当前客户端请使用本机授权入口");
-  }
-
   const normalizedCode = normalizeActivationCode(input.activationCode);
 
   if (!normalizedCode) {
@@ -591,7 +597,8 @@ export async function activateWebLicenseSession(input: LicenseActivationInput) {
   const license = await activateLicenseWithCenter({
     activationCode: normalizedCode,
     machineHash,
-    clientName: normalizeLicenseText([input.clientName, "网页授权登录"].filter(Boolean).join(" | "))
+    clientName: normalizeLicenseText([input.clientName, "网页授权登录"].filter(Boolean).join(" | ")),
+    purpose: "web"
   });
   const store = await readStore();
   const timestamp = now();
@@ -612,6 +619,7 @@ export async function activateWebLicenseSession(input: LicenseActivationInput) {
       creditsBalance: 0,
       licenseCustomerId: license.customerId,
       licenseCodeHash: codeHash,
+      licenseCodePurpose: "web",
       licenseMachineHash: machineHash,
       licenseActivatedAt: license.activatedAt || timestamp,
       licenseExpiresAt: license.expiresAt || undefined,
@@ -623,6 +631,7 @@ export async function activateWebLicenseSession(input: LicenseActivationInput) {
   } else {
     user.licenseCustomerId = license.customerId;
     user.licenseCodeHash = codeHash;
+    user.licenseCodePurpose = "web";
     user.licenseMachineHash = machineHash;
     user.licenseActivatedAt = user.licenseActivatedAt || license.activatedAt || timestamp;
     user.licenseExpiresAt = license.expiresAt || undefined;
@@ -1847,6 +1856,7 @@ function buildAccountOverview(
       message: licenseState.message ?? "",
       customerId: user.licenseCustomerId ?? "",
       codePreview: license?.codePreview ?? "",
+      codePurpose: user.licenseCodePurpose ?? license?.purpose ?? undefined,
       machineHash: user.licenseMachineHash ?? license?.machineHash ?? "",
       activatedAt: user.licenseActivatedAt ?? license?.activatedAt ?? "",
       lastVerifiedAt: license?.lastVerifiedAt ?? "",
@@ -1963,6 +1973,7 @@ export async function generateAdminLicenseCodes(input: {
   durationHours?: number;
   expiresAt?: string;
   notes?: string;
+  purpose?: "desktop" | "web";
 }) {
   const store = await readStore();
   await requireAdminUser(store);
@@ -2000,6 +2011,7 @@ export async function generateAdminLicenseCodes(input: {
       codeHash,
       plainCode: code,
       codePreview: previewActivationCode(code),
+      purpose: input.purpose === "web" ? "web" : "desktop",
       customerName: normalizeLicenseText(input.customerName),
       customerContact: normalizeLicenseText(input.customerContact),
       status: "unused",
@@ -2016,12 +2028,15 @@ export async function generateAdminLicenseCodes(input: {
   }
 
   await writeStore(store);
+  console.info(
+    `[admin/licenses] generated purpose=${input.purpose === "web" ? "web" : "desktop"} quantity=${generated.length} codes=${generated.join(",")}`
+  );
   return { codes: generated, center: buildAdminLicenseCenter(store) };
 }
 
 export async function updateAdminLicenseCode(input: {
   licenseId: string;
-  action: "disable" | "delete" | "resetMachine";
+  action: "disable" | "delete" | "resetMachine" | "setWebPurpose" | "setDesktopPurpose";
 }) {
   const store = await readStore();
   await requireAdminUser(store);
@@ -2073,6 +2088,10 @@ export async function updateAdminLicenseCode(input: {
       createdAt: timestamp
     });
     store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
+  }
+
+  if (input.action === "setWebPurpose" || input.action === "setDesktopPurpose") {
+    license.purpose = input.action === "setWebPurpose" ? "web" : "desktop";
   }
 
   if (!["disable", "delete", "resetMachine"].includes(input.action)) {

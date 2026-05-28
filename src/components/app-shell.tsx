@@ -36,13 +36,14 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
   const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
+  const desktopClient = desktopRuntime && user?.licenseCodePurpose !== "web";
 
   if (!user && desktopRuntime) {
     const next = pathname && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
     redirect(`/activate${next}`);
   }
 
-  const isAdminMode = isAdmin && !desktopRuntime;
+  const isAdminMode = isAdmin && !desktopClient;
   const assistantName = displayAssistantName(user?.assistantName);
   const aiSetup = user && !isAdminMode
     ? await getCurrentUserAiSetupStatus()
@@ -100,11 +101,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
             </div>
 
             <WorkspaceActions
-              desktopRuntime={desktopRuntime}
+              desktopRuntime={desktopClient}
               isAdminMode={isAdminMode}
               userName={user.name}
               penName={user.penName}
               licenseExpiresAt={user.licenseExpiresAt}
+              licenseCodePurpose={user.licenseCodePurpose}
               adminLoginPath={adminLoginPath}
             />
           </header>
@@ -127,7 +129,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
       {user && !isAdminMode ? <FloatingWritingAssistant authorName={user.penName || user.name} assistantName={assistantName} /> : null}
       {user && !isAdminMode ? <PenNameOnboarding initialPenName={user.penName} /> : null}
-      {user && !isAdminMode && desktopRuntime ? <AutoUpdatePrompt /> : null}
+      {user && !isAdminMode && desktopClient ? <AutoUpdatePrompt /> : null}
     </div>
   );
 }

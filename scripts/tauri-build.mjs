@@ -232,15 +232,11 @@ function rustTargetTriple(platform, arch) {
     return "aarch64-apple-darwin";
   }
 
-  if (platform === "darwin" && arch === "x64") {
-    return "x86_64-apple-darwin";
-  }
-
   if (platform === "win32" && arch === "x64") {
     return "x86_64-pc-windows-msvc";
   }
 
-  throw new Error("当前 Tauri 打包脚本只支持 macOS arm64/x64 和 Windows x64。");
+  throw new Error("当前 Tauri 打包脚本只支持 macOS arm64 和 Windows x64。");
 }
 
 function nodeDistPlatform(platform) {

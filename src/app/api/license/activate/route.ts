@@ -26,7 +26,8 @@ export async function POST(request: Request) {
       const license = await activateLicenseWithCenter({
         activationCode: String(body.activationCode ?? ""),
         machineHash,
-        clientName: clientMeta
+        clientName: clientMeta,
+        purpose: "desktop"
       });
 
       return Response.json({ license });

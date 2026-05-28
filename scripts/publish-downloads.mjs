@@ -208,7 +208,6 @@ function toTauriUpdateManifest(manifest, config) {
 
   addTauriPlatform(platforms, ["windows-x86_64-nsis", "windows-x86_64", "windows-x64"], manifest.files.win32X64);
   addTauriPlatform(platforms, ["darwin-aarch64-app", "darwin-aarch64", "darwin-arm64-app", "darwin-arm64"], manifest.files.darwinArm64);
-  addTauriPlatform(platforms, ["darwin-x86_64-app", "darwin-x86_64", "darwin-x64-app", "darwin-x64"], manifest.files.darwinX64);
 
   return {
     version: manifest.version,
@@ -249,13 +248,6 @@ async function main() {
       updaterFileName: `AI网文写作助手-${artifactVersion}-arm64-mac.app.tar.gz`,
       platform: "darwin",
       arch: "arm64"
-    },
-    darwinX64: {
-      label: "macOS Intel",
-      fileName: `AI网文写作助手-${artifactVersion}-x64-mac.dmg`,
-      updaterFileName: `AI网文写作助手-${artifactVersion}-x64-mac.app.tar.gz`,
-      platform: "darwin",
-      arch: "x64"
     }
   };
   const prepared = Object.fromEntries(
@@ -273,8 +265,7 @@ async function main() {
     required: releaseNotes.required,
     downloads: {
       win32X64: prepared.win32X64.url,
-      darwinArm64: prepared.darwinArm64.url,
-      darwinX64: prepared.darwinX64.url
+      darwinArm64: prepared.darwinArm64.url
     },
     files: prepared
   };

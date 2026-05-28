@@ -17,14 +17,13 @@
 /Volumes/xinxin/book/release/AI网文写作助手-Setup-1.0.0-x64.exe
 ```
 
-如果发 macOS 内测包，需要按芯片分开：
+如果发 macOS 内测包，仅发布 Apple 芯片版本：
 
 ```text
 M 系列 Mac：mac arm64 包
-Intel Mac：mac x64 包
 ```
 
-不要把 M 系列包发给 Intel Mac 用户，Intel Mac 不能直接安装运行 arm64 包。
+旧款 x64 Mac 暂不提供内测安装包。
 
 ## 适合测试的人
 
@@ -229,7 +228,6 @@ APP_LATEST_VERSION
 APP_LATEST_RELEASE_NOTES
 APP_UPDATE_DOWNLOAD_WIN_URL
 APP_UPDATE_DOWNLOAD_MAC_ARM64_URL
-APP_UPDATE_DOWNLOAD_MAC_X64_URL
 ```
 
 如果使用 `npm run desktop:publish` 上传安装包，则不需要手动更新这些下载链接环境变量。上传脚本会在服务器 `public/downloads/manifest.json` 里写入最新版本、安装包地址和文件大小。

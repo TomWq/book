@@ -477,6 +477,7 @@ function ensureSqliteSchema() {
       "aiTaskPricingOverrides" JSON,
       "licenseCustomerId" TEXT,
       "licenseCodeHash" TEXT,
+      "licenseCodePurpose" TEXT,
       "licenseMachineHash" TEXT,
       "licenseActivatedAt" DATETIME,
       "licenseExpiresAt" DATETIME,
@@ -512,6 +513,7 @@ function ensureSqliteSchema() {
       "id" TEXT NOT NULL PRIMARY KEY,
       "codeHash" TEXT NOT NULL UNIQUE,
       "plainCode" TEXT,
+      "purpose" TEXT NOT NULL DEFAULT 'desktop',
       "codePreview" TEXT NOT NULL,
       "customerName" TEXT,
       "customerContact" TEXT,
@@ -553,11 +555,13 @@ function ensureSqliteSchema() {
     'ALTER TABLE "User" ADD COLUMN "aiTaskPricingOverrides" JSON',
     'ALTER TABLE "User" ADD COLUMN "licenseCustomerId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseCodeHash" TEXT',
+    'ALTER TABLE "User" ADD COLUMN "licenseCodePurpose" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseMachineHash" TEXT',
     'ALTER TABLE "User" ADD COLUMN "licenseActivatedAt" DATETIME',
     'ALTER TABLE "User" ADD COLUMN "licenseExpiresAt" DATETIME',
     'ALTER TABLE "User" ADD COLUMN "licenseSignedOutAt" DATETIME',
     'ALTER TABLE "LicenseCode" ADD COLUMN "plainCode" TEXT',
+    'ALTER TABLE "LicenseCode" ADD COLUMN "purpose" TEXT NOT NULL DEFAULT \'desktop\'',
     'ALTER TABLE "LicenseCode" ADD COLUMN "durationMinutes" INTEGER',
     'ALTER TABLE "AiJob" ADD COLUMN "userId" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "userId" TEXT',
@@ -714,9 +718,9 @@ function syncCoreTables(store: unknown) {
 
     const insertUser = db.prepare(`
       INSERT INTO "User" (
-        "id", "email", "name", "penName", "penNameSetAt", "assistantName", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "licenseSignedOutAt", "onboardingCompletedAt", "createdAt", "updatedAt"
+        "id", "email", "name", "penName", "penNameSetAt", "assistantName", "passwordSalt", "passwordHash", "role", "plan", "creditsBalance", "aiBillingMarkup", "aiBillingMinimum", "aiTaskPricingOverrides", "licenseCustomerId", "licenseCodeHash", "licenseCodePurpose", "licenseMachineHash", "licenseActivatedAt", "licenseExpiresAt", "licenseSignedOutAt", "onboardingCompletedAt", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @email, @name, @penName, @penNameSetAt, @assistantName, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @licenseSignedOutAt, @onboardingCompletedAt, @createdAt, @updatedAt
+        @id, @email, @name, @penName, @penNameSetAt, @assistantName, @passwordSalt, @passwordHash, @role, @plan, @creditsBalance, @aiBillingMarkup, @aiBillingMinimum, @aiTaskPricingOverrides, @licenseCustomerId, @licenseCodeHash, @licenseCodePurpose, @licenseMachineHash, @licenseActivatedAt, @licenseExpiresAt, @licenseSignedOutAt, @onboardingCompletedAt, @createdAt, @updatedAt
       )
     `);
 
@@ -739,6 +743,7 @@ function syncCoreTables(store: unknown) {
           user.aiTaskPricingOverrides == null ? null : JSON.stringify(user.aiTaskPricingOverrides),
         licenseCustomerId: nullableText(user.licenseCustomerId),
         licenseCodeHash: nullableText(user.licenseCodeHash),
+        licenseCodePurpose: nullableText(user.licenseCodePurpose),
         licenseMachineHash: nullableText(user.licenseMachineHash),
         licenseActivatedAt: user.licenseActivatedAt ? dateText(user.licenseActivatedAt) : null,
         licenseExpiresAt: user.licenseExpiresAt ? dateText(user.licenseExpiresAt) : null,
@@ -1365,9 +1370,9 @@ function syncCoreTables(store: unknown) {
 
     const insertLicenseCode = db.prepare(`
       INSERT INTO "LicenseCode" (
-        "id", "codeHash", "plainCode", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "durationMinutes", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
+        "id", "codeHash", "plainCode", "purpose", "codePreview", "customerName", "customerContact", "status", "maxActivations", "activationCount", "machineHash", "activatedAt", "lastVerifiedAt", "durationMinutes", "expiresAt", "disabledAt", "notes", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @codeHash, @plainCode, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @durationMinutes, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
+        @id, @codeHash, @plainCode, @purpose, @codePreview, @customerName, @customerContact, @status, @maxActivations, @activationCount, @machineHash, @activatedAt, @lastVerifiedAt, @durationMinutes, @expiresAt, @disabledAt, @notes, @createdAt, @updatedAt
       )
     `);
 
@@ -1376,6 +1381,7 @@ function syncCoreTables(store: unknown) {
         id: text(licenseCode.id),
         codeHash: text(licenseCode.codeHash),
         plainCode: nullableText(licenseCode.plainCode),
+        purpose: text((licenseCode as Record<string, unknown>).purpose) || "desktop",
         codePreview: text(licenseCode.codePreview),
         customerName: nullableText(licenseCode.customerName),
         customerContact: nullableText(licenseCode.customerContact),
@@ -1930,6 +1936,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
             : parseJsonObject(item.aiTaskPricingOverrides),
         licenseCustomerId: maybeString(item.licenseCustomerId),
         licenseCodeHash: maybeString(item.licenseCodeHash),
+        licenseCodePurpose: maybeString(item.licenseCodePurpose) === "web" ? "web" : maybeString(item.licenseCodePurpose) === "desktop" ? "desktop" : undefined,
         licenseMachineHash: maybeString(item.licenseMachineHash),
         licenseActivatedAt: maybeString(item.licenseActivatedAt),
         licenseExpiresAt: maybeString(item.licenseExpiresAt),
@@ -1961,6 +1968,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
         id: text(item.id),
         codeHash: text(item.codeHash),
         plainCode: maybeString(item.plainCode),
+        purpose: text(item.purpose) === "web" ? "web" : "desktop",
         codePreview: text(item.codePreview),
         customerName: maybeString(item.customerName),
         customerContact: maybeString(item.customerContact),

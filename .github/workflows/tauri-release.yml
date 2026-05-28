@@ -38,7 +38,7 @@ jobs:
         include:
           - name: macOS arm64
             platform: macos-latest
-            rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
+            rustTargets: aarch64-apple-darwin
             rustTarget: aarch64-apple-darwin
             prepareArgs: --mac --arm64
             tauriArgs: --target aarch64-apple-darwin
@@ -49,19 +49,6 @@ jobs:
             updaterArtifactPath: |
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
-          - name: macOS x64
-            platform: macos-latest
-            rustTargets: aarch64-apple-darwin,x86_64-apple-darwin
-            rustTarget: x86_64-apple-darwin
-            prepareArgs: --mac --x64
-            tauriArgs: --target x86_64-apple-darwin
-            artifactName: macos-x64
-            artifactPath: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*x64.dmg
-            updaterArtifactName: macos-x64-updater
-            updaterArtifactPath: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
-              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - name: Windows x64
             platform: windows-latest
             rustTargets: x86_64-pc-windows-msvc
@@ -171,9 +158,6 @@ jobs:
           copy_one "release-artifacts/macos-arm64" "*aarch64.dmg" "AI-Novel-Workbench-${VERSION}-arm64-mac.dmg"
           copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz" "AI-Novel-Workbench-${VERSION}-arm64-mac.app.tar.gz"
           copy_one "release-artifacts/macos-arm64-updater" "*.app.tar.gz.sig" "AI-Novel-Workbench-${VERSION}-arm64-mac.app.tar.gz.sig"
-          copy_one "release-artifacts/macos-x64" "*x64.dmg" "AI-Novel-Workbench-${VERSION}-x64-mac.dmg"
-          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz" "AI-Novel-Workbench-${VERSION}-x64-mac.app.tar.gz"
-          copy_one "release-artifacts/macos-x64-updater" "*.app.tar.gz.sig" "AI-Novel-Workbench-${VERSION}-x64-mac.app.tar.gz.sig"
 
           printf 'Prepared release assets:\n'
           find release-assets -maxdepth 1 -type f | sort | sed 's#^# - #'

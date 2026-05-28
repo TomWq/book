@@ -49,6 +49,12 @@ export function AuthForm({
       }
 
       const body = await response.json().catch(() => null);
+      if (nextPath === "/admin" && body?.user?.role !== "admin") {
+        setError("当前账号不是管理员，请使用管理员账号登录");
+        setIsPending(false);
+        return;
+      }
+
       const targetPath = body?.user?.role === "admin" ? "/admin" : nextPath;
       window.location.replace(targetPath);
     } catch {

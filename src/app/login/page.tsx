@@ -1,4 +1,5 @@
 import { AuthForm } from "@/components/auth-form";
+import { AppIconMark } from "@/components/app-icon-mark";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getCurrentUser } from "@/lib/projects";
 import Link from "next/link";
@@ -22,7 +23,7 @@ export default async function LoginPage({
       <div className="auth-immersive">
         <header className="auth-immersive-nav">
           <Link href="/" className="auth-immersive-brand">
-            <span>书</span>
+            <AppIconMark className="auth-brand-icon" />
             <strong>AI 网文写作助手</strong>
             {/* <em>作者专区</em> */}
           </Link>
@@ -48,7 +49,7 @@ export default async function LoginPage({
               <h2>{user ? "切换账号" : "密码登录"}</h2>
               <p>{user ? "输入另一个账号后，会直接切换当前登录身份。" : "继续进入你的写作工作台。"}</p>
             </div>
-            <div className="chip">邮箱登录</div>
+            <div className="chip auth-card-chip">邮箱登录</div>
           </div>
 
           {user ? (

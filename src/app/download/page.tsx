@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "下载中心 - AI 网文写作助手",
-  description: "下载 AI 网文写作助手 Windows 和 macOS 客户端。"
+  description: "下载 AI 网文写作助手 Windows 和 Apple 芯片 macOS 客户端。"
 };
 
 type DownloadOption = {
@@ -74,21 +74,9 @@ export default function DownloadPage() {
       arch: "Apple 芯片",
       url: getManifestDownloadUrl(manifest, "darwinArm64") ? getAppDownloadUrl("darwinArm64") : "",
       file: manifest.files?.darwinArm64
-    },
-    {
-      key: "darwinX64",
-      title: "Mac Intel 版",
-      shortTitle: "Mac Intel",
-      subtitle: "适用于 Intel 芯片 Mac。苹果芯片用户不要下载这个版本。",
-      platform: "macOS",
-      arch: "Intel",
-      url: getManifestDownloadUrl(manifest, "darwinX64") ? getAppDownloadUrl("darwinX64") : "",
-      file: manifest.files?.darwinX64
     }
   ];
   const availableCount = options.filter((item) => item.file || item.url).length;
-  const primaryOption = options[0];
-  const secondaryOptions = options.slice(1);
 
   function renderDownloadMeta(option: DownloadOption) {
     const size = formatBytes(option.file?.sizeBytes);
@@ -107,108 +95,104 @@ export default function DownloadPage() {
             <AppIconMark className="download-brand-icon" />
             <div>
               <strong>{manifest.productName}</strong>
-              <span>桌面客户端</span>
+              <span>灵感成章 · 妙笔生花</span>
             </div>
           </div>
         </header>
 
         <div className="download-layout">
-          <div className="download-slogan">
-            <div className="download-calligraphy">
-              <span>灯下起长卷</span>
-              <span>笔端生云烟</span>
-              <span>胸中藏万象</span>
-              <span>落笔自成篇</span>
-            </div>
-          </div>
+          <div className="download-slogan" aria-hidden="true" />
 
-          <section className="download-panel" aria-label="版本选择">
+          <section className="download-panel" id="download-versions" aria-label="版本选择">
             <div className="download-panel-head">
               <div>
                 <span className="download-kicker">桌面客户端下载</span>
-                <h1>选择你的安装版本</h1>
-                <p>选择适合你电脑的版本，安装后使用授权码激活。</p>
+                <h1>下载 AI 网文写作助手</h1>
+                <p>选择适合你的版本，安装后使用授权码激活，开启创作之旅。</p>
               </div>
               <div className="download-manual-actions">
+                <a className="download-card-button tertiary" href="/activate?mode=web">
+                  特邀用户入口
+                </a>
                 <a className="download-card-button primary" href={manualHtmlUrl} target="_blank" rel="noreferrer">
                   查看使用说明
                 </a>
-                <a className="download-card-button" href={manualPdfUrl}>
+                {/* <a className="download-card-button" href={manualPdfUrl}>
                   PDF
-                </a>
+                </a> */}
               </div>
             </div>
 
             <div className="download-hero-meta">
               <span>{availableCount} 个版本可下载</span>
               <span>{manifest.required ? "重要更新" : "内测发布"}</span>
-              <span>创作数据仅保存在本机</span>
+              <span>Mac 仅支持 Apple 芯片</span>
+              <span>网页仅面向特邀用户</span>
             </div>
 
+            {/* <div className="download-invite-card">
+              <div>
+                <strong>特邀用户网页入口</strong>
+                <p>普通访客不能直接使用网页工作台。只有收到你发放的特殊激活码，才可以从这里进入。</p>
+              </div>
+              <a className="download-card-button primary" href="/activate">
+                输入激活码进入
+              </a>
+            </div> */}
+
             <div className="download-grid">
-              <article className={`download-card download-primary-card ${primaryOption.file || primaryOption.url ? "" : "disabled"}`}>
-                <div className="download-recommend-badge">推荐版本</div>
-                <div className="download-primary-main">
-                  <span className="download-os-icon windows" aria-hidden="true">
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <div className="download-primary-heading">
-                    <h2>
-                      <span>{primaryOption.title}</span>
-                    </h2>
-                    <div className="download-card-version">客户端 v{manifest.version}</div>
-                  </div>
-                  <p>{primaryOption.subtitle}</p>
-                  <div className="download-card-meta">{renderDownloadMeta(primaryOption)}</div>
-                </div>
-                {primaryOption.file || primaryOption.url ? (
-                  <a className="download-card-button" href={renderDownloadHref(primaryOption)}>
-                    立即下载 <span aria-hidden="true">↓</span>
-                  </a>
-                ) : (
-                  <span className="download-card-button disabled">暂未发布</span>
-                )}
-              </article>
+              {options.map((option, index) => {
+                const hasDownload = Boolean(option.file || option.url);
+                const isWindows = option.platform === "Windows";
 
-              <div className="download-secondary-list">
-                {secondaryOptions.map((option) => {
-                  const hasDownload = Boolean(option.file || option.url);
-
-                  return (
-                    <article key={option.key} className={`download-card download-secondary-card ${hasDownload ? "" : "disabled"}`}>
-                      <span className="download-os-icon mac" aria-hidden="true"></span>
-                      <div className="download-secondary-heading">
-                        <h2>{option.platform} ({option.arch})</h2>
-                        <div className="download-card-version">
+                return (
+                  <article
+                    key={option.key}
+                    className={`download-card download-platform-card ${index === 0 ? "featured" : ""} ${hasDownload ? "" : "disabled"}`}
+                  >
+                    <div className="download-recommend-badge">{isWindows ? "推荐版本" : "Apple 芯片"}</div>
+                    <div className="download-platform-main">
+                      {isWindows ? (
+                        <span className="download-os-icon windows" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      ) : (
+                        <span className="download-os-icon mac" aria-hidden="true"></span>
+                      )}
+                      <div className="download-primary-heading">
+                        <h2>
                           <span>{option.title}</span>
+                        </h2>
+                        <div className="download-card-version">
+                          <span>{option.platform} · {option.arch}</span>
                           <em>客户端 v{manifest.version}</em>
                         </div>
                       </div>
-                      <p>{option.subtitle}</p>
-                      <div className="download-card-meta">{renderDownloadMeta(option)}</div>
-                      {hasDownload ? (
-                        <a className="download-card-button" href={renderDownloadHref(option)}>
-                          下载 <span aria-hidden="true">↓</span>
-                        </a>
-                      ) : (
-                        <span className="download-card-button disabled">暂未发布</span>
-                      )}
-                    </article>
-                  );
-                })}
-              </div>
+                    </div>
+                    <p>{option.subtitle}</p>
+                    <div className="download-card-meta">{renderDownloadMeta(option)}</div>
+                    {hasDownload ? (
+                      <a className="download-card-button" href={renderDownloadHref(option)}>
+                        立即下载 <span aria-hidden="true">↓</span>
+                      </a>
+                    ) : (
+                      <span className="download-card-button disabled">暂未发布</span>
+                    )}
+                  </article>
+                );
+              })}
             </div>
 
-            <div className="download-notes">
-              {manifest.announcement ? (
+            <div className="download-notes" id="download-notes">
+              {/* {manifest.announcement ? (
                 <div className="download-note announcement">
                   <strong>发布公告</strong>
                   <p>{manifest.announcement}</p>
                 </div>
-              ) : null}
+              ) : null} */}
               <details className="download-note">
                 <summary className="download-help-row">
                   <strong>Mac 首次打开提示</strong>

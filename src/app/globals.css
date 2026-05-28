@@ -380,12 +380,162 @@ button {
 }
 
 .app-shell-auth {
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
   background: #eef3fa;
 }
 
 :root[data-theme="dark"] .app-shell-auth {
   background: #141820;
+}
+
+:root[data-workspace-bg="on"] {
+  --bg: #eef4fc;
+  --bg-elevated: rgba(255, 255, 255, 0.46);
+  --bg-soft: rgba(255, 255, 255, 0.28);
+  --line: rgba(190, 204, 226, 0.48);
+  --workspace-bg-opacity: 0.34;
+  --workspace-bg-blur: 2px;
+  --workspace-bg-saturation: 1.02;
+  --workspace-bg-overlay: rgba(242, 247, 255, 0.26);
+  --workspace-surface: rgba(255, 255, 255, 0.42);
+  --workspace-surface-soft: rgba(255, 255, 255, 0.24);
+  --workspace-surface-border: rgba(184, 198, 220, 0.45);
+  --workspace-surface-shadow: 0 16px 38px rgba(35, 51, 79, 0.08);
+  --workspace-surface-backdrop: blur(14px) saturate(1.15);
+}
+
+:root[data-workspace-bg="on"][data-workspace-bg-strength="weak"] {
+  --workspace-bg-opacity: 0.22;
+  --workspace-bg-blur: 4px;
+  --workspace-bg-saturation: 0.92;
+  --workspace-bg-overlay: rgba(246, 249, 255, 0.52);
+  --workspace-surface: rgba(255, 255, 255, 0.52);
+  --workspace-surface-soft: rgba(255, 255, 255, 0.34);
+}
+
+:root[data-workspace-bg="on"][data-workspace-bg-strength="strong"] {
+  --workspace-bg-opacity: 0.5;
+  --workspace-bg-blur: 0px;
+  --workspace-bg-saturation: 1.08;
+  --workspace-bg-overlay: rgba(242, 247, 255, 0.18);
+  --workspace-surface: rgba(255, 255, 255, 0.28);
+  --workspace-surface-soft: rgba(255, 255, 255, 0.18);
+}
+
+:root[data-theme="dark"][data-workspace-bg="on"] {
+  --bg: #0f141c;
+  --bg-elevated: rgba(23, 30, 42, 0.52);
+  --bg-soft: rgba(23, 30, 42, 0.34);
+  --line: rgba(112, 128, 153, 0.36);
+  --workspace-bg-opacity: 0.26;
+  --workspace-bg-overlay: rgba(9, 14, 22, 0.6);
+  --workspace-surface: rgba(23, 30, 42, 0.54);
+  --workspace-surface-soft: rgba(23, 30, 42, 0.38);
+  --workspace-surface-border: rgba(112, 128, 153, 0.3);
+  --workspace-surface-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme="dark"][data-workspace-bg="on"][data-workspace-bg-strength="weak"] {
+  --workspace-bg-overlay: rgba(10, 15, 24, 0.72);
+  --workspace-surface: rgba(23, 30, 42, 0.42);
+  --workspace-surface-soft: rgba(23, 30, 42, 0.3);
+}
+
+:root[data-theme="dark"][data-workspace-bg="on"][data-workspace-bg-strength="strong"] {
+  --workspace-bg-overlay: rgba(9, 14, 22, 0.34);
+  --workspace-surface: rgba(24, 32, 44, 0.3);
+  --workspace-surface-soft: rgba(24, 32, 44, 0.2);
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth {
+  background:
+    linear-gradient(180deg, rgba(247, 250, 255, 0.72), rgba(241, 245, 251, 0.9)),
+    transparent;
+}
+
+:root[data-workspace-bg="on"] body {
+  background:
+    linear-gradient(180deg, rgba(247, 250, 255, 0.82), rgba(241, 245, 251, 0.96)),
+    var(--bg);
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth::before,
+:root[data-workspace-bg="on"] .app-shell-auth::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth::before {
+  background-image: var(--workspace-bg-image);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: blur(var(--workspace-bg-blur)) saturate(var(--workspace-bg-saturation)) brightness(0.96);
+  opacity: var(--workspace-bg-opacity);
+  transform: scale(1.06);
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth::after {
+  background:
+    radial-gradient(circle at 18% 10%, rgba(31, 94, 255, 0.06), transparent 34%),
+    radial-gradient(circle at 82% 18%, rgba(19, 138, 99, 0.05), transparent 30%),
+    var(--workspace-bg-overlay);
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth > .workspace-frame {
+  position: relative;
+  z-index: 1;
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth .workspace-topbar {
+  background: var(--workspace-surface);
+  backdrop-filter: var(--workspace-surface-backdrop);
+  border-color: var(--workspace-surface-border);
+  box-shadow: var(--workspace-surface-shadow);
+}
+
+:root[data-theme="dark"][data-workspace-bg="on"] .app-shell-auth .workspace-topbar {
+  background: var(--workspace-surface);
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth :is(
+  .hero,
+  .panel,
+  .section-card,
+  .page-intro,
+  .list-item,
+  .stat-card,
+  .small-card,
+  .workflow-item,
+  .chapter-row,
+  .task-block,
+  .timeline-item,
+  .field,
+  .project-card-row,
+  .usage-table-row,
+  .review-apply-item,
+  .writing-directory-card,
+  .project-summary-item,
+  .setup-alert
+) {
+  background: var(--workspace-surface);
+  border-color: var(--workspace-surface-border);
+  box-shadow: var(--workspace-surface-shadow);
+  backdrop-filter: var(--workspace-surface-backdrop);
+}
+
+:root[data-workspace-bg="on"] .app-shell-auth :is(
+  .panel > .panel-head,
+  .panel > .panel-body,
+  .section-card > .section-head,
+  .section-card > .section-body
+) {
+  background: transparent;
 }
 
 .topbar,
@@ -844,9 +994,10 @@ button {
   position: fixed;
   right: 22px;
   bottom: 22px;
-  z-index: 140;
+  z-index: 800;
   width: 86px;
   height: 96px;
+  pointer-events: none;
 }
 
 .floating-ai-button {
@@ -863,6 +1014,7 @@ button {
   animation: floating-ai-breathe 3.6s ease-in-out infinite;
   cursor: grab;
   touch-action: none;
+  pointer-events: auto;
   user-select: none;
   transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
 }
@@ -909,6 +1061,7 @@ button {
   box-shadow: 0 10px 28px rgba(18, 26, 44, 0.1);
   backdrop-filter: blur(18px);
   animation: floating-ai-greeting-in 260ms ease-out both;
+  pointer-events: auto;
 }
 
 .floating-ai-greeting[data-side="left"] {
@@ -2683,18 +2836,17 @@ form[aria-busy="true"] button[type="submit"] {
 
 .download-center-page {
   min-height: 100vh;
-  color: #ffffff;
+  color: #2d241d;
   background:
-    linear-gradient(90deg, rgba(17, 22, 35, 0.56), rgba(9, 13, 24, 0.86) 56%, rgba(8, 11, 19, 0.98)),
-    linear-gradient(145deg, #273047 0%, #131a2a 44%, #0c101b 78%, #10141e 100%);
-  background-size: 100% 100%, 130% 130%;
+    linear-gradient(90deg, rgba(34, 29, 24, 0.18), rgba(255, 249, 236, 0.04) 38%, rgba(255, 244, 224, 0.16)),
+    url("/download-page/hero-bg.webp") center center / cover no-repeat;
+  background-color: #d8cfc1;
   overflow-x: hidden;
-  animation: auth-background-shift 18s ease-in-out infinite alternate;
 }
 
 .app-shell-public:has(.download-center-page) {
   padding: 0;
-  background: #101522;
+  background: #efe7d6;
 }
 
 .app-shell-public:has(.download-center-page) .public-topbar {
@@ -2715,36 +2867,33 @@ form[aria-busy="true"] button[type="submit"] {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(115deg, transparent 0 18%, rgba(255, 255, 255, 0.08) 18.2% 18.45%, transparent 18.8% 100%),
-    linear-gradient(160deg, transparent 0 62%, rgba(255, 255, 255, 0.052) 62.2% 62.45%, transparent 62.7% 100%),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.024) 0 1px, transparent 1px 96px),
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 72px);
-  opacity: 0.52;
+    linear-gradient(90deg, rgba(25, 20, 15, 0.16), transparent 30%, rgba(255, 252, 240, 0.16) 74%),
+    repeating-linear-gradient(0deg, rgba(56, 42, 28, 0.02) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(90deg, rgba(56, 42, 28, 0.018) 0 1px, transparent 1px 11px);
+  opacity: 0.7;
 }
 
 .download-center-page::after {
   content: "";
   position: fixed;
-  inset: -18%;
+  inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(112deg, transparent 0 34%, rgba(115, 151, 255, 0.1) 43%, transparent 54%),
-    linear-gradient(22deg, transparent 0 55%, rgba(97, 224, 178, 0.07) 62%, transparent 72%);
-  filter: blur(14px);
-  opacity: 0.72;
-  animation: auth-light-drift 22s ease-in-out infinite alternate;
+    linear-gradient(90deg, rgba(26, 20, 16, 0.28), transparent 28%, rgba(255, 245, 224, 0.28) 72%),
+    radial-gradient(circle at 76% 14%, rgba(255, 247, 223, 0.78), transparent 30%);
+  opacity: 0.62;
 }
 
 .download-immersive {
   position: relative;
   z-index: 1;
-  width: min(1760px, calc(100vw - 120px));
+  width: min(1740px, calc(100vw - 48px));
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr;
-  gap: clamp(16px, 2.2vw, 30px);
+  gap: 24px;
   margin: 0 auto;
-  padding: 34px 0 28px;
+  padding: 28px 0 30px;
 }
 
 .download-nav {
@@ -2766,8 +2915,8 @@ form[aria-busy="true"] button[type="submit"] {
   height: 40px;
   flex: 0 0 auto;
   overflow: hidden;
-  border-radius: 11px;
-  box-shadow: 0 14px 30px rgba(31, 94, 255, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(75, 42, 24, 0.22);
 }
 
 .download-brand-icon svg {
@@ -2782,117 +2931,84 @@ form[aria-busy="true"] button[type="submit"] {
 }
 
 .download-brand strong {
-  font-size: 16px;
+  color: #251f1b;
+  font-size: 18px;
 }
 
 .download-brand span {
-  color: rgba(255, 255, 255, 0.64);
+  color: rgba(48, 39, 31, 0.66);
   font-size: 13px;
   font-weight: 700;
 }
 
 .download-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(54px, 7vw, 110px);
+  grid-template-columns: minmax(0, 1.12fr) minmax(720px, 0.88fr);
+  gap: 44px;
   align-items: center;
-  min-height: min(720px, calc(100vh - 112px));
+  min-height: min(840px, calc(100vh - 110px));
 }
 
 .download-slogan {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(28px, 3.2vw, 46px);
-  min-height: 430px;
-  transform: translateX(clamp(24px, 3.2vw, 58px));
+  min-height: min(760px, calc(100vh - 150px));
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
 }
 
 .download-slogan::before,
 .download-slogan::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-}
-
-.download-slogan::before {
-  width: min(430px, 92%);
-  aspect-ratio: 1;
-  left: 50%;
-  top: 50%;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle, rgba(245, 248, 255, 0.11) 0 14%, rgba(173, 199, 255, 0.08) 30%, transparent 66%),
-    radial-gradient(circle at 58% 38%, rgba(116, 225, 191, 0.08), transparent 42%);
-  filter: blur(18px);
-  opacity: 0.78;
-  transform: translate(-54%, -48%);
-}
-
-.download-slogan::after {
-  width: 270px;
-  height: 1px;
-  left: 18%;
-  top: 16%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
-  filter: blur(0.5px);
-  transform: rotate(-68deg);
-}
-
-.download-calligraphy {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: row-reverse;
-  align-items: center;
-  gap: clamp(8px, 1vw, 16px);
-  color: rgba(255, 255, 255, 0.92);
-  font-family: "STKaiti", "KaiTi", "Kaiti SC", serif;
-  font-size: clamp(44px, 4.15vw, 66px);
-  line-height: 1.28;
-  letter-spacing: 0;
-  text-shadow:
-    0 0 20px rgba(255, 255, 255, 0.18),
-    0 16px 42px rgba(91, 124, 214, 0.2);
-}
-
-.download-calligraphy span {
-  display: block;
-  writing-mode: vertical-rl;
-}
-
-.download-calligraphy span:nth-child(1) {
-  transform: translate(4px, -12px) rotate(0.5deg);
-}
-
-.download-calligraphy span:nth-child(2) {
-  transform: translate(-7px, 18px) rotate(-0.6deg);
-}
-
-.download-calligraphy span:nth-child(3) {
-  transform: translate(8px, -4px) rotate(0.4deg);
-}
-
-.download-calligraphy span:nth-child(4) {
-  transform: translate(-5px, 24px) rotate(-0.4deg);
+  display: none;
 }
 
 .download-panel {
-  width: 100%;
+  position: relative;
+  justify-self: end;
+  width: min(860px, 100%);
   display: grid;
-  gap: 20px;
-  padding: 32px;
-  border: 1px solid rgba(142, 157, 255, 0.26);
+  gap: 22px;
+  padding: 28px 28px 26px;
+  border: 1px solid rgba(255, 252, 242, 0.52);
   border-radius: 28px;
   background:
-    radial-gradient(circle at 8% 0%, rgba(97, 123, 255, 0.18), transparent 30%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.035)),
-    rgba(7, 11, 21, 0.58);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(255, 244, 224, 0.26) 52%, rgba(255, 255, 255, 0.18)),
+    rgba(255, 250, 239, 0.28);
   box-shadow:
-    0 32px 90px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(18px);
+    0 26px 70px rgba(48, 37, 28, 0.2),
+    0 1px 0 rgba(255, 255, 255, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(128, 91, 62, 0.08);
+  backdrop-filter: blur(18px) saturate(1.24);
+  overflow: hidden;
+}
+
+.download-panel::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border: 1px solid rgba(255, 249, 235, 0.4);
+  border-radius: 20px;
+  pointer-events: none;
+}
+
+.download-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0.42) 0 1px, transparent 18%),
+    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.36), transparent 32%),
+    radial-gradient(circle at 88% 88%, rgba(116, 66, 48, 0.08), transparent 34%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 8px);
+  opacity: 0.8;
+}
+
+.download-panel > * {
+  position: relative;
+  z-index: 1;
 }
 
 .download-panel-head {
@@ -2905,7 +3021,7 @@ form[aria-busy="true"] button[type="submit"] {
 .download-panel p {
   max-width: 48ch;
   margin: 0;
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(56, 47, 38, 0.68);
   font-size: 14px;
   line-height: 1.65;
 }
@@ -2927,18 +3043,18 @@ form[aria-busy="true"] button[type="submit"] {
 .download-kicker {
   display: inline-flex;
   margin-bottom: 8px;
-  color: rgba(117, 211, 255, 0.92);
+  color: #8a3c32;
   font-size: 12px;
   font-weight: 900;
   letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .download-panel-head h1 {
   margin: 0 0 8px;
-  color: #ffffff;
-  font-size: 34px;
-  line-height: 1.18;
+  color: #251f1a;
+  font-family: "STKaiti", "KaiTi", "Kaiti SC", serif;
+  font-size: 40px;
+  line-height: 1.1;
   letter-spacing: 0;
 }
 
@@ -2971,17 +3087,19 @@ form[aria-busy="true"] button[type="submit"] {
   display: inline-flex;
   align-items: center;
   padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 248, 232, 0.34);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 255, 255, 0.22);
+  color: rgba(88, 71, 56, 0.72);
   font-size: 12px;
   font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(12px) saturate(1.12);
 }
 
 .download-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: stretch;
 }
@@ -2990,15 +3108,16 @@ form[aria-busy="true"] button[type="submit"] {
   min-height: 0;
   display: grid;
   gap: 12px;
-  border: 1px solid rgba(117, 211, 255, 0.16);
-  border-radius: 18px;
+  border: 1px solid rgba(255, 250, 236, 0.38);
+  border-radius: 12px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.045)),
-    rgba(255, 255, 255, 0.025);
+    linear-gradient(145deg, rgba(255, 255, 255, 0.38), rgba(255, 246, 229, 0.18)),
+    rgba(255, 252, 244, 0.16);
   box-shadow:
-    0 18px 46px rgba(0, 0, 0, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  backdrop-filter: blur(14px);
+    0 18px 42px rgba(56, 42, 31, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.48),
+    inset 0 -1px 0 rgba(115, 82, 56, 0.06);
+  backdrop-filter: blur(16px) saturate(1.16);
   overflow: hidden;
 }
 
@@ -3006,18 +3125,22 @@ form[aria-busy="true"] button[type="submit"] {
   opacity: 0.66;
 }
 
-.download-primary-card {
-  min-height: 292px;
+.download-platform-card {
+  min-height: 280px;
   grid-template-rows: auto 1fr auto;
   padding: 20px 20px 18px;
-  border-color: rgba(122, 146, 255, 0.72);
+  border-color: rgba(255, 250, 236, 0.42);
   background:
-    radial-gradient(circle at 88% 88%, rgba(129, 69, 255, 0.3), transparent 34%),
-    radial-gradient(circle at 0% 10%, rgba(78, 133, 255, 0.22), transparent 36%),
-    rgba(255, 255, 255, 0.06);
+    linear-gradient(145deg, rgba(255, 255, 255, 0.42), rgba(255, 246, 229, 0.2) 56%, rgba(255, 255, 255, 0.16)),
+    rgba(255, 252, 244, 0.16);
   box-shadow:
-    0 24px 56px rgba(46, 80, 191, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 18px 42px rgba(56, 42, 31, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(115, 82, 56, 0.06);
+}
+
+.download-platform-card:not(.featured) {
+  border-color: rgba(255, 250, 236, 0.36);
 }
 
 .download-recommend-badge {
@@ -3026,12 +3149,14 @@ form[aria-busy="true"] button[type="submit"] {
   display: inline-flex;
   align-items: center;
   padding: 0 11px;
-  border: 1px solid rgba(164, 142, 255, 0.48);
+  border: 1px solid rgba(255, 248, 232, 0.34);
   border-radius: 999px;
-  background: rgba(115, 83, 255, 0.24);
-  color: #d9d2ff;
+  background: rgba(255, 255, 255, 0.2);
+  color: #7a4a3f;
   font-size: 12px;
   font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44);
+  backdrop-filter: blur(12px);
 }
 
 .download-recommend-badge::before {
@@ -3039,7 +3164,7 @@ form[aria-busy="true"] button[type="submit"] {
   margin-right: 6px;
 }
 
-.download-primary-main {
+.download-platform-main {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: 17px 20px;
@@ -3052,32 +3177,17 @@ form[aria-busy="true"] button[type="submit"] {
   min-width: 0;
 }
 
-.download-primary-main > p,
-.download-primary-main > .download-card-meta {
-  grid-column: 1 / -1;
-}
-
-.download-primary-main > p {
-  max-width: none;
-  font-size: 14px;
-  line-height: 1.45;
-}
-
-.download-primary-main > .download-card-meta {
-  margin-top: 0;
-  font-size: 12px;
-}
-
 .download-os-icon {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.055);
-  color: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(255, 248, 232, 0.32);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(40, 32, 26, 0.82);
   font-size: 13px;
   font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
 .download-os-icon.windows {
@@ -3096,8 +3206,8 @@ form[aria-busy="true"] button[type="submit"] {
   width: 100%;
   height: 100%;
   border-radius: 1px;
-  background: linear-gradient(135deg, #4a8aff, #68c5ff);
-  box-shadow: 0 0 18px rgba(76, 142, 255, 0.28);
+  background: linear-gradient(135deg, #27343b, #516a70);
+  box-shadow: 0 0 18px rgba(31, 42, 47, 0.1);
 }
 
 .download-os-icon.mac {
@@ -3109,7 +3219,7 @@ form[aria-busy="true"] button[type="submit"] {
 
 .download-card h2 {
   margin: 0;
-  color: #ffffff;
+  color: #28211b;
   line-height: 1.2;
 }
 
@@ -3124,7 +3234,7 @@ form[aria-busy="true"] button[type="submit"] {
   align-items: baseline;
   gap: 7px;
   margin-top: 4px;
-  color: rgba(255, 255, 255, 0.56);
+  color: rgba(68, 54, 42, 0.58);
   font-size: 12px;
   font-weight: 850;
   line-height: 1.4;
@@ -3136,14 +3246,14 @@ form[aria-busy="true"] button[type="submit"] {
 
 .download-card p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.66);
+  color: rgba(79, 65, 54, 0.72);
   font-size: 13px;
   line-height: 1.62;
 }
 
 .download-card-meta {
   margin-top: 8px;
-  color: rgba(255, 255, 255, 0.58);
+  color: rgba(95, 79, 63, 0.64);
   font-size: 11px;
   font-weight: 800;
   line-height: 1.45;
@@ -3157,96 +3267,49 @@ form[aria-busy="true"] button[type="submit"] {
   justify-content: center;
   gap: 8px;
   padding: 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  border: 1px solid rgba(104, 48, 40, 0.06);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(108, 44, 36, 0.98), rgba(143, 74, 57, 0.96) 52%, rgba(105, 42, 35, 0.98));
+  color: #fffaf0;
   font-size: 12px;
   font-weight: 900;
+  box-shadow: 0 12px 20px rgba(96, 41, 34, 0.18);
 }
 
 .download-card-button:hover {
-  border-color: rgba(117, 211, 255, 0.48);
-  background: rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(96, 41, 34, 0.2);
 }
 
-.download-card .download-card-button {
-  background: linear-gradient(135deg, rgba(78, 133, 255, 0.82), rgba(93, 78, 246, 0.78));
-  border-color: rgba(125, 170, 255, 0.4);
-  box-shadow: 0 14px 26px rgba(40, 84, 190, 0.22);
+.download-platform-card > p {
+  max-width: none;
+  align-self: end;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
-.download-primary-card .download-card-button {
+.download-platform-card > .download-card-meta {
+  margin-top: 0;
+  font-size: 12px;
+}
+
+.download-platform-card .download-card-button {
   align-self: end;
   min-height: 52px;
-  border-radius: 13px;
+  border-radius: 14px;
   font-size: 15px;
 }
 
-.download-secondary-list {
-  display: grid;
-  grid-template-rows: 1fr 1fr;
-  gap: 12px;
-}
-
-.download-secondary-card {
-  grid-template-columns: 52px minmax(0, 1fr) 78px;
-  grid-template-rows: auto 1fr auto;
-  align-items: start;
-  gap: 12px 14px;
-  min-height: 145px;
-  padding: 14px;
-}
-
-.download-secondary-heading {
-  display: grid;
-  grid-column: 2 / 4;
-  grid-row: 1;
-  gap: 3px;
-  min-width: 0;
-}
-
-.download-secondary-card h2 {
-  font-size: 19px;
-  font-weight: 900;
-}
-
-.download-secondary-card .download-card-version {
-  margin-top: 0;
-  font-size: 12px;
-}
-
-.download-secondary-card p {
-  grid-column: 1 / 3;
-  grid-row: 2;
-  max-width: 31ch;
-  font-size: 12px;
-  line-height: 1.52;
-}
-
-.download-secondary-card > .download-card-meta {
-  grid-column: 1 / 3;
-  grid-row: 3;
-  margin-top: 0;
-}
-
-.download-secondary-card .download-card-button {
-  grid-column: 3;
-  grid-row: 2 / 4;
-  align-self: center;
-  min-width: 78px;
-  justify-self: end;
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: none;
-}
-
 .download-card-button.primary {
-  border-color: rgba(117, 211, 255, 0.44);
-  background: rgba(117, 211, 255, 0.18);
+  border-color: rgba(104, 48, 40, 0.06);
+  background:
+    linear-gradient(90deg, rgba(108, 44, 36, 0.98), rgba(143, 74, 57, 0.96) 52%, rgba(105, 42, 35, 0.98));
+  color: #fffaf0;
 }
 
 .download-card-button.disabled {
-  color: rgba(255, 255, 255, 0.54);
+  color: rgba(74, 59, 45, 0.48);
 }
 
 .download-manual-actions {
@@ -3254,6 +3317,50 @@ form[aria-busy="true"] button[type="submit"] {
   flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
+}
+
+.download-card-button.tertiary {
+  border-color: rgba(255, 248, 232, 0.34);
+  background: rgba(255, 255, 255, 0.22);
+  color: #56463a;
+  box-shadow:
+    0 12px 26px rgba(68, 51, 37, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.44);
+  backdrop-filter: blur(12px);
+}
+
+.download-card-button.tertiary:hover {
+  border-color: rgba(255, 248, 232, 0.5);
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.download-invite-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(210, 193, 170, 0.6);
+  border-radius: 10px;
+  background: rgba(255, 253, 247, 0.76);
+}
+
+.download-invite-card div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.download-invite-card strong {
+  color: #28211b;
+  font-size: 14px;
+}
+
+.download-invite-card p {
+  margin: 0;
+  color: rgba(62, 51, 41, 0.68);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .download-notes {
@@ -3265,10 +3372,13 @@ form[aria-busy="true"] button[type="submit"] {
 .download-note {
   min-height: 0;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.045);
-  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 250, 236, 0.32);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 12px 30px rgba(56, 42, 31, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(14px) saturate(1.12);
   overflow: hidden;
 }
 
@@ -3280,7 +3390,7 @@ form[aria-busy="true"] button[type="submit"] {
 .download-note strong {
   display: block;
   margin-bottom: 7px;
-  color: #ffffff;
+  color: #2a221b;
   font-size: 13px;
 }
 
@@ -3310,7 +3420,7 @@ form[aria-busy="true"] button[type="submit"] {
 
 .download-help-row > span {
   justify-self: end;
-  color: rgba(255, 255, 255, 0.76);
+  color: rgba(90, 74, 57, 0.66);
   font-size: 18px;
   line-height: 1;
   transition: transform 160ms ease;
@@ -3321,7 +3431,7 @@ form[aria-busy="true"] button[type="submit"] {
 }
 
 .download-note[open] .download-help-row {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 250, 236, 0.24);
 }
 
 .download-note-detail {
@@ -3332,7 +3442,7 @@ form[aria-busy="true"] button[type="submit"] {
 
 .download-note p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.62);
+  color: rgba(79, 65, 54, 0.72);
   font-size: 12px;
   line-height: 1.62;
 }
@@ -3346,7 +3456,7 @@ form[aria-busy="true"] button[type="submit"] {
   gap: 5px;
   margin: 0;
   padding-left: 20px;
-  color: rgba(255, 255, 255, 0.66);
+  color: rgba(79, 65, 54, 0.72);
   font-size: 12px;
   line-height: 1.58;
 }
@@ -3356,10 +3466,10 @@ form[aria-busy="true"] button[type="submit"] {
   max-width: 100%;
   margin-top: 4px;
   padding: 2px 6px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(151, 132, 108, 0.22);
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.22);
-  color: rgba(255, 255, 255, 0.82);
+  background: rgba(245, 238, 226, 0.88);
+  color: rgba(60, 48, 38, 0.82);
   font-size: 12px;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -4706,6 +4816,156 @@ form[aria-busy="true"] button[type="submit"] {
   gap: 10px;
   align-items: center;
   justify-content: flex-start;
+}
+
+.workspace-background-settings {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(320px, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.workspace-background-preview {
+  position: relative;
+  min-height: 138px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(circle at 20% 18%, rgba(31, 94, 255, 0.12), transparent 36%),
+    linear-gradient(135deg, var(--bg-soft), var(--bg-elevated));
+}
+
+.workspace-background-preview img {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(var(--workspace-preview-blur, 9px)) saturate(var(--workspace-preview-saturation, 0.7));
+  opacity: var(--workspace-preview-opacity, 0.72);
+}
+
+.workspace-background-preview.has-image::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--workspace-preview-overlay, rgba(246, 249, 255, 0.42));
+}
+
+:root[data-theme="dark"] .workspace-background-preview.has-image::after {
+  background: var(--workspace-preview-overlay, rgba(12, 18, 28, 0.54));
+}
+
+.workspace-background-preview div {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 8px;
+  text-align: center;
+}
+
+.workspace-background-preview strong {
+  font-size: 18px;
+}
+
+.workspace-background-preview span,
+.workspace-background-meta p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.workspace-background-controls {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.workspace-background-upload {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.workspace-background-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace-background-upload:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.62;
+  border-color: var(--line);
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+
+.workspace-background-tuning {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.workspace-background-tuning-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workspace-background-tuning-head strong {
+  color: var(--accent);
+  text-align: center;
+}
+
+.workspace-background-tuning input[type="range"] {
+  width: 100%;
+  height: 30px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.workspace-background-tuning input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workspace-background-meta {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-background-meta p {
+  margin: 0;
+}
+
+.workspace-background-meta strong {
+  color: var(--text);
 }
 
 .manual-page {
@@ -10655,15 +10915,24 @@ form[aria-busy="true"] button[type="submit"] {
   color: #ffffff;
 }
 
-.auth-immersive-brand span {
+.auth-brand-icon {
   width: 34px;
   height: 34px;
-  display: grid;
-  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
   border-radius: 9px;
-  background: var(--accent);
-  color: #ffffff;
-  font-weight: 900;
+  box-shadow: 0 12px 26px rgba(31, 94, 255, 0.24);
+}
+
+.auth-brand-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.auth-immersive-brand em {
+  display: inline-block;
+  font-style: normal;
 }
 
 .auth-immersive-brand strong {
@@ -10845,6 +11114,7 @@ form[aria-busy="true"] button[type="submit"] {
 
 .auth-card-head h2 {
   margin: 0 0 8px;
+  color: #101828;
   font-size: 26px;
   line-height: 1.15;
 }
@@ -10858,8 +11128,14 @@ form[aria-busy="true"] button[type="submit"] {
 
 .auth-card-head p {
   margin: 0;
-  color: var(--muted);
+  color: #667085;
   line-height: 1.65;
+}
+
+.auth-card-chip {
+  border-color: #d7deea;
+  background: #f6f8fb;
+  color: #41516d;
 }
 
 .license-card .auth-card-head {
@@ -11757,6 +12033,7 @@ form[aria-busy="true"] button[type="submit"] {
   .text-compare-row,
   .mindmap-board,
   .graph-support-grid,
+  .workspace-background-settings,
   .account-data-tools,
   .writing-directory-grid,
   .table-head,
@@ -11949,24 +12226,25 @@ form[aria-busy="true"] button[type="submit"] {
   }
 
   .download-layout {
-    grid-template-columns: minmax(260px, 0.68fr) minmax(640px, 1.32fr);
+    grid-template-columns: minmax(320px, 0.78fr) minmax(620px, 1.22fr);
     gap: 28px;
   }
 
   .download-slogan {
-    gap: 24px;
+    min-height: 620px;
   }
 
-  .download-calligraphy {
-    font-size: clamp(50px, 6vw, 76px);
+  .download-panel {
+    padding: 30px;
   }
 
-  .download-slogan-side {
-    font-size: 17px;
+  .download-panel-head h1 {
+    font-size: 36px;
   }
 
-  .download-slogan-side strong {
-    font-size: 22px;
+  .download-platform-main {
+    grid-template-columns: 62px minmax(0, 1fr);
+    gap: 16px;
   }
 }
 
@@ -11977,11 +12255,11 @@ form[aria-busy="true"] button[type="submit"] {
   }
 
   .download-slogan {
-    min-height: 220px;
+    min-height: 420px;
   }
 
-  .download-calligraphy {
-    font-size: clamp(44px, 8vw, 70px);
+  .download-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -11998,14 +12276,19 @@ form[aria-busy="true"] button[type="submit"] {
     min-height: auto;
   }
 
-  .download-slogan {
-    min-height: 250px;
-    justify-content: center;
-    transform: none;
+  .download-nav {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
-  .download-calligraphy {
-    font-size: clamp(42px, 11vw, 64px);
+  .download-slogan {
+    min-height: 420px;
+  }
+
+  .download-slogan-copy {
+    left: 18px;
+    bottom: 18px;
+    width: calc(100% - 36px);
   }
 
   .download-panel-head {
@@ -12015,26 +12298,11 @@ form[aria-busy="true"] button[type="submit"] {
 
   .download-panel {
     justify-self: stretch;
+    padding: 24px;
   }
 
   .download-card {
     grid-template-columns: 1fr;
-  }
-
-  .download-secondary-card {
-    grid-template-columns: 1fr;
-  }
-
-  .download-secondary-heading,
-  .download-secondary-card p,
-  .download-secondary-card > .download-card-meta,
-  .download-secondary-card .download-card-button {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .download-secondary-card p {
-    max-width: none;
   }
 
   .download-card-button {
@@ -12050,6 +12318,11 @@ form[aria-busy="true"] button[type="submit"] {
 
   .download-manual-actions {
     justify-content: flex-start;
+  }
+
+  .download-invite-card {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .download-hero {
@@ -13317,6 +13590,72 @@ body.desktop-runtime .mindmap-board {
   grid-template-columns: minmax(170px, 1fr) minmax(170px, 0.86fr) minmax(170px, 1fr);
 }
 
+:root[data-workspace-bg="on"] body.desktop-runtime .app-shell-auth {
+  background:
+    linear-gradient(180deg, rgba(246, 250, 255, 0.24), rgba(238, 244, 252, 0.36)),
+    transparent;
+}
+
+:root[data-theme="dark"][data-workspace-bg="on"] body.desktop-runtime .app-shell-auth {
+  background:
+    linear-gradient(180deg, rgba(12, 18, 28, 0.3), rgba(12, 18, 28, 0.48)),
+    transparent;
+}
+
+:root[data-workspace-bg="on"] body.desktop-runtime .app-shell-auth::before {
+  filter: blur(var(--workspace-bg-blur)) saturate(var(--workspace-bg-saturation)) brightness(0.98);
+  opacity: var(--workspace-bg-opacity);
+}
+
+:root[data-workspace-bg="on"] body.desktop-runtime .app-shell-auth::after {
+  background:
+    radial-gradient(circle at 16% 8%, rgba(31, 94, 255, 0.08), transparent 30%),
+    radial-gradient(circle at 84% 16%, rgba(19, 138, 99, 0.07), transparent 28%),
+    var(--workspace-bg-overlay);
+}
+
+:root[data-workspace-bg="on"] body.desktop-runtime .app-shell-auth .workspace-topbar,
+:root[data-workspace-bg="on"] body.desktop-runtime .app-shell-auth :is(
+  .hero,
+  .panel,
+  .section-card,
+  .page-intro,
+  .list-item,
+  .stat-card,
+  .small-card,
+  .workflow-item,
+  .chapter-row,
+  .task-block,
+  .timeline-item,
+  .field,
+  .project-card-row,
+  .usage-table-row,
+  .review-apply-item,
+  .writing-directory-card,
+  .project-summary-item,
+  .setup-alert,
+  .empty-state,
+  .first-flow-card
+) {
+  border-color: var(--workspace-surface-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    var(--workspace-surface);
+  box-shadow: var(--workspace-surface-shadow);
+  backdrop-filter: var(--workspace-surface-backdrop);
+}
+
+:root[data-workspace-bg="on"] body.desktop-runtime .app-shell-auth :is(
+  .panel > .panel-head,
+  .panel > .panel-body,
+  .section-card > .section-head,
+  .section-card > .section-body,
+  .empty-state,
+  .stat-card
+) {
+  background-color: transparent;
+}
+
 @media (max-width: 1160px) {
   body.desktop-runtime .dashboard-workbench {
     grid-template-columns: minmax(0, 1.32fr) minmax(260px, 0.78fr);
@@ -13379,4 +13718,77 @@ body.desktop-runtime .mindmap-board {
   body.desktop-runtime .book-create-side {
     display: none;
   }
+}
+
+:root[data-workspace-bg="on"] .assistant-page {
+  background: transparent;
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-workbench {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-sidebar {
+  border-right-color: rgba(184, 198, 220, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px) saturate(1.08);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-main {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.16), transparent 34%),
+    rgba(255, 255, 255, 0.02);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-topbar {
+  border-bottom-color: rgba(184, 198, 220, 0.24);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-body {
+  background: transparent;
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-input {
+  background: rgba(255, 255, 255, 0.36);
+  border-color: rgba(184, 198, 220, 0.42);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-new,
+:root[data-workspace-bg="on"] .assistant-chat-return,
+:root[data-workspace-bg="on"] .assistant-chat-thread-list button,
+:root[data-workspace-bg="on"] .assistant-chat-suggestions button {
+  background: rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(10px) saturate(1.08);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-thread-list button:hover,
+:root[data-workspace-bg="on"] .assistant-chat-thread-list button.active {
+  background: rgba(255, 255, 255, 0.52);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-new {
+  box-shadow: 0 10px 28px rgba(18, 26, 44, 0.06);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-suggestions button:hover {
+  background: rgba(31, 94, 255, 0.12);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-brand {
+  border-bottom-color: rgba(184, 198, 220, 0.28);
+}
+
+:root[data-workspace-bg="on"] .assistant-chat-welcome {
+  padding: 28px 34px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.18), transparent 46%),
+    rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(6px) saturate(1.06);
 }

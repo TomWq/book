@@ -1,6 +1,7 @@
-import { mkdir, rm, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,8 @@ const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "ut
 const version = String(packageJson.version ?? "").trim();
 const tag = `app-v${version}`;
 const packageDir = path.join(releaseDir, "packages", `v${version}`);
+const args = new Set(process.argv.slice(2));
+const force = args.has("--force") || args.has("--clobber");
 
 const assets = [
   {
@@ -33,20 +36,6 @@ const assets = [
   {
     patterns: [`AI-Novel-Workbench-${version}-arm64-mac.app.tar.gz.sig`, `*${version}-arm64-mac.app.tar.gz.sig`, "*aarch64.app.tar.gz.sig"],
     output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz.sig`,
-    optional: true
-  },
-  {
-    patterns: [`AI-Novel-Workbench-${version}-x64-mac.dmg`, `*${version}-x64-mac.dmg`, "*x64.dmg"],
-    output: `AI网文写作助手-${version}-x64-mac.dmg`
-  },
-  {
-    patterns: [`AI-Novel-Workbench-${version}-x64-mac.app.tar.gz`, `*${version}-x64-mac.app.tar.gz`, "*x64.app.tar.gz"],
-    output: `AI网文写作助手-${version}-x64-mac.app.tar.gz`,
-    optional: true
-  },
-  {
-    patterns: [`AI-Novel-Workbench-${version}-x64-mac.app.tar.gz.sig`, `*${version}-x64-mac.app.tar.gz.sig`, "*x64.app.tar.gz.sig"],
-    output: `AI网文写作助手-${version}-x64-mac.app.tar.gz.sig`,
     optional: true
   }
 ];
@@ -73,52 +62,81 @@ function run(command, args) {
 }
 
 async function downloadAsset(asset) {
-  const tempPath = path.join(packageDir, `.tauri-${asset.output}`);
   const outputPath = path.join(packageDir, asset.output);
+
+  if (!force && await fileExists(outputPath)) {
+    console.log(`[release-download] 已存在，跳过：release/packages/v${version}/${asset.output}`);
+    return true;
+  }
+
+  return null;
+}
+
+async function fileExists(filePath) {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function globToRegExp(pattern) {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replaceAll("*", ".*")
+    .replaceAll("?", ".");
+
+  return new RegExp(`^${escaped}$`);
+}
+
+function findDownloadedAsset(files, asset) {
   const patterns = asset.patterns ?? [asset.pattern];
 
-  await rm(tempPath, { force: true });
-  await rm(outputPath, { force: true });
   for (const pattern of patterns) {
-    try {
-      await run("gh", [
-        "release",
-        "download",
-        tag,
-        "--repo",
-        "TomWq/book",
-        "--pattern",
-        pattern,
-        "--output",
-        tempPath,
-        "--clobber"
-      ]);
-      break;
-    } catch (error) {
-      await rm(tempPath, { force: true });
-      if (pattern !== patterns.at(-1)) {
-        continue;
-      }
+    const regex = globToRegExp(pattern);
+    const match = files.find((file) => regex.test(file));
 
-      if (asset.optional) {
-        console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${patterns.join(" / ")}`);
-        return false;
-      }
-
-      throw error;
+    if (match) {
+      return match;
     }
   }
 
-  if (!existsSync(tempPath)) {
+  return "";
+}
+
+async function downloadReleaseAssets(tempDir) {
+  await run("gh", [
+    "release",
+    "download",
+    tag,
+    "--repo",
+    "TomWq/book",
+    "--dir",
+    tempDir,
+    "--clobber"
+  ]);
+}
+
+async function saveDownloadedAsset(tempDir, files, asset) {
+  const outputPath = path.join(packageDir, asset.output);
+
+  if (!force && await fileExists(outputPath)) {
+    return true;
+  }
+
+  const downloadedName = findDownloadedAsset(files, asset);
+
+  if (!downloadedName) {
     if (asset.optional) {
-      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${patterns.join(" / ")}`);
+      console.warn(`[release-download] 可选 updater 产物不存在，已跳过：${(asset.patterns ?? [asset.pattern]).join(" / ")}`);
       return false;
     }
 
-    throw new Error(`下载失败，未找到 ${tempPath}`);
+    throw new Error(`下载失败，未找到 ${(asset.patterns ?? [asset.pattern]).join(" / ")}`);
   }
 
-  await rename(tempPath, outputPath);
+  await rm(outputPath, { force: true });
+  await copyFile(path.join(tempDir, downloadedName), outputPath);
   console.log(`[release-download] 已保存：release/packages/v${version}/${asset.output}`);
   return true;
 }
@@ -128,13 +146,42 @@ async function main() {
     throw new Error(`package.json 版本号异常：${version || "未设置"}`);
   }
 
-  await rm(packageDir, { recursive: true, force: true });
   await mkdir(packageDir, { recursive: true });
 
-  const downloaded = [];
+  if (force) {
+    await Promise.all(assets.map((asset) => rm(path.join(packageDir, asset.output), { force: true })));
+  }
+
+  const downloaded = assets.filter((asset) => existsSync(path.join(packageDir, asset.output))).map((asset) => asset.output);
+  const pendingAssets = [];
+
   for (const asset of assets) {
-    if (await downloadAsset(asset)) {
-      downloaded.push(asset.output);
+    const result = await downloadAsset(asset);
+
+    if (result === true) {
+      if (!downloaded.includes(asset.output)) {
+        downloaded.push(asset.output);
+      }
+      continue;
+    }
+
+    pendingAssets.push(asset);
+  }
+
+  if (pendingAssets.length > 0) {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), `tauri-release-${version}-`));
+
+    try {
+      await downloadReleaseAssets(tempDir);
+      const files = await readdir(tempDir);
+
+      for (const asset of pendingAssets) {
+        if (await saveDownloadedAsset(tempDir, files, asset)) {
+          downloaded.push(asset.output);
+        }
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -151,7 +198,7 @@ async function main() {
     "utf8"
   );
 
-  console.log(`[release-download] 三端安装包已下载到 release/packages/v${version}/。`);
+  console.log(`[release-download] Windows 和 macOS Apple 芯片安装包已下载到 release/packages/v${version}/。`);
 }
 
 main().catch((error) => {

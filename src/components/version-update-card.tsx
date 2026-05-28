@@ -74,7 +74,7 @@ function pickTauriPlatformMeta(rawJson: Record<string, unknown>): TauriPlatformM
   const candidates = userAgent.includes("windows")
     ? ["windows-x86_64-nsis", "windows-x86_64", "windows-x64"]
     : userAgent.includes("mac")
-      ? ["darwin-aarch64-app", "darwin-aarch64", "darwin-arm64-app", "darwin-arm64", "darwin-x86_64-app", "darwin-x86_64", "darwin-x64-app", "darwin-x64"]
+      ? ["darwin-aarch64-app", "darwin-aarch64", "darwin-arm64-app", "darwin-arm64"]
       : Object.keys(platforms);
 
   for (const key of candidates) {

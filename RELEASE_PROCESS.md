@@ -93,9 +93,6 @@ Windows x64 Setup.exe.sig
 macOS Apple 芯片 DMG
 macOS Apple 芯片 app.tar.gz
 macOS Apple 芯片 app.tar.gz.sig
-macOS Intel DMG
-macOS Intel app.tar.gz
-macOS Intel app.tar.gz.sig
 ```
 
 DMG 和 Setup.exe 给用户手动下载。`.app.tar.gz`、`Setup.exe` 对应的 `.sig` 给 Tauri 应用内更新使用。
@@ -116,9 +113,6 @@ AI网文写作助手-Setup-版本号-x64.exe.sig
 AI网文写作助手-版本号-arm64-mac.dmg
 AI网文写作助手-版本号-arm64-mac.app.tar.gz
 AI网文写作助手-版本号-arm64-mac.app.tar.gz.sig
-AI网文写作助手-版本号-x64-mac.dmg
-AI网文写作助手-版本号-x64-mac.app.tar.gz
-AI网文写作助手-版本号-x64-mac.app.tar.gz.sig
 UPLOAD_THESE_FILES.txt
 ```
 
@@ -141,9 +135,6 @@ Windows 安装包 .sig
 macOS Apple 芯片 DMG
 macOS Apple 芯片 app.tar.gz
 macOS Apple 芯片 app.tar.gz.sig
-macOS Intel DMG
-macOS Intel app.tar.gz
-macOS Intel app.tar.gz.sig
 ```
 
 `UPLOAD_THESE_FILES.txt` 本身不需要上传。

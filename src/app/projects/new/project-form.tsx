@@ -845,7 +845,7 @@ export function ProjectForm() {
               </label>
             </div>
             <div className="assist-context-hint">
-              AI 起名会参考：{titleNamingStyle === "qidian" ? "起点风格" : "番茄小说风格"}、读者与标签里的内容，所以调整下方信息会影响起名结果。
+              AI 起名会参考：{titleNamingStyle === "qidian" ? "起点风格" : "番茄小说风格"}、起名构思、读者与标签里的内容，所以调整下方信息会影响起名结果。
             </div>
             <input
               name="name"

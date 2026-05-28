@@ -81,6 +81,10 @@ function licenseStatusClass(status: string) {
   return status === "unused" ? "warning" : status === "used" ? "success" : "danger";
 }
 
+function licensePurposeName(purpose: string) {
+  return purpose === "web" ? "网页特邀" : "桌面授权";
+}
+
 function logReasonName(reason: string) {
   switch (reason) {
     case "activated":
@@ -142,8 +146,7 @@ function shortHash(value?: string) {
 function releaseFileRows(files?: Record<string, AppUpdateFile | undefined>) {
   return [
     files?.win32X64,
-    files?.darwinArm64,
-    files?.darwinX64
+    files?.darwinArm64
   ].filter((item): item is AppUpdateFile => Boolean(item?.fileName || item?.url));
 }
 
@@ -199,7 +202,13 @@ export default async function AdminPage({
       recentLogLimit: RECENT_LOG_PAGE_SIZE,
       recentLogOffset: (requestedLogsPage - 1) * RECENT_LOG_PAGE_SIZE
     });
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+
+    if (message.includes("管理员权限")) {
+      notFound();
+    }
+
     notFound();
   }
 
@@ -305,11 +314,12 @@ export default async function AdminPage({
         ) : (
           <div className="license-table">
             <div className="license-table-row license-table-head">
-              <span>授权码</span>
-              <span>客户</span>
-              <span>状态</span>
-              <span>绑定</span>
-              <span>设备</span>
+                <span>授权码</span>
+                <span>客户</span>
+                <span>用途</span>
+                <span>状态</span>
+                <span>绑定</span>
+                <span>设备</span>
               <span>时间</span>
               <span>最近来源</span>
               <span>操作</span>
@@ -335,6 +345,11 @@ export default async function AdminPage({
                       <CopyButton value={license.id} label="复制ID" />
                     </div>
                     <div className="muted">{license.customerContact || "无联系方式"}</div>
+                  </div>
+                  <div>
+                    <span className={`pill ${license.purpose === "web" ? "success" : "warning"}`}>
+                      {licensePurposeName(license.purpose)}
+                    </span>
                   </div>
                   <div>
                     <span className={`pill ${licenseStatusClass(license.status)}`}>

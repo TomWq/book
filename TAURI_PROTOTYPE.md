@@ -78,7 +78,6 @@ npm run tauri:build
 
 ```bash
 npm run tauri:build:mac:arm64
-npm run tauri:build:mac:x64
 npm run tauri:build:win:x64
 ```
 
@@ -88,12 +87,6 @@ npm run tauri:build:win:x64
 1. 按目标架构准备 Tauri 专用 Node runtime。
 2. 按目标架构替换 standalone 里的 better-sqlite3 原生模块。
 3. 调用 tauri build --target 构建对应的 Rust 桌面壳。
-```
-
-第一次打 Intel 包时，如果本机没有 Rust 的 `x86_64-apple-darwin` target，脚本会自动执行：
-
-```bash
-rustup target add x86_64-apple-darwin
 ```
 
 Windows 包推荐通过 GitHub Actions 构建。项目里已经加了：
@@ -106,7 +99,6 @@ Windows 包推荐通过 GitHub Actions 构建。项目里已经加了：
 
 ```text
 macOS arm64
-macOS x64
 Windows x64
 ```
 

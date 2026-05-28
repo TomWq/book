@@ -12,6 +12,7 @@ export function WorkspaceActions({
   userName,
   penName,
   licenseExpiresAt,
+  licenseCodePurpose,
   adminLoginPath = "/license-center-admin"
 }: {
   desktopRuntime: boolean;
@@ -19,6 +20,7 @@ export function WorkspaceActions({
   userName: string;
   penName?: string;
   licenseExpiresAt?: string;
+  licenseCodePurpose?: "desktop" | "web";
   adminLoginPath?: string;
 }) {
   const [openMenu, setOpenMenu] = useState<"" | "create" | "settings">("");
@@ -94,7 +96,10 @@ export function WorkspaceActions({
               <Link href="/settings/account" onClick={() => setOpenMenu("")}>
                 {desktopRuntime ? "数据与授权" : "账号与数据"}
               </Link>
-              {desktopRuntime ? (
+              <Link href="/settings/account#workspace-background" onClick={() => setOpenMenu("")}>
+                个性化背景
+              </Link>
+              {desktopRuntime && licenseCodePurpose !== "web" ? (
                 <Link href="/settings/account#version-update" onClick={() => setOpenMenu("")}>
                   检查更新
                 </Link>

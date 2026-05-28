@@ -16,7 +16,6 @@
     "tauri:dev": "npm run tauri:prepare && tauri dev",
     "tauri:build": "node scripts/tauri-build.mjs",
     "tauri:build:mac:arm64": "node scripts/tauri-build.mjs --mac --arm64",
-    "tauri:build:mac:x64": "node scripts/tauri-build.mjs --mac --x64",
     "tauri:build:win:x64": "node scripts/tauri-build.mjs --win --x64",
     "release:tauri": "gh workflow run \"Tauri Release\" --ref main",
     "release:tauri:status": "gh run list --workflow \"Tauri Release\" --limit 5",

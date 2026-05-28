@@ -1,6 +1,5 @@
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { cache } from "react";
 import type { AppStore } from "@/lib/project-types";
 import { loadPersistedStore, savePersistedStore } from "@/lib/store-persistence";
 
@@ -44,7 +43,9 @@ async function readStoreBase(): Promise<AppStore> {
   return loadPersistedStore(storePath, initialStore);
 }
 
-export const readStore = cache(readStoreBase);
+export async function readStore() {
+  return readStoreBase();
+}
 
 export async function writeStore(store: AppStore) {
   await savePersistedStore(storePath, store);

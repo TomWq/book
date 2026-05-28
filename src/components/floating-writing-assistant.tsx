@@ -392,6 +392,8 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
       return;
     }
 
+    event.preventDefault();
+
     const deltaX = event.clientX - drag.startX;
     const deltaY = event.clientY - drag.startY;
 
@@ -415,7 +417,10 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     }
 
     dragRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
 
     if (!drag.moved) {
       return;

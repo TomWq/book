@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Panel } from "@/components/panel";
 import { LicenseSessionActions } from "@/components/license-session-actions";
 import { VersionUpdateCard } from "@/components/version-update-card";
+import { WorkspaceBackgroundSettings } from "@/components/workspace-background-settings";
 import { getCurrentAppVersion } from "@/lib/app-update";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getAccountOverview } from "@/lib/projects";
@@ -76,8 +77,8 @@ function remainingLabel(expiresAt?: string) {
 export default async function AccountSettingsPage() {
   const overview = await getAccountOverview();
   const license = overview.license;
-  const desktopRuntime = isDesktopRuntime();
-  const currentVersion = getCurrentAppVersion();
+  const desktopRuntime = isDesktopRuntime() && overview.user.licenseCodePurpose !== "web";
+  const currentVersion = desktopRuntime ? getCurrentAppVersion() : "";
 
   return (
     <div className="account-page">
@@ -165,6 +166,13 @@ export default async function AccountSettingsPage() {
             </div>
           </div>
         </div>
+      </Panel>
+
+      <Panel
+        title="个性化背景"
+        description="仅在亮色模式下可用。上传一张喜欢的图片作为工作台背景，系统会自动弱化图片、叠加蒙版，尽量不影响正文阅读和创作。"
+      >
+        <WorkspaceBackgroundSettings />
       </Panel>
 
       {desktopRuntime ? (

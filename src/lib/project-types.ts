@@ -433,6 +433,12 @@ export type StoredAssistantMessage = {
   createdAt: string;
 };
 
+export type LicenseCodePurpose = "desktop" | "web";
+
+export function normalizeLicenseCodePurpose(value: unknown): LicenseCodePurpose {
+  return value === "web" ? "web" : "desktop";
+}
+
 export type StoredUser = {
   id: string;
   email: string;
@@ -450,6 +456,7 @@ export type StoredUser = {
   aiTaskPricingOverrides?: AiTaskPricingOverrides;
   licenseCustomerId?: string;
   licenseCodeHash?: string;
+  licenseCodePurpose?: LicenseCodePurpose;
   licenseMachineHash?: string;
   licenseActivatedAt?: string;
   licenseExpiresAt?: string;
@@ -476,6 +483,7 @@ export type StoredLicenseCode = {
   codeHash: string;
   plainCode?: string;
   codePreview: string;
+  purpose: LicenseCodePurpose;
   customerName?: string;
   customerContact?: string;
   status: "unused" | "used" | "disabled" | "expired";
@@ -635,6 +643,7 @@ export type AdminLicenseSummary = {
   id: string;
   plainCode?: string;
   codePreview: string;
+  purpose: LicenseCodePurpose;
   customerName: string;
   customerContact: string;
   status: StoredLicenseCode["status"];

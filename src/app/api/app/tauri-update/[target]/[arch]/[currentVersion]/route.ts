@@ -11,16 +11,10 @@ export const dynamic = "force-dynamic";
 const targetMap: Record<string, AppDownloadKey> = {
   "darwin-aarch64": "darwinArm64",
   "darwin-arm64": "darwinArm64",
-  "darwin-x86_64": "darwinX64",
-  "darwin-x64": "darwinX64",
   "macos-aarch64": "darwinArm64",
   "macos-arm64": "darwinArm64",
-  "macos-x86_64": "darwinX64",
-  "macos-x64": "darwinX64",
   "aarch64-apple-darwin-aarch64": "darwinArm64",
   "aarch64-apple-darwin-arm64": "darwinArm64",
-  "x86_64-apple-darwin-x86_64": "darwinX64",
-  "x86_64-apple-darwin-x64": "darwinX64",
   "windows-x64": "win32X64",
   "windows-x86_64": "win32X64"
 };
