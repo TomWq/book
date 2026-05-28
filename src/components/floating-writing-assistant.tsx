@@ -444,41 +444,43 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
 
   return (
     <>
-      <div className="floating-ai-launcher" style={launcherStyle}>
-        {visibleTip && !open ? (
-          <div className="floating-ai-greeting" role="status" data-side={tipSide}>
-            <button type="button" aria-label={`关闭${assistantDisplayName}提示`} onClick={dismissTip}>
-              ×
-            </button>
-            <strong>{visibleTip.title}</strong>
-            <span>{visibleTip.message}</span>
-          </div>
-        ) : null}
+      {!open ? (
+        <div className="floating-ai-launcher" style={launcherStyle}>
+          {visibleTip ? (
+            <div className="floating-ai-greeting" role="status" data-side={tipSide}>
+              <button type="button" aria-label={`关闭${assistantDisplayName}提示`} onClick={dismissTip}>
+                ×
+              </button>
+              <strong>{visibleTip.title}</strong>
+              <span>{visibleTip.message}</span>
+            </div>
+          ) : null}
 
-        <button
-          className="floating-ai-button"
-          type="button"
-          aria-label={`打开${assistantDisplayName} AI 创作助手`}
-          aria-expanded={open}
-          aria-controls="writing-assistant-drawer"
-          data-mood={open ? "listening" : visibleTip ? "speaking" : "idle"}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={finishDrag}
-          onPointerCancel={finishDrag}
-          onClick={() => {
-            if (suppressClickRef.current) {
-              suppressClickRef.current = false;
-              return;
-            }
+          <button
+            className="floating-ai-button"
+            type="button"
+            aria-label={`打开${assistantDisplayName} AI 创作助手`}
+            aria-expanded={open}
+            aria-controls="writing-assistant-drawer"
+            data-mood={visibleTip ? "speaking" : "idle"}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={finishDrag}
+            onPointerCancel={finishDrag}
+            onClick={() => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false;
+                return;
+              }
 
-            dismissTip();
-            setOpen((current) => !current);
-          }}
-        >
-          <MoLanMascot />
-        </button>
-      </div>
+              dismissTip();
+              setOpen(true);
+            }}
+          >
+            <MoLanMascot />
+          </button>
+        </div>
+      ) : null}
 
       {open ? (
         <WritingAssistantPanel
