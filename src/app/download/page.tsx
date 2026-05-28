@@ -106,8 +106,8 @@ export default function DownloadPage() {
           <section className="download-panel" id="download-versions" aria-label="版本选择">
             <div className="download-panel-head">
               <div>
-                <span className="download-kicker">桌面客户端下载</span>
-                <h1>下载 AI 网文写作助手</h1>
+                <span className="download-kicker">桌面客户端下载 (授权码请联系管理员) </span>
+                {/* <h1>下载 AI 网文写作助手</h1> */}
                 <p>选择适合你的版本，安装后使用授权码激活，开启创作之旅。</p>
               </div>
               <div className="download-manual-actions">

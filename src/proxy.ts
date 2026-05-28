@@ -49,6 +49,7 @@ export async function proxy(request: NextRequest) {
   const adminLoginPath = getAdminLoginPath();
   const isAsset =
     pathname.startsWith("/_next") ||
+    pathname.startsWith("/download-page/") ||
     pathname.startsWith("/downloads/") ||
     pathname.startsWith("/onboarding/") ||
     pathname.startsWith("/update/") ||

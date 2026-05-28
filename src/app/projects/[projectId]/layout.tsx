@@ -39,32 +39,43 @@ export default async function ProjectLayout({
     notFound();
   }
 
+  const isAnalysisProject = project.type === "analysis";
+
   return (
     <div className="grid" style={{ gap: 18 }}>
-      <section className="panel">
+      <section className={`panel project-shell-panel ${isAnalysisProject ? "project-shell-panel-compact" : ""}`}>
         <div className="project-shell-head">
-          <div className="project-shell-brand">
-            <ProjectCoverEditor
-              projectId={project.id}
-              title={project.name}
-              coverImageUrl={project.coverImageUrl}
-              subtitle={project.type === "analysis" ? "拆书项目" : "创作项目"}
-            />
+          {isAnalysisProject ? (
             <div className="project-shell-copy">
-              <div className="pill">{project.type === "analysis" ? "拆书项目" : "创作项目"}</div>
+              <div className="pill">拆书项目</div>
               <h2>{project.name}</h2>
               <p>{project.description || "尚未填写项目说明。"}</p>
               <div className="project-shell-meta">
                 <span className="chip">{project.genre || "未填写题材"}</span>
-                <span className="chip">
-                  {project.type === "writing"
-                    ? `已写 ${project._count.chapterDrafts} 章`
-                    : `导入 ${project._count.chapters} 章`}
-                </span>
+                <span className="chip">导入 {project._count.chapters} 章</span>
                 <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="project-shell-brand">
+              <ProjectCoverEditor
+                projectId={project.id}
+                title={project.name}
+                coverImageUrl={project.coverImageUrl}
+                subtitle="创作项目"
+              />
+              <div className="project-shell-copy">
+                <div className="pill">创作项目</div>
+                <h2>{project.name}</h2>
+                <p>{project.description || "尚未填写项目说明。"}</p>
+                <div className="project-shell-meta">
+                  <span className="chip">{project.genre || "未填写题材"}</span>
+                  <span className="chip">已写 {project._count.chapterDrafts} 章</span>
+                  <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="project-shell-actions">
             <Link href="/projects" className="button">
               返回项目中心

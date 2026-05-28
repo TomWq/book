@@ -107,7 +107,12 @@ import {
   type LicenseActivationInput
 } from "@/lib/license-service";
 import { splitNovelText } from "@/lib/chapters";
-import { backupStoreSnapshot, readStore, writeStore } from "@/lib/project-store";
+import {
+  appendImportedSourceText,
+  backupStoreSnapshot,
+  readStore,
+  writeStore
+} from "@/lib/project-store";
 import type {
   PleasurePoint,
   EntityRelation,
@@ -4898,6 +4903,12 @@ async function runChapterAiAnalysis(chapters: StoredChapter[], project: StoredPr
   return results;
 }
 
+function getAnalyzeChapterConcurrency(totalChapters: number) {
+  const configured = Number(process.env.ANALYZE_CHAPTER_CONCURRENCY ?? 3);
+  const concurrency = Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 3;
+  return Math.min(5, Math.max(1, concurrency), Math.max(1, totalChapters));
+}
+
 type AnalyzeJobProgressOutput = {
   initialized?: boolean;
   usedAi?: boolean;
@@ -4938,43 +4949,53 @@ async function executeAnalyzeProjectJobStep(
   }
 
   const processedChapterIds = new Set(progress.processedChapterIds ?? []);
-  const nextChapter = chapters.find((chapter) => !processedChapterIds.has(chapter.id));
+  const nextChapters = chapters
+    .filter((chapter) => !processedChapterIds.has(chapter.id))
+    .slice(0, getAnalyzeChapterConcurrency(chapters.length));
   let tokenUsage = progress.tokenUsage;
 
-  if (nextChapter) {
-    const run = await analyzeChapterWithAi(nextChapter, analysisProjectContext(project));
+  if (nextChapters.length > 0) {
+    const projectContext = analysisProjectContext(project);
+    const runs = await Promise.all(
+      nextChapters.map((chapter) => analyzeChapterWithAi(chapter, projectContext))
+    );
 
-    if (!run.usedAi) {
-      const failedUsage = getAiTokenUsage(run.analysis);
+    for (let index = 0; index < nextChapters.length; index += 1) {
+      const nextChapter = nextChapters[index];
+      const run = runs[index];
 
-      if (failedUsage) {
-        job.output = {
-          ...progress,
-          initialized: true,
-          usedAi: true,
-          usedFallback: true,
-          phase: "chapters",
-          chapterAnalysisCount: processedChapterIds.size,
-          totalChapters: chapters.length,
-          processedChapterIds: Array.from(processedChapterIds),
-          tokenUsage: combineAiTokenUsages([tokenUsage, failedUsage])
-        };
+      if (!run.usedAi) {
+        const failedUsage = getAiTokenUsage(run.analysis);
+
+        if (failedUsage) {
+          job.output = {
+            ...progress,
+            initialized: true,
+            usedAi: true,
+            usedFallback: true,
+            phase: "chapters",
+            chapterAnalysisCount: processedChapterIds.size,
+            totalChapters: chapters.length,
+            processedChapterIds: Array.from(processedChapterIds),
+            tokenUsage: combineAiTokenUsages([tokenUsage, failedUsage])
+          };
+        }
+
+        throw new Error(`第 ${nextChapter.chapterNumber} 章 AI 精拆失败：${run.error ?? "分析质量不达标"}`);
       }
 
-      throw new Error(`第 ${nextChapter.chapterNumber} 章 AI 精拆失败：${run.error ?? "分析质量不达标"}`);
+      store.chapterAnalyses = store.chapterAnalyses.filter((analysis) => analysis.chapterId !== nextChapter.id);
+      store.chapterAnalyses.push({
+        id: randomUUID(),
+        projectId: project.id,
+        chapterId: nextChapter.id,
+        ...run.analysis,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+      processedChapterIds.add(nextChapter.id);
+      tokenUsage = combineAiTokenUsages([tokenUsage, getAiTokenUsage(run.analysis)]);
     }
-
-    store.chapterAnalyses = store.chapterAnalyses.filter((analysis) => analysis.chapterId !== nextChapter.id);
-    store.chapterAnalyses.push({
-      id: randomUUID(),
-      projectId: project.id,
-      chapterId: nextChapter.id,
-      ...run.analysis,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    });
-    processedChapterIds.add(nextChapter.id);
-    tokenUsage = combineAiTokenUsages([tokenUsage, getAiTokenUsage(run.analysis)]);
   }
 
   if (processedChapterIds.size < chapters.length) {
@@ -8323,7 +8344,15 @@ export async function importSourceText(input: {
   project.status = "ready";
   project.updatedAt = timestamp;
 
-  await writeStore(store);
+  const savedByAppend = await appendImportedSourceText({
+    sourceText,
+    chapters,
+    projectUpdatedAt: timestamp
+  });
+
+  if (!savedByAppend) {
+    await writeStore(store);
+  }
 
   return {
     sourceText,

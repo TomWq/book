@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AnalysisFlowGraph } from "@/components/analysis-flow-graph";
+import { CollapsibleGraphPanel } from "@/components/collapsible-graph-panel";
 import { Panel } from "@/components/panel";
 import { StateRelationGraph } from "@/components/state-relation-graph";
 import { buildAnalysisRelationGraphs } from "@/lib/analysis-graphs";
@@ -92,7 +93,7 @@ export default async function ProjectAnalysisGraphPage({
         <Panel title="还没有可视化数据" description="先完成章节拆解后，这里会自动生成拆书图谱。">
           <div className="empty-state compact-empty">
             <strong>图谱依赖章节分析结果</strong>
-            <span>先去分析页选择前 30 章、单章或指定区间。分析完成后，图谱会自动读取拆解结果。</span>
+            <span>先去分析页选择前几章、单章或指定区间。分析完成后，图谱会自动读取拆解结果。</span>
             <Link className="button primary" href={`/projects/${projectId}/analysis`}>
               去分析章节
             </Link>
@@ -100,7 +101,12 @@ export default async function ProjectAnalysisGraphPage({
         </Panel>
       ) : (
         <>
-          <Panel title="章节节奏 / 爽点画布" description="默认只看节点、参数和流向；长内容点开节点详情再看。">
+          <CollapsibleGraphPanel
+            title="章节节奏 / 爽点画布"
+            description="默认只看节点、参数和流向；长内容点开节点详情再看。"
+            nodeCount={graphs.chapterCards.length}
+            edgeCount={Math.max(0, graphs.chapterCards.length - 1)}
+          >
             <div className="analysis-board-shell">
               <div className="analysis-board-toolbar">
                 <div>
@@ -121,9 +127,14 @@ export default async function ProjectAnalysisGraphPage({
                 structureBoard={graphs.structureBoard}
               />
             </div>
-          </Panel>
+          </CollapsibleGraphPanel>
 
-          <Panel title="人物 / 线索 / 地图画布" description="拆书侧只展示从章节分析里聚合出的结构元素，按类型分层，不混成一团。">
+          <CollapsibleGraphPanel
+            title="人物 / 线索 / 地图画布"
+            description="拆书侧只展示从章节分析里聚合出的结构元素，按类型分层，不混成一团。"
+            nodeCount={graphs.topCharacters.length + graphs.topClues.length + graphs.structureRelations.length}
+            edgeCount={graphs.structureRelations.length}
+          >
             <div className="analysis-board-shell">
               <div className="analysis-board-toolbar">
                 <div>
@@ -153,17 +164,23 @@ export default async function ProjectAnalysisGraphPage({
                 </span>
               </div>
             </div>
-          </Panel>
+          </CollapsibleGraphPanel>
 
           {extendedGraphs.map((item) => (
-            <Panel key={item.title} title={item.title} description={item.description}>
+            <CollapsibleGraphPanel
+              key={item.title}
+              title={item.title}
+              description={item.description}
+              nodeCount={item.graph.nodes.length}
+              edgeCount={item.graph.edges.length}
+            >
               <StateRelationGraph
                 title={item.graphTitle}
                 description={item.graphDescription}
                 nodes={item.graph.nodes}
                 edges={item.graph.edges}
               />
-            </Panel>
+            </CollapsibleGraphPanel>
           ))}
 
           <Panel title="高频结构摘录" description="保留原来底部的文字汇总，但只作为辅助，不再承担主要图谱阅读。">

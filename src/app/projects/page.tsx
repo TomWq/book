@@ -5,13 +5,19 @@ import { ProjectCover } from "@/components/project-cover";
 
 function ProjectRow({ project }: { project: ProjectWithCounts }) {
   return (
-    <Link key={project.id} href={`/projects/${project.id}`} className="list-item home-project-item">
-      <ProjectCover
-        title={project.name}
-        coverImageUrl={project.coverImageUrl}
-        fallbackLabel={project.type === "analysis" ? "拆" : "书"}
-        size="sm"
-      />
+    <Link
+      key={project.id}
+      href={`/projects/${project.id}`}
+      className={`list-item home-project-item ${project.type === "analysis" ? "home-project-item-compact" : ""}`}
+    >
+      {project.type === "writing" ? (
+        <ProjectCover
+          title={project.name}
+          coverImageUrl={project.coverImageUrl}
+          fallbackLabel="书"
+          size="sm"
+        />
+      ) : null}
       <div className="home-project-copy">
         <div className="project-card-title-row">
           <strong>{project.name}</strong>

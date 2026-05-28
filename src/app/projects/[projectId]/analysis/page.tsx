@@ -123,7 +123,7 @@ export default async function ProjectAnalysisPage({
                   ? "系统之前在 AI 失败后保存了规则兜底结果，所以看起来全是套话。现在已改为：AI 精拆失败就不保存兜底结果。"
                   : analysisFailed
                     ? latestAnalysisJob?.error ?? "请减少章节范围后重试。"
-                    : "请等待任务完成，完成后这里会刷新为有效分析结论。"}
+                    : "请等待任务完成，完成后这里会刷新为有效分析结论。(温馨提示：服务商的 AI 算力影响分析时间，可能会有一定延迟。)"}
               </span>
               {analysisRunning ? (
                 <div className="analysis-progress-card">
@@ -280,7 +280,7 @@ export default async function ProjectAnalysisPage({
         </div>
 
         <aside className="analysis-side">
-          <Panel title="分析范围" description="不用删除章节，可以只分析前 30 章、单章或指定区间。">
+          <Panel title="分析范围" description="不用删除章节，可以只分析前几章、单章或指定区间。">
             <AnalysisRangeForm
               projectId={projectId}
               chaptersCount={chaptersCount}

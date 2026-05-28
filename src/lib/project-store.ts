@@ -1,7 +1,11 @@
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { AppStore } from "@/lib/project-types";
-import { loadPersistedStore, savePersistedStore } from "@/lib/store-persistence";
+import type { AppStore, StoredChapter, StoredSourceText } from "@/lib/project-types";
+import {
+  appendImportedSourceTextToSqlite,
+  loadPersistedStore,
+  savePersistedStore
+} from "@/lib/store-persistence";
 
 export const initialStore: AppStore = {
   users: [],
@@ -49,6 +53,14 @@ export async function readStore() {
 
 export async function writeStore(store: AppStore) {
   await savePersistedStore(storePath, store);
+}
+
+export async function appendImportedSourceText(input: {
+  sourceText: StoredSourceText;
+  chapters: StoredChapter[];
+  projectUpdatedAt: string;
+}) {
+  return appendImportedSourceTextToSqlite(input);
 }
 
 export async function backupStoreSnapshot(store: AppStore, reason = "manual") {

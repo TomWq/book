@@ -3,7 +3,7 @@ import { ApiButton, ApiForm } from "@/components/api-form";
 import { Panel } from "@/components/panel";
 import { getProjectAnalysis } from "@/lib/projects";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 12;
 
 function numberParam(value: string | string[] | undefined) {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -137,7 +137,19 @@ export default async function ProjectChaptersPage({
               const hasAnalysis = Boolean(analysis);
 
               return (
-                <div key={chapter.id} className="chapter-editor">
+                <details key={chapter.id} className="chapter-editor">
+                  <summary className="chapter-list-summary">
+                    <div className="chapter-summary-main">
+                      <span className="chapter-index">第 {chapter.chapterNumber} 章</span>
+                      <strong>{chapter.title || "未命名章节"}</strong>
+                      <span>{hasAnalysis ? analysis?.readerHook || analysis?.summary : "展开后可校正标题、正文和章节顺序"}</span>
+                    </div>
+                    <div className="chapter-summary-meta">
+                      <span className="chip">{chapter.charCount.toLocaleString("zh-CN")} 字</span>
+                      <span className={`chip ${hasAnalysis ? "success-chip" : ""}`}>{hasAnalysis ? "已拆解" : "待分析"}</span>
+                      <span className="chapter-summary-toggle">展开校正</span>
+                    </div>
+                  </summary>
                   <ApiForm
                     className="chapter-editor-main"
                     endpoint={`/api/projects/${projectId}/chapters/${chapter.id}`}
@@ -209,7 +221,7 @@ export default async function ProjectChaptersPage({
                       confirmMessage="确定删除这个章节吗？删除后对应章节内容需要重新导入或手动补章。"
                     />
                   </div>
-                </div>
+                </details>
               );
             })
           )}

@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import type DatabaseConstructor from "better-sqlite3";
+import type { StoredChapter, StoredSourceText } from "@/lib/project-types";
 
 function createRuntimeRequireCandidates() {
   const cwd = path.resolve(/*turbopackIgnore: true*/ process.cwd());
@@ -1424,6 +1425,85 @@ function syncCoreTables(store: unknown) {
 
   try {
     sync();
+  } finally {
+    db.close();
+  }
+}
+
+export function appendImportedSourceTextToSqlite(input: {
+  sourceText: StoredSourceText;
+  chapters: StoredChapter[];
+  projectUpdatedAt: string;
+}) {
+  const sqlitePath = resolveSqliteFilePath();
+
+  if (!sqlitePath) {
+    return false;
+  }
+
+  ensureSqliteSchema();
+  const Database = loadSqlite();
+  const db = new Database(sqlitePath);
+
+  const insertSourceText = db.prepare(`
+    INSERT INTO "SourceText" (
+      "id", "projectId", "title", "content", "sourceType", "charCount", "createdAt", "updatedAt"
+    ) VALUES (
+      @id, @projectId, @title, @content, @sourceType, @charCount, @createdAt, @updatedAt
+    )
+  `);
+
+  const insertChapter = db.prepare(`
+    INSERT INTO "Chapter" (
+      "id", "projectId", "sourceTextId", "chapterNumber", "title", "content", "charCount", "orderIndex", "createdAt", "updatedAt"
+    ) VALUES (
+      @id, @projectId, @sourceTextId, @chapterNumber, @title, @content, @charCount, @orderIndex, @createdAt, @updatedAt
+    )
+  `);
+
+  const updateProject = db.prepare(`
+    UPDATE "Project"
+    SET "status" = @status, "updatedAt" = @updatedAt
+    WHERE "id" = @projectId
+  `);
+
+  const saveImport = db.transaction(() => {
+    insertSourceText.run({
+      id: text(input.sourceText.id),
+      projectId: text(input.sourceText.projectId),
+      title: text(input.sourceText.title),
+      content: text(input.sourceText.content),
+      sourceType: text(input.sourceText.sourceType),
+      charCount: integer(input.sourceText.charCount),
+      createdAt: dateText(input.sourceText.createdAt),
+      updatedAt: dateText(input.sourceText.updatedAt)
+    });
+
+    input.chapters.forEach((chapter) => {
+      insertChapter.run({
+        id: text(chapter.id),
+        projectId: text(chapter.projectId),
+        sourceTextId: text(chapter.sourceTextId),
+        chapterNumber: integer(chapter.chapterNumber),
+        title: text(chapter.title),
+        content: text(chapter.content),
+        charCount: integer(chapter.charCount),
+        orderIndex: integer(chapter.orderIndex),
+        createdAt: dateText(chapter.createdAt),
+        updatedAt: dateText(chapter.updatedAt)
+      });
+    });
+
+    updateProject.run({
+      projectId: text(input.sourceText.projectId),
+      status: "ready",
+      updatedAt: dateText(input.projectUpdatedAt)
+    });
+  });
+
+  try {
+    saveImport();
+    return true;
   } finally {
     db.close();
   }

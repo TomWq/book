@@ -76,7 +76,7 @@ export default async function ActivatePage({
         </header>
 
         <div className="auth-slogan">
-          <div className="auth-calligraphy">好故事<br />不止一章<br />更要稳稳写下去</div>
+          <div className="auth-calligraphy">灯下起长卷<br />笔端生云烟<br />胸中藏万象<br />落笔自成篇</div>
           <div className="auth-slogan-side">
             <strong>Good stories</strong>
             <span>structure first</span>

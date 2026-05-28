@@ -50,7 +50,7 @@ export default async function ProjectAnalysisFormulaPage({
         <Panel title="还没有可沉淀的公式" description="先完成章节拆解和整书分析后，再保存模板。">
           <div className="empty-state compact-empty">
             <strong>公式依赖整书分析</strong>
-            <span>可以先去分析页选择前 30 章、单章或指定区间。分析完成后，这里会展示可复用公式。</span>
+            <span>可以先去分析页选择前几章、单章或指定区间。分析完成后，这里会展示可复用公式。</span>
             <Link className="button primary" href={`/projects/${projectId}/analysis`}>
               去分析章节
             </Link>

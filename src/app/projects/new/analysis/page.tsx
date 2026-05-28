@@ -9,7 +9,7 @@ export default function NewAnalysisProjectPage() {
         <div className="hero-top">
           <div>
             <h1>新建拆书项目，只保留拆解需要的信息</h1>
-            <p>这里不要求主角名、金手指和作品简介。先建立拆书容器，下一步直接导入文本、选择章节区间，再运行分析。</p>
+            <p>先记录来源、简介、题材和分析目标，下一步导入文本、选择章节区间，再运行分析。</p>
           </div>
           <div className="hero-actions">
             <Link href="/projects/new" className="button">
@@ -25,13 +25,30 @@ export default function NewAnalysisProjectPage() {
       <div className="analysis-create-layout">
         <Panel
           title="拆书项目信息"
-          description="只填写拆书时真正有用的内容，创建后会进入文本导入页。"
+          description="简介会作为原书的第一层钩子和商业承诺，参与后续拆解判断。"
         >
           <AnalysisProjectForm />
         </Panel>
 
         <aside className="analysis-create-side">
-          <Panel title="创建后做什么" description="拆书链路不需要先补创作设定。">
+          <Panel title="填写建议" description="拆书项目信息只做分析锚点，不提前写新书设定。">
+            <div className="list compact-list">
+              <div className="task-block">
+                <div className="task-title">简介</div>
+                <div className="muted">粘平台简介或推荐语，用来判断读者第一眼被什么吸引。</div>
+              </div>
+              <div className="task-block">
+                <div className="task-title">来源</div>
+                <div className="muted">记录书名、平台和样本范围，后续保存模板时更好追溯。</div>
+              </div>
+              <div className="task-block">
+                <div className="task-title">目标</div>
+                <div className="muted">写清楚要拆开局、爽点、主循环，还是模板迁移。</div>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel title="创建后做什么" description="下一步才进入正文导入和章节分析。">
             <div className="list compact-list">
               <div className="task-block">
                 <div className="task-title">1. 导入文本</div>

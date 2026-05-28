@@ -109,7 +109,7 @@ export function AnalysisRangeForm({
           <option value="first">前 N 章</option>
           <option value="range">指定区间</option>
           <option value="single">单章</option>
-          <option value="all">全部章节（最多 30 章）</option>
+          <option value="all">全部章节</option>
         </select>
       </div>
 
@@ -170,7 +170,7 @@ export function AnalysisRangeForm({
           <span className="chip">自带 Key 模式</span>
         </div>
         <div className="muted">
-          项目共 {chaptersCount.toLocaleString("zh-CN")} 章。第一版单次最多分析 {MAX_ANALYSIS_CHAPTERS} 章，会按章节逐步执行，最后汇总整书结论。
+          项目共 {chaptersCount.toLocaleString("zh-CN")} 章。会按你选定的范围逐步执行，长篇建议先从开局段或一个小区间开始。
         </div>
       </div>
 

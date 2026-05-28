@@ -23,13 +23,19 @@ function ProjectListItem({
   writtenCharacters?: number;
 }) {
   return (
-    <Link key={project.id} href={`/projects/${project.id}`} className="list-item home-project-item">
-      <ProjectCover
-        title={project.name}
-        coverImageUrl={project.coverImageUrl}
-        fallbackLabel={mode === "writing" ? "书" : "拆"}
-        size="sm"
-      />
+    <Link
+      key={project.id}
+      href={`/projects/${project.id}`}
+      className={`list-item home-project-item ${mode === "analysis" ? "home-project-item-compact" : ""}`}
+    >
+      {mode === "writing" ? (
+        <ProjectCover
+          title={project.name}
+          coverImageUrl={project.coverImageUrl}
+          fallbackLabel="书"
+          size="sm"
+        />
+      ) : null}
       <div className="home-project-copy">
         <div className="row">
           <strong>{project.name}</strong>

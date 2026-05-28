@@ -75,7 +75,7 @@ function buildChapterMessages(
           qualityRules,
           contextRules: [
             "projectContext.genre 是用户标记的来源作品题材或平台分类，只作为拆解视角参考，不要强行覆盖原文证据。",
-            "projectContext.description 可能包含来源说明、分类体系、目标读者和分析目标；需要用它理解用户为什么拆这本书。",
+            "projectContext.description 可能包含来源说明、原书简介、分类体系、目标读者和分析目标；原书简介代表平台侧销售承诺，需要用来理解开局钩子和读者预期。",
             "如果原文内容和用户标记不一致，必须以原文为准，并在总结中避免编造题材特征。"
           ],
           chapter: {
@@ -143,7 +143,8 @@ function buildStoryMessages(
             "usablePatterns 要能直接用于新书迁移，每条都要具体。",
             "avoidCopying 要指出本书哪些角色、桥段、专有设定不能照搬。",
             "formula 必须是这本书的商业公式，不少于 30 个中文字符。",
-            "如果 projectContext.genre 存在，genre 输出优先结合用户标记和章节证据；不要把番茄/起点分类体系误写成原文设定。"
+            "如果 projectContext.genre 存在，genre 输出优先结合用户标记和章节证据；不要把番茄/起点分类体系误写成原文设定。",
+            "如果 projectContext.description 里包含原书简介，需要判断简介承诺的主角处境、核心卖点或题材钩子，在前几章如何兑现或延迟兑现。"
           ],
           chapterAnalyses: chapters.map((chapter) => ({
             summary: compactStorySignal(chapter.summary),

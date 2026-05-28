@@ -4611,6 +4611,26 @@ form[aria-busy="true"] button[type="submit"] {
   animation: route-loading-slide 1.05s ease-in-out infinite;
 }
 
+.import-loading-progress[data-progress="true"]::before {
+  left: 0;
+  width: var(--import-progress, 0%);
+  background: var(--accent);
+  animation: none;
+}
+
+.import-loading-percent {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.import-loading-meta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .route-loading-grid {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr;
@@ -8587,6 +8607,10 @@ form[aria-busy="true"] button[type="submit"] {
   align-items: center;
 }
 
+.home-project-item-compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .home-project-copy {
   display: grid;
   gap: 8px;
@@ -8851,6 +8875,10 @@ form[aria-busy="true"] button[type="submit"] {
   min-width: 0;
 }
 
+.project-shell-panel-compact {
+  padding: 14px 18px 10px;
+}
+
 .project-card-title-row {
   display: flex;
   align-items: flex-start;
@@ -8895,6 +8923,11 @@ form[aria-busy="true"] button[type="submit"] {
   margin-bottom: 16px;
 }
 
+.project-shell-panel-compact .project-shell-head {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
 .project-shell-copy {
   display: grid;
   gap: 10px;
@@ -8908,6 +8941,14 @@ form[aria-busy="true"] button[type="submit"] {
   line-height: 1.28;
   letter-spacing: 0;
   overflow-wrap: anywhere;
+}
+
+.project-shell-panel-compact .project-shell-copy {
+  gap: 8px;
+}
+
+.project-shell-panel-compact .project-shell-copy h2 {
+  font-size: 22px;
 }
 
 .project-shell-copy p {
@@ -8924,7 +8965,7 @@ form[aria-busy="true"] button[type="submit"] {
 
 .chapter-cards {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .chapter-next-step {
@@ -9001,21 +9042,99 @@ form[aria-busy="true"] button[type="submit"] {
 .chapter-editor {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 14px;
+  padding: 0;
   background: #ffffff;
-  display: grid;
-  gap: 12px;
+  overflow: hidden;
 }
 
 .chapter-editor-main {
   display: grid;
   gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.chapter-list-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  min-height: 64px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.chapter-list-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chapter-list-summary:hover {
+  background: var(--bg-soft);
+}
+
+.chapter-summary-main {
+  display: grid;
+  grid-template-columns: 86px minmax(160px, 0.72fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.chapter-summary-main strong,
+.chapter-summary-main span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chapter-summary-main strong {
+  font-size: 14px;
+}
+
+.chapter-summary-main span:last-child {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chapter-summary-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chapter-summary-toggle {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.chapter-summary-toggle::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 0.2s ease;
+}
+
+.chapter-editor[open] .chapter-summary-toggle::after {
+  transform: rotate(225deg) translateY(-2px);
+}
+
+.chapter-editor[open] .chapter-list-summary {
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-soft);
 }
 
 .chapter-card-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  margin: 0 14px 14px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
@@ -9705,12 +9824,14 @@ form[aria-busy="true"] button[type="submit"] {
 
 .analysis-create-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr);
   gap: 16px;
   align-items: start;
 }
 
 .analysis-create-side {
+  display: grid;
+  gap: 16px;
   position: sticky;
   top: 78px;
   min-width: 0;
@@ -9719,6 +9840,29 @@ form[aria-busy="true"] button[type="submit"] {
 .analysis-create-form {
   display: grid;
   gap: 14px;
+}
+
+.analysis-form-section,
+.analysis-taxonomy-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.analysis-context-grid,
+.analysis-taxonomy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.analysis-context-grid .field,
+.analysis-taxonomy-grid .field {
+  min-width: 0;
+}
+
+.analysis-compact-textarea textarea {
+  min-height: 112px;
 }
 
 .analysis-genre-summary {
@@ -10843,6 +10987,19 @@ form[aria-busy="true"] button[type="submit"] {
   background-size: 100% 100%, 130% 130%;
   color: #ffffff;
   animation: auth-background-shift 18s ease-in-out infinite alternate;
+}
+
+.license-auth-page .auth-immersive {
+  background:
+    linear-gradient(90deg, rgba(17, 22, 35, 0.46), rgba(9, 13, 24, 0.78) 56%, rgba(8, 11, 19, 0.96)),
+    url("/download-page/hero-bg.webp") center center / cover no-repeat;
+  background-color: #0d1320;
+  animation: none;
+}
+
+.license-auth-page .auth-slogan {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .auth-immersive::before {
@@ -12000,6 +12157,8 @@ form[aria-busy="true"] button[type="submit"] {
   .license-table-row,
   .token-grid,
   .chapter-card-head,
+  .chapter-list-summary,
+  .chapter-summary-main,
   .analysis-snippets,
   .workflow-grid,
   .public-hero,
@@ -12016,6 +12175,8 @@ form[aria-busy="true"] button[type="submit"] {
   .auth-shell,
   .auth-immersive,
   .analysis-create-layout,
+  .analysis-context-grid,
+  .analysis-taxonomy-grid,
   .book-create-form,
   .book-choice-row,
   .tag-picker,
@@ -13518,9 +13679,12 @@ body.desktop-runtime .workflow-grid {
 }
 
 body.desktop-runtime .writing-form-grid,
-body.desktop-runtime .writing-context-full,
-body.desktop-runtime .analysis-create-layout {
+body.desktop-runtime .writing-context-full {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.desktop-runtime .analysis-create-layout {
+  grid-template-columns: minmax(0, 1.14fr) minmax(320px, 0.86fr);
 }
 
 body.desktop-runtime .state-layout,
@@ -13529,6 +13693,8 @@ body.desktop-runtime .editor-control-grid {
 }
 
 body.desktop-runtime .split-panels,
+body.desktop-runtime .analysis-context-grid,
+body.desktop-runtime .analysis-taxonomy-grid,
 body.desktop-runtime .text-compare-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -13567,6 +13733,10 @@ body.desktop-runtime .project-shell-head {
 
 body.desktop-runtime .chapter-card-head {
   grid-template-columns: 76px minmax(0, 1fr) auto;
+}
+
+body.desktop-runtime .chapter-summary-main {
+  grid-template-columns: 76px minmax(120px, 0.68fr) minmax(0, 1fr);
 }
 
 body.desktop-runtime .license-table-row {
@@ -13666,12 +13836,14 @@ body.desktop-runtime .mindmap-board {
   body.desktop-runtime .state-layout,
   body.desktop-runtime .editor-control-grid,
   body.desktop-runtime .analysis-create-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.78fr);
   }
 
   body.desktop-runtime .writing-form-grid,
   body.desktop-runtime .writing-context-full,
   body.desktop-runtime .split-panels,
+  body.desktop-runtime .analysis-context-grid,
+  body.desktop-runtime .analysis-taxonomy-grid,
   body.desktop-runtime .text-compare-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

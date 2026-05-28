@@ -419,6 +419,69 @@ fn show_startup_failure(window: &WebviewWindow, message: &str) {
     let _ = window.eval(script);
 }
 
+fn transition_to_main_window(main_window: WebviewWindow, splash: WebviewWindow) {
+    let _ = main_window.eval(
+        r#"
+        (() => {
+          if (document.getElementById("tauri-window-enter-style")) return;
+
+          const style = document.createElement("style");
+          style.id = "tauri-window-enter-style";
+          style.textContent = `
+            html.app-window-entering,
+            html.app-window-entering body {
+              background: #0d1320 !important;
+            }
+
+            html.app-window-entering body {
+              opacity: 0;
+              transform: scale(0.996);
+              filter: saturate(0.96);
+              transform-origin: center;
+              transition:
+                opacity 320ms cubic-bezier(0.22, 1, 0.36, 1),
+                transform 380ms cubic-bezier(0.22, 1, 0.36, 1),
+                filter 380ms cubic-bezier(0.22, 1, 0.36, 1);
+            }
+
+            html.app-window-entering.app-window-ready body {
+              opacity: 1;
+              transform: scale(1);
+              filter: none;
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+              html.app-window-entering body {
+                transition-duration: 1ms !important;
+              }
+            }
+          `;
+          document.head.appendChild(style);
+          document.documentElement.classList.add("app-window-entering");
+        })();
+        "#,
+    );
+
+    let _ = splash.eval("document.body.classList.add('is-leaving');");
+    thread::sleep(Duration::from_millis(140));
+
+    let _ = main_window.show();
+    let _ = main_window.center();
+    let _ = main_window.eval(
+        r#"
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            document.documentElement.classList.add("app-window-ready");
+          });
+        });
+        "#,
+    );
+
+    thread::sleep(Duration::from_millis(420));
+    let _ = main_window.set_focus();
+    let _ = splash.hide();
+}
+
 fn setup_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
     let app_menu = SubmenuBuilder::new(app, APP_NAME)
         .about(None)
@@ -507,12 +570,15 @@ fn create_main_window(
         .resizable(true)
         .visible(false)
         .on_page_load(move |main_window, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                main_window_ready.store(true, Ordering::SeqCst);
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
-                let _ = main_window.center();
-                let _ = splash_for_load.hide();
+            if payload.event() == PageLoadEvent::Finished
+                && !main_window_ready.swap(true, Ordering::SeqCst)
+            {
+                let main_for_transition = main_window.clone();
+                let splash_for_transition = splash_for_load.clone();
+
+                thread::spawn(move || {
+                    transition_to_main_window(main_for_transition, splash_for_transition);
+                });
             }
         })
         .build()
@@ -534,7 +600,10 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_updater::Builder::new()
-                .pubkey(env_or_default("TAURI_UPDATER_PUBLIC_KEY", DEFAULT_UPDATER_PUBLIC_KEY))
+                .pubkey(env_or_default(
+                    "TAURI_UPDATER_PUBLIC_KEY",
+                    DEFAULT_UPDATER_PUBLIC_KEY,
+                ))
                 .build(),
         )
         .setup(move |app| -> Result<(), Box<dyn std::error::Error>> {
@@ -543,7 +612,7 @@ fn main() {
             let splash =
                 WebviewWindowBuilder::new(app, SPLASH_WINDOW, WebviewUrl::App("index.html".into()))
                     .title(APP_NAME)
-                    .inner_size(560.0, 420.0)
+                    .inner_size(1280.0, 860.0)
                     .center()
                     .resizable(false)
                     .build()?;

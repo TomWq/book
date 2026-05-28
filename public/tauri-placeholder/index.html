@@ -15,15 +15,56 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: #111827;
+        background: #0d1320;
       }
 
       body {
         display: grid;
         place-items: center;
+        position: relative;
+        background:
+          linear-gradient(90deg, rgba(17, 22, 35, 0.46), rgba(9, 13, 24, 0.78) 56%, rgba(8, 11, 19, 0.96)),
+          url("hero-bg.webp") center center / cover no-repeat;
         color: #fff;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
         user-select: none;
+        transform-origin: center;
+        transition:
+          opacity 360ms cubic-bezier(0.22, 1, 0.36, 1),
+          transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+          filter 420ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      body.is-leaving {
+        opacity: 0;
+        transform: scale(1.012);
+        filter: blur(4px) saturate(0.92);
+      }
+
+      body::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(115deg, transparent 0 18%, rgba(255, 255, 255, 0.08) 18.2% 18.45%, transparent 18.8% 100%),
+          linear-gradient(160deg, transparent 0 62%, rgba(255, 255, 255, 0.055) 62.2% 62.45%, transparent 62.7% 100%),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.024) 0 1px, transparent 1px 96px),
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 72px);
+        opacity: 0.52;
+      }
+
+      body::after {
+        content: "";
+        position: absolute;
+        inset: -20%;
+        pointer-events: none;
+        background:
+          linear-gradient(112deg, transparent 0 34%, rgba(255, 229, 198, 0.09) 43%, transparent 54%),
+          linear-gradient(22deg, transparent 0 55%, rgba(95, 135, 255, 0.08) 62%, transparent 72%);
+        filter: blur(14px);
+        opacity: 0.72;
+        animation: light-drift 22s ease-in-out infinite alternate;
       }
 
       .shell {
@@ -38,9 +79,18 @@
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 28px;
         background:
-          linear-gradient(135deg, rgba(24, 31, 47, 0.9), rgba(9, 13, 24, 0.95)),
-          linear-gradient(145deg, #273047 0%, #121a2b 48%, #0c111d 100%);
-        box-shadow: 0 34px 96px rgba(0, 0, 0, 0.42);
+          linear-gradient(135deg, rgba(21, 27, 42, 0.74), rgba(8, 12, 22, 0.84)),
+          rgba(14, 19, 32, 0.64);
+        box-shadow: 0 34px 96px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(6px);
+        transition:
+          opacity 280ms cubic-bezier(0.22, 1, 0.36, 1),
+          transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      body.is-leaving .shell {
+        opacity: 0;
+        transform: translateY(10px) scale(0.985);
       }
 
       .shell::before {
@@ -134,6 +184,11 @@
         to { transform: translate3d(2%, 1%, 0) rotate(4deg); }
       }
 
+      @keyframes light-drift {
+        from { transform: translate3d(-2%, -1%, 0); }
+        to { transform: translate3d(3%, 2%, 0); }
+      }
+
       @keyframes pulse {
         0%, 100% { opacity: 0.6; transform: scale(0.92); }
         50% { opacity: 1; transform: scale(1.04); }
@@ -148,6 +203,15 @@
         0% { transform: translateX(-105%); }
         52% { transform: translateX(82%); }
         100% { transform: translateX(235%); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 1ms !important;
+          transition-duration: 1ms !important;
+        }
       }
     </style>
   </head>

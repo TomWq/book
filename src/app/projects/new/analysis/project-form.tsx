@@ -67,9 +67,11 @@ export function AnalysisProjectForm() {
 
     const formData = new FormData(event.currentTarget);
     const sourceTitle = asText(formData.get("sourceTitle"));
+    const sourceSynopsis = asText(formData.get("sourceSynopsis"));
     const analysisGoal = asText(formData.get("analysisGoal"));
     const description = [
       sourceTitle ? `原书/来源：${sourceTitle}` : "",
+      sourceSynopsis ? `原书简介：${sourceSynopsis}` : "",
       `分类体系：${taxonomyStyle === "qidian" ? "起点体系" : "番茄体系"}`,
       `目标读者：${targetReader}`,
       analysisGoal ? `分析目标：${analysisGoal}` : ""
@@ -108,102 +110,117 @@ export function AnalysisProjectForm() {
 
   return (
     <form className="analysis-create-form" onSubmit={handleSubmit} aria-busy={isSubmitting}>
-      <div className="field">
-        <div className="field-label">拆书项目名</div>
-        <input name="name" placeholder="例如：某本都市退婚流前 30 章拆解" required />
-      </div>
-
-      <div className="split-panels">
+      <div className="analysis-form-section">
         <div className="field">
-          <div className="field-label">原书 / 来源说明</div>
-          <input name="sourceTitle" placeholder="例如：书名、平台、题材来源" />
+          <div className="field-label">拆书项目名</div>
+          <input name="name" placeholder="例如：某本都市退婚流前 30 章拆解" required />
         </div>
-        <div className="field">
-          <div className="field-label">目标读者</div>
-          <div className="segmented-row">
-            {readerOptions.map((reader) => (
-              <label key={reader}>
-                <input
-                  type="radio"
-                  name="targetReader"
-                  value={reader}
-                  checked={targetReader === reader}
-                  onChange={() => updateTargetReader(reader)}
-                />
-                <span>{reader}</span>
-              </label>
-            ))}
+
+        <div className="split-panels">
+          <div className="field">
+            <div className="field-label">原书 / 来源说明</div>
+            <input name="sourceTitle" placeholder="例如：书名、平台、题材来源" />
+          </div>
+          <div className="field">
+            <div className="field-label">目标读者</div>
+            <div className="segmented-row">
+              {readerOptions.map((reader) => (
+                <label key={reader}>
+                  <input
+                    type="radio"
+                    name="targetReader"
+                    value={reader}
+                    checked={targetReader === reader}
+                    onChange={() => updateTargetReader(reader)}
+                  />
+                  <span>{reader}</span>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="field">
-        <div className="field-label">分类体系</div>
-        <div className="title-style-picker" aria-label="拆书题材分类体系">
-          <label>
-            <input
-              type="radio"
-              name="taxonomyStyle"
-              value="fanqie"
-              checked={taxonomyStyle === "fanqie"}
-              onChange={() => updateTaxonomyStyle("fanqie")}
-            />
-            <span>
-              <strong>番茄体系</strong>
-              <small>按番茄常见主分类拆解题材方向</small>
-            </span>
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="taxonomyStyle"
-              value="qidian"
-              checked={taxonomyStyle === "qidian"}
-              onChange={() => updateTaxonomyStyle("qidian")}
-            />
-            <span>
-              <strong>起点体系</strong>
-              <small>按起点大类和子类标记来源作品</small>
-            </span>
-          </label>
+      <div className="analysis-context-grid">
+        <div className="field analysis-compact-textarea">
+          <div className="field-label">原书简介 / 平台简介</div>
+          <textarea
+            name="sourceSynopsis"
+            placeholder="粘贴作品简介、平台推荐语或一句话卖点。用于判断开局承诺、目标读者和爽点预期。"
+          />
+        </div>
+        <div className="field analysis-compact-textarea">
+          <div className="field-label">分析目标</div>
+          <textarea
+            name="analysisGoal"
+            placeholder="例如：只拆前 30 章开局留存、爽点密度、主循环和可复用模板。"
+          />
         </div>
       </div>
 
-      <div className="field">
-        <div className="field-label">{taxonomyStyle === "qidian" ? "起点大类" : "题材方向"}</div>
-        <select name="genre" value={genre} onChange={(event) => updateGenre(event.target.value)}>
-          {genreOptions.map((category) => (
-            <option key={category.name} value={category.name}>
-              {category.name} - {category.description}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {taxonomyStyle === "qidian" ? (
+      <div className="analysis-taxonomy-grid">
         <div className="field">
-          <div className="field-label">起点子类</div>
-          <select name="subCategory" value={selectedSubCategory} onChange={(event) => setSubCategory(event.target.value)}>
-            {qidianSubCategories.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
+          <div className="field-label">分类体系</div>
+          <div className="title-style-picker" aria-label="拆书题材分类体系">
+            <label>
+              <input
+                type="radio"
+                name="taxonomyStyle"
+                value="fanqie"
+                checked={taxonomyStyle === "fanqie"}
+                onChange={() => updateTaxonomyStyle("fanqie")}
+              />
+              <span>
+                <strong>番茄体系</strong>
+                <small>按番茄常见主分类拆解题材方向</small>
+              </span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="taxonomyStyle"
+                value="qidian"
+                checked={taxonomyStyle === "qidian"}
+                onChange={() => updateTaxonomyStyle("qidian")}
+              />
+              <span>
+                <strong>起点体系</strong>
+                <small>按起点大类和子类标记来源作品</small>
+              </span>
+            </label>
+          </div>
         </div>
-      ) : null}
 
-      <div className="analysis-genre-summary">
-        <strong>{projectGenre}</strong>
-        <span>{selectedCategory?.description}</span>
-      </div>
+        <div className="analysis-taxonomy-stack">
+          <div className="field">
+            <div className="field-label">{taxonomyStyle === "qidian" ? "起点大类" : "题材方向"}</div>
+            <select name="genre" value={genre} onChange={(event) => updateGenre(event.target.value)}>
+              {genreOptions.map((category) => (
+                <option key={category.name} value={category.name}>
+                  {category.name} - {category.description}
+                </option>
+              ))}
+            </select>
+          </div>
 
-      <div className="field">
-        <div className="field-label">分析目标</div>
-        <textarea
-          name="analysisGoal"
-          placeholder="例如：只拆前 30 章开局留存、爽点密度、主循环和可复用模板。"
-        />
+          {taxonomyStyle === "qidian" ? (
+            <div className="field">
+              <div className="field-label">起点子类</div>
+              <select name="subCategory" value={selectedSubCategory} onChange={(event) => setSubCategory(event.target.value)}>
+                {qidianSubCategories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
+          <div className="analysis-genre-summary">
+            <strong>{projectGenre}</strong>
+            <span>{selectedCategory?.description}</span>
+          </div>
+        </div>
       </div>
 
       {error ? <div className="pill danger form-error">{error}</div> : null}
