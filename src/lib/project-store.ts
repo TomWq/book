@@ -17,6 +17,7 @@ export const initialStore: AppStore = {
   storyAnalyses: [],
   aiJobs: [],
   templates: [],
+  inspirations: [],
   outlines: [],
   writingBibles: [],
   characterProfiles: [],

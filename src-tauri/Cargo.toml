@@ -1,6 +1,6 @@
 [package]
 name = "ai-novel-workbench"
-version = "1.0.3"
+version = "1.0.4"
 description = "AI 网文写作助手桌面壳"
 authors = ["AI 网文写作助手"]
 edition = "2021"

@@ -5,10 +5,12 @@ const parentPid = Number(process.env.TAURI_PARENT_PID || "0");
 
 process.on("uncaughtException", (error) => {
   console.error("[tauri-wrapper] uncaught exception", error);
+  setImmediate(() => process.exit(1));
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error("[tauri-wrapper] unhandled rejection", reason);
+  setImmediate(() => process.exit(1));
 });
 
 if (!serverPath) {

@@ -36,6 +36,57 @@ const DEFAULT_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIH
 const MENU_OPEN_LOGS: &str = "open_logs_dir";
 const SPLASH_WINDOW: &str = "splash";
 const MAIN_WINDOW: &str = "main";
+const MAIN_WINDOW_ENTER_SCRIPT: &str = r#"
+(() => {
+  if (window.__tauriWindowEnterInstalled) return;
+  window.__tauriWindowEnterInstalled = true;
+
+  const css = `
+    html.app-window-entering,
+    html.app-window-entering body {
+      background: #0d1320 !important;
+    }
+
+    html.app-window-entering body {
+      opacity: 0;
+      transform: scale(0.998);
+      transform-origin: center;
+      transition:
+        opacity 540ms linear,
+        transform 540ms linear;
+    }
+
+    html.app-window-entering.app-window-ready body {
+      opacity: 1;
+      transform: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html.app-window-entering body {
+        transition-duration: 1ms !important;
+      }
+    }
+  `;
+
+  const install = () => {
+    if (!document.getElementById("tauri-window-enter-style")) {
+      const style = document.createElement("style");
+      style.id = "tauri-window-enter-style";
+      style.textContent = css;
+      (document.head || document.documentElement).appendChild(style);
+    }
+    document.documentElement.classList.add("app-window-entering");
+  };
+
+  document.documentElement.classList.add("app-window-entering");
+
+  if (document.head) {
+    install();
+  } else {
+    document.addEventListener("DOMContentLoaded", install, { once: true });
+  }
+})();
+"#;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -66,12 +117,30 @@ fn find_free_port(start: u16) -> Result<u16, String> {
     Err("没有找到可用的本地端口".to_string())
 }
 
-fn wait_for_port(port: u16) -> Result<(), String> {
+fn wait_for_port(port: u16, child: &mut Child, log_path: &Path) -> Result<(), String> {
     let started_at = SystemTime::now();
 
     loop {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return Ok(());
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                append_log(
+                    log_path,
+                    format!("Next service exited before port ready: {}", status),
+                );
+                return Err(format!(
+                    "本地 Next 服务启动失败，进程提前退出（{}）。请查看 tauri.log 里的 next:error。",
+                    status
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                append_log(log_path, format!("checking Next service failed: {}", error));
+                return Err(format!("检查本地 Next 服务状态失败：{}", error));
+            }
         }
 
         if started_at.elapsed().unwrap_or_default() > Duration::from_secs(45) {
@@ -380,7 +449,7 @@ fn start_next_server(app: &AppHandle) -> Result<(Child, String), String> {
     }
 
     append_log(&log_path, format!("waiting for port {}", port));
-    wait_for_port(port)?;
+    wait_for_port(port, &mut child, &log_path)?;
     append_log(&log_path, format!("ready on port {}", port));
     let _ = wait_for_http_route(port, "/api/health", &log_path)?;
     let _ = wait_for_http_route(port, "/activate", &log_path)?;
@@ -420,50 +489,8 @@ fn show_startup_failure(window: &WebviewWindow, message: &str) {
 }
 
 fn transition_to_main_window(main_window: WebviewWindow, splash: WebviewWindow) {
-    let _ = main_window.eval(
-        r#"
-        (() => {
-          if (document.getElementById("tauri-window-enter-style")) return;
-
-          const style = document.createElement("style");
-          style.id = "tauri-window-enter-style";
-          style.textContent = `
-            html.app-window-entering,
-            html.app-window-entering body {
-              background: #0d1320 !important;
-            }
-
-            html.app-window-entering body {
-              opacity: 0;
-              transform: scale(0.996);
-              filter: saturate(0.96);
-              transform-origin: center;
-              transition:
-                opacity 320ms cubic-bezier(0.22, 1, 0.36, 1),
-                transform 380ms cubic-bezier(0.22, 1, 0.36, 1),
-                filter 380ms cubic-bezier(0.22, 1, 0.36, 1);
-            }
-
-            html.app-window-entering.app-window-ready body {
-              opacity: 1;
-              transform: scale(1);
-              filter: none;
-            }
-
-            @media (prefers-reduced-motion: reduce) {
-              html.app-window-entering body {
-                transition-duration: 1ms !important;
-              }
-            }
-          `;
-          document.head.appendChild(style);
-          document.documentElement.classList.add("app-window-entering");
-        })();
-        "#,
-    );
-
     let _ = splash.eval("document.body.classList.add('is-leaving');");
-    thread::sleep(Duration::from_millis(140));
+    thread::sleep(Duration::from_millis(260));
 
     let _ = main_window.show();
     let _ = main_window.center();
@@ -471,13 +498,19 @@ fn transition_to_main_window(main_window: WebviewWindow, splash: WebviewWindow) 
         r#"
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            document.documentElement.classList.add("app-window-ready");
+            const root = document.documentElement;
+            root.classList.add("app-window-ready");
+
+            window.setTimeout(() => {
+              root.classList.remove("app-window-entering", "app-window-ready");
+              document.getElementById("tauri-window-enter-style")?.remove();
+            }, 700);
           });
         });
         "#,
     );
 
-    thread::sleep(Duration::from_millis(420));
+    thread::sleep(Duration::from_millis(620));
     let _ = main_window.set_focus();
     let _ = splash.hide();
 }
@@ -569,6 +602,7 @@ fn create_main_window(
         .center()
         .resizable(true)
         .visible(false)
+        .initialization_script(MAIN_WINDOW_ENTER_SCRIPT)
         .on_page_load(move |main_window, payload| {
             if payload.event() == PageLoadEvent::Finished
                 && !main_window_ready.swap(true, Ordering::SeqCst)

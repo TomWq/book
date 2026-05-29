@@ -6,7 +6,7 @@ import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { FullBookExportActions } from "@/components/full-book-export-actions";
 import { Panel } from "@/components/panel";
 import { StreamDraftButton } from "@/components/stream-draft-button";
-import { getProjectAnalysis, getProjectWritingState } from "@/lib/projects";
+import { getProjectAnalysis, getProjectInspirations, getProjectWritingState } from "@/lib/projects";
 import { formatReviewText } from "@/lib/review-display";
 
 function formatReviewIssueType(type: string) {
@@ -102,9 +102,10 @@ export default async function ProjectWritingPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [writingState, analysisState] = await Promise.all([
+  const [writingState, analysisState, relatedInspirations] = await Promise.all([
     getProjectWritingState(projectId),
-    getProjectAnalysis(projectId)
+    getProjectAnalysis(projectId),
+    getProjectInspirations(projectId)
   ]);
 
   if (!writingState) {
@@ -181,6 +182,7 @@ export default async function ProjectWritingPage({
   const contextStats = [
     `人物 ${writingState.characters.length}`,
     `伏笔 ${writingState.foreshadowings.length}`,
+    `灵感 ${relatedInspirations.length}`,
     `章节 ${chapterDirectoryAll.length}`,
     latestLongFormPlan ? "已有长篇规划" : "缺少长篇规划",
     hasAnalysisContext ? `拆书 ${analysisState.chapterAnalyses.length}` : "未接入拆书"
@@ -287,6 +289,7 @@ export default async function ProjectWritingPage({
               className="forms writing-form"
               endpoint={`/api/projects/${projectId}/writing`}
               body={{ action: "generate_task_card", chapterNumber: taskCardChapterNumber }}
+              arrayFields={["relatedInspirationIds"]}
               booleanFields={["useAnalysisContext"]}
               resetOnSuccess
               pendingTitle={`正在生成第 ${taskCardChapterNumber} 章任务卡`}
@@ -314,6 +317,34 @@ export default async function ProjectWritingPage({
                   </small>
                 </span>
               </label>
+              {relatedInspirations.length ? (
+                <div className="writing-inspiration-picker">
+                  <div>
+                    <div className="field-label">相关灵感</div>
+                    <span>勾选后会作为本章任务卡输入，只取结构和创作意图。</span>
+                  </div>
+                  <div>
+                    {relatedInspirations.slice(0, 8).map((inspiration) => (
+                      <label key={inspiration.id} className="option-row compact-option-row">
+                        <input name="relatedInspirationIds" type="checkbox" value={inspiration.id} />
+                        <span>
+                          <strong>{inspiration.title}</strong>
+                          <small>{inspiration.content || "暂无正文"}</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <Link className="button small-button" href={`/inspirations?projectId=${projectId}`}>
+                    管理项目灵感
+                  </Link>
+                </div>
+              ) : (
+                <div className="quote-box compact-note">
+                  这个项目还没有关联灵感。可以先去
+                  <Link href={`/inspirations?projectId=${projectId}`}> 灵感中心 </Link>
+                  记录素材，再回到这里喂给任务卡。
+                </div>
+              )}
               <div className="writing-form-grid">
                 <div className="field">
                   <div className="field-label">章节标题</div>

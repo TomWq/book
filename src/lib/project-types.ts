@@ -180,6 +180,138 @@ export type StoredTemplate = {
   updatedAt: string;
 };
 
+export type InspirationType =
+  | "plot"
+  | "character"
+  | "worldbuilding"
+  | "pleasure_point"
+  | "foreshadowing"
+  | "setting"
+  | "line"
+  | "topic"
+  | "title"
+  | "other";
+
+export type InspirationStatus = "raw" | "polished" | "used" | "archived";
+
+export type InspirationPolishMode =
+  | "polish"
+  | "expand_setting"
+  | "web_novelize"
+  | "selling_point"
+  | "pleasure_analysis"
+  | "variants"
+  | "task_card"
+  | "character_draft"
+  | "foreshadowing_draft";
+
+export type InspirationTransformTarget =
+  | "character"
+  | "foreshadowing"
+  | "task_card"
+  | "bible"
+  | "worldbuilding"
+  | "short_outline"
+  | "variants";
+
+export type InspirationTransformDraft = {
+  target: InspirationTransformTarget;
+  title: string;
+  summary: string;
+  character?: {
+    name: string;
+    identity: string;
+    currentGoal: string;
+    longTermGoal: string;
+    secret: string;
+    relationshipToProtagonist: string;
+    attitude: string;
+    abilityBoundary: string;
+    voice: string;
+    knownInformation: string;
+    unknownInformation: string;
+    lastAppearance: string;
+    currentState: string;
+  };
+  foreshadowing?: {
+    name: string;
+    plantedChapter: string;
+    relatedCharacters: string[];
+    relatedLocation: string;
+    status: "open" | "partial" | "closed";
+    expectedRevealChapter: string;
+    revealMethod: string;
+    hiddenInformation: string;
+  };
+  taskCard?: {
+    chapterNumber?: number;
+    title: string;
+    chapterGoal: string;
+    continuity: string;
+    mainPlotProgress: string;
+    requiredCharacters: string[];
+    pleasurePoint: string;
+    foreshadowingTasks: string[];
+    rulesNotToBreak: string[];
+    endingHook: string;
+  };
+  biblePatch?: {
+    corePleasure?: string;
+    worldRules?: string;
+    goldenFingerRules?: string;
+    narrativeTaboos?: string;
+    immutableSettings?: string;
+    styleGuide?: string;
+  };
+  shortOutline?: {
+    logline: string;
+    coreConflict: string;
+    firstChapters: string[];
+    pacing: string;
+    foreshadowingPlan: string[];
+  };
+  variants?: Array<{
+    title: string;
+    direction: string;
+    conflict: string;
+    payoff: string;
+    nextHook: string;
+  }>;
+  notes: string[];
+  warnings: string[];
+  usedAi: boolean;
+  usedFallback: boolean;
+};
+
+export type InspirationAiOutput = {
+  id: string;
+  mode: InspirationPolishMode;
+  title: string;
+  content: string;
+  changes: string[];
+  suggestions: string[];
+  tags: string[];
+  usedAi: boolean;
+  usedFallback: boolean;
+  createdAt: string;
+};
+
+export type StoredInspiration = {
+  id: string;
+  ownerUserId: string;
+  projectId?: string;
+  title: string;
+  content: string;
+  type: InspirationType;
+  tags: string[];
+  status: InspirationStatus;
+  aiOutputs: InspirationAiOutput[];
+  linkedEntityType?: "project" | "character" | "foreshadowing" | "chapter" | "task_card" | "outline" | "bible";
+  linkedEntityId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type StoredOutline = {
   id: string;
   templateId: string;
@@ -530,6 +662,7 @@ export type AppStore = {
   storyAnalyses: StoredStoryAnalysis[];
   aiJobs: StoredAiJob[];
   templates: StoredTemplate[];
+  inspirations: StoredInspiration[];
   outlines: StoredOutline[];
   writingBibles: StoredWritingBible[];
   characterProfiles: StoredCharacterProfile[];

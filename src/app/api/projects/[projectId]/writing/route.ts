@@ -36,7 +36,7 @@ export async function POST(
   context: { params: Promise<{ projectId: string }> }
 ) {
   const { projectId } = await context.params;
-  const body = await request.json();
+  const body = (await request.json()) as Record<string, unknown>;
   const action = String(body.action ?? "");
 
   try {
@@ -49,6 +49,9 @@ export async function POST(
         pleasurePoint: String(body.pleasurePoint ?? ""),
         endingHook: String(body.endingHook ?? ""),
         chapterNumber: Number(body.chapterNumber ?? 0) || undefined,
+        relatedInspirationIds: Array.isArray(body.relatedInspirationIds)
+          ? (body.relatedInspirationIds as unknown[]).map((item: unknown) => String(item).trim()).filter(Boolean)
+          : [],
         useAnalysisContext:
           body.useAnalysisContext === undefined
             ? true

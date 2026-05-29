@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { MoLanMascot } from "@/components/molan-mascot";
 import { WritingAssistantPanel } from "@/components/writing-assistant-panel";
@@ -26,10 +26,11 @@ type LauncherPosition = {
 
 type DragState = {
   pointerId: number;
-  startX: number;
-  startY: number;
+  startPointerX: number;
+  startPointerY: number;
   originX: number;
   originY: number;
+  coordinateMode: "client" | "page";
   moved: boolean;
 };
 
@@ -43,10 +44,64 @@ function clampLauncherPosition(position: LauncherPosition) {
     return position;
   }
 
+  const viewport = window.visualViewport;
+  const width = Math.max(window.innerWidth, document.documentElement.clientWidth, viewport?.width ?? 0);
+  const height = Math.max(window.innerHeight, document.documentElement.clientHeight, viewport?.height ?? 0);
+
   return {
-    x: Math.min(Math.max(position.x, launcherMargin), window.innerWidth - launcherSize - launcherMargin),
-    y: Math.min(Math.max(position.y, launcherMargin), window.innerHeight - launcherSize - launcherMargin)
+    x: Math.min(Math.max(position.x, launcherMargin), width - launcherSize - launcherMargin),
+    y: Math.min(Math.max(position.y, launcherMargin), height - launcherSize - launcherMargin)
   };
+}
+
+type PointerLike = {
+  clientX: number;
+  clientY: number;
+  pageX: number;
+  pageY: number;
+};
+
+function pageViewportPoint(event: PointerLike) {
+  const viewport = window.visualViewport;
+
+  return {
+    x: event.pageX - window.scrollX - (viewport?.offsetLeft ?? 0),
+    y: event.pageY - window.scrollY - (viewport?.offsetTop ?? 0)
+  };
+}
+
+function clientViewportPoint(event: PointerLike) {
+  return {
+    x: event.clientX,
+    y: event.clientY
+  };
+}
+
+function choosePointerCoordinateMode(event: PointerLike, rect: DOMRect): DragState["coordinateMode"] {
+  const point = clientViewportPoint(event);
+  const pagePoint = pageViewportPoint(event);
+  const inClientRect =
+    point.x >= rect.left - 2 &&
+    point.x <= rect.right + 2 &&
+    point.y >= rect.top - 2 &&
+    point.y <= rect.bottom + 2;
+  const inPageRect =
+    pagePoint.x >= rect.left - 2 &&
+    pagePoint.x <= rect.right + 2 &&
+    pagePoint.y >= rect.top - 2 &&
+    pagePoint.y <= rect.bottom + 2;
+
+  return inPageRect && !inClientRect ? "page" : "client";
+}
+
+function pointerViewportPoint(event: PointerLike, mode: DragState["coordinateMode"]) {
+  return mode === "page" ? pageViewportPoint(event) : clientViewportPoint(event);
+}
+
+function isPointerCaptureTarget(target: EventTarget | null | undefined): target is Element {
+  return target instanceof Element &&
+    typeof target.hasPointerCapture === "function" &&
+    typeof target.releasePointerCapture === "function";
 }
 
 function cleanAuthorName(value?: string) {
@@ -343,12 +398,11 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
 
     window.addEventListener("resize", handleResize);
 
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      document.body.classList.remove("floating-ai-dragging");
+    };
   }, []);
-
-  if (pathname === "/assistant") {
-    return null;
-  }
 
   if (projectId) {
     workbenchParams.set("projectId", projectId);
@@ -371,31 +425,41 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     window.sessionStorage.setItem(routeTipKey(pathname), "1");
   }
 
-  function handlePointerDown(event: PointerEvent<HTMLButtonElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: rect.left,
-      originY: rect.top,
-      moved: false
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function handlePointerMove(event: PointerEvent<HTMLButtonElement>) {
-    const drag = dragRef.current;
-
-    if (!drag || drag.pointerId !== event.pointerId) {
+  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!event.isPrimary) {
       return;
     }
 
     event.preventDefault();
+    event.stopPropagation();
 
-    const deltaX = event.clientX - drag.startX;
-    const deltaY = event.clientY - drag.startY;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const mode = choosePointerCoordinateMode(event, rect);
+    const point = pointerViewportPoint(event, mode);
+
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startPointerX: point.x,
+      startPointerY: point.y,
+      originX: rect.left,
+      originY: rect.top,
+      coordinateMode: mode,
+      moved: false
+    };
+    document.body.classList.add("floating-ai-dragging");
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveLauncher(event: PointerLike) {
+    const drag = dragRef.current;
+
+    if (!drag) {
+      return;
+    }
+
+    const point = pointerViewportPoint(event, drag.coordinateMode);
+    const deltaX = point.x - drag.startPointerX;
+    const deltaY = point.y - drag.startPointerY;
 
     if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) {
       return;
@@ -409,17 +473,20 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     }));
   }
 
-  function finishDrag(event: PointerEvent<HTMLButtonElement>) {
+  function endDrag(pointerId: number, releaseTarget?: EventTarget | null) {
     const drag = dragRef.current;
 
-    if (!drag || drag.pointerId !== event.pointerId) {
+    if (!drag || drag.pointerId !== pointerId) {
       return;
     }
 
     dragRef.current = null;
+    document.body.classList.remove("floating-ai-dragging");
 
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+    if (isPointerCaptureTarget(releaseTarget)) {
+      if (releaseTarget.hasPointerCapture(pointerId)) {
+        releaseTarget.releasePointerCapture(pointerId);
+      }
     }
 
     if (!drag.moved) {
@@ -437,10 +504,70 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     });
   }
 
+  function handlePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = dragRef.current;
+
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    moveLauncher(event);
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      moveLauncher(event);
+    }
+
+    endDrag(event.pointerId, event.currentTarget);
+  }
+
+  function handleDocumentPointerMove(event: globalThis.PointerEvent) {
+    if (dragRef.current?.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    moveLauncher(event);
+  }
+
+  function handleDocumentPointerUp(event: globalThis.PointerEvent) {
+    endDrag(event.pointerId, event.target ?? null);
+  }
+
+  useEffect(() => {
+    function handleTouchMove(event: TouchEvent) {
+      if (!dragRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+    }
+
+    document.addEventListener("pointermove", handleDocumentPointerMove, true);
+    document.addEventListener("pointerup", handleDocumentPointerUp, true);
+    document.addEventListener("pointercancel", handleDocumentPointerUp, true);
+    document.addEventListener("touchmove", handleTouchMove, { passive: false, capture: true });
+
+    return () => {
+      document.removeEventListener("pointermove", handleDocumentPointerMove, true);
+      document.removeEventListener("pointerup", handleDocumentPointerUp, true);
+      document.removeEventListener("pointercancel", handleDocumentPointerUp, true);
+      document.removeEventListener("touchmove", handleTouchMove, true);
+    };
+  }, []);
+
   const launcherStyle: CSSProperties | undefined = launcherPosition
     ? { left: launcherPosition.x, top: launcherPosition.y, right: "auto", bottom: "auto" }
     : undefined;
   const tipSide = launcherPosition && launcherPosition.x < 210 ? "left" : "right";
+
+  if (pathname === "/assistant") {
+    return null;
+  }
 
   return (
     <>
@@ -465,8 +592,8 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
             data-mood={visibleTip ? "speaking" : "idle"}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
-            onPointerUp={finishDrag}
-            onPointerCancel={finishDrag}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
             onClick={() => {
               if (suppressClickRef.current) {
                 suppressClickRef.current = false;

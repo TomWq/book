@@ -200,6 +200,23 @@ function ensureSqliteSchema() {
       CONSTRAINT "Template_sourceStoryAnalysisId_fkey" FOREIGN KEY ("sourceStoryAnalysisId") REFERENCES "StoryAnalysis" ("id") ON DELETE SET NULL ON UPDATE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS "Inspiration" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "ownerUserId" TEXT NOT NULL,
+      "projectId" TEXT,
+      "title" TEXT NOT NULL,
+      "content" TEXT NOT NULL,
+      "type" TEXT NOT NULL,
+      "tags" JSON,
+      "status" TEXT NOT NULL,
+      "aiOutputs" JSON,
+      "linkedEntityType" TEXT,
+      "linkedEntityId" TEXT,
+      "createdAt" DATETIME NOT NULL,
+      "updatedAt" DATETIME NOT NULL,
+      CONSTRAINT "Inspiration_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS "Outline" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "templateId" TEXT NOT NULL,
@@ -548,6 +565,16 @@ function ensureSqliteSchema() {
     'ALTER TABLE "Project" ADD COLUMN "ownerUserId" TEXT',
     'ALTER TABLE "Project" ADD COLUMN "coverImageUrl" TEXT',
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
+    'ALTER TABLE "Inspiration" ADD COLUMN "ownerUserId" TEXT',
+    'ALTER TABLE "Inspiration" ADD COLUMN "projectId" TEXT',
+    'ALTER TABLE "Inspiration" ADD COLUMN "title" TEXT NOT NULL DEFAULT \'\'',
+    'ALTER TABLE "Inspiration" ADD COLUMN "content" TEXT NOT NULL DEFAULT \'\'',
+    'ALTER TABLE "Inspiration" ADD COLUMN "type" TEXT NOT NULL DEFAULT \'other\'',
+    'ALTER TABLE "Inspiration" ADD COLUMN "tags" JSON',
+    'ALTER TABLE "Inspiration" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'raw\'',
+    'ALTER TABLE "Inspiration" ADD COLUMN "aiOutputs" JSON',
+    'ALTER TABLE "Inspiration" ADD COLUMN "linkedEntityType" TEXT',
+    'ALTER TABLE "Inspiration" ADD COLUMN "linkedEntityId" TEXT',
     'ALTER TABLE "User" ADD COLUMN "penName" TEXT',
     'ALTER TABLE "User" ADD COLUMN "penNameSetAt" DATETIME',
     'ALTER TABLE "User" ADD COLUMN "assistantName" TEXT',
@@ -684,6 +711,7 @@ function syncCoreTables(store: unknown) {
   const creditTransactions = asRecordArray(store, "creditTransactions");
   const licenseCodes = asRecordArray(store, "licenseCodes");
   const licenseActivationLogs = asRecordArray(store, "licenseActivationLogs");
+  const inspirations = asRecordArray(store, "inspirations");
   const aiSettings = asEntityRecordArray(store, "aiSettings");
   const projectIds = new Set(projects.map((project) => text(project.id)));
   const storyAnalysisIds = new Set(storyAnalyses.map((analysis) => text(analysis.id)));
@@ -701,6 +729,7 @@ function syncCoreTables(store: unknown) {
     db.prepare('DELETE FROM "WritingBible"').run();
     db.prepare('DELETE FROM "Outline"').run();
     db.prepare('DELETE FROM "Template"').run();
+    db.prepare('DELETE FROM "Inspiration"').run();
     db.prepare('DELETE FROM "StoryAnalysis"').run();
     db.prepare('DELETE FROM "ChapterAnalysis"').run();
     db.prepare('DELETE FROM "Chapter"').run();
@@ -976,6 +1005,32 @@ function syncCoreTables(store: unknown) {
         tags: jsonText(template.tags),
         createdAt: dateText(template.createdAt),
         updatedAt: dateText(template.updatedAt)
+      });
+    });
+
+    const insertInspiration = db.prepare(`
+      INSERT INTO "Inspiration" (
+        "id", "ownerUserId", "projectId", "title", "content", "type", "tags", "status", "aiOutputs", "linkedEntityType", "linkedEntityId", "createdAt", "updatedAt"
+      ) VALUES (
+        @id, @ownerUserId, @projectId, @title, @content, @type, @tags, @status, @aiOutputs, @linkedEntityType, @linkedEntityId, @createdAt, @updatedAt
+      )
+    `);
+
+    inspirations.forEach((item) => {
+      insertInspiration.run({
+        id: text(item.id),
+        ownerUserId: text(item.ownerUserId),
+        projectId: nullableText(item.projectId),
+        title: text(item.title),
+        content: text(item.content),
+        type: text(item.type),
+        tags: jsonText(item.tags),
+        status: text(item.status),
+        aiOutputs: jsonText(item.aiOutputs),
+        linkedEntityType: nullableText(item.linkedEntityType),
+        linkedEntityId: nullableText(item.linkedEntityId),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
       });
     });
 
@@ -1638,6 +1693,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
       "ChapterAnalysis",
       "StoryAnalysis",
       "Template",
+      "Inspiration",
       "Outline",
       "WritingBible",
       "CharacterProfile",
@@ -1764,6 +1820,29 @@ function readCoreStoreFromDb<T>(fallback: T) {
         usablePatterns: parseJsonArray(item.usablePatterns),
         avoidCopying: parseJsonArray(item.avoidCopying),
         tags: parseJsonArray(item.tags),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
+      })),
+      inspirations: rows(db, "Inspiration").map((item) => ({
+        id: text(item.id),
+        ownerUserId: text(item.ownerUserId),
+        projectId: maybeString(item.projectId),
+        title: text(item.title),
+        content: text(item.content),
+        type: text(item.type),
+        tags: parseJsonArray(item.tags),
+        status: text(item.status),
+        aiOutputs: parseJsonArray(item.aiOutputs),
+        linkedEntityType: maybeString(item.linkedEntityType) as
+          | "project"
+          | "character"
+          | "foreshadowing"
+          | "chapter"
+          | "task_card"
+          | "outline"
+          | "bible"
+          | undefined,
+        linkedEntityId: maybeString(item.linkedEntityId),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
       })),

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { CustomSelect, type SelectOption } from "@/components/custom-select";
 import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
 type AnalysisTaxonomyStyle = "fanqie" | "qidian";
@@ -31,6 +32,7 @@ export function AnalysisProjectForm() {
   const [targetReader, setTargetReader] = useState<TargetReader>("男频");
   const [genre, setGenre] = useState(novelTaxonomy.男频.mainCategories[0].name);
   const [subCategory, setSubCategory] = useState("");
+  const [openSelect, setOpenSelect] = useState<string | null>(null);
 
   const genreOptions = getGenreOptions(taxonomyStyle, targetReader);
   const selectedCategory = genreOptions.find((category) => category.name === genre) ?? genreOptions[0];
@@ -39,6 +41,14 @@ export function AnalysisProjectForm() {
     : [];
   const selectedSubCategory = taxonomyStyle === "qidian" ? subCategory || qidianSubCategories[0] || "" : "";
   const projectGenre = taxonomyStyle === "qidian" && selectedSubCategory ? `${genre} / ${selectedSubCategory}` : genre;
+  const genreSelectOptions: Array<SelectOption<string>> = genreOptions.map((category) => ({
+    value: category.name,
+    label: category.name,
+    hint: category.description
+  }));
+  const subCategoryOptions: Array<SelectOption<string>> = qidianSubCategories.length
+    ? qidianSubCategories.map((category) => ({ value: category, label: category }))
+    : [{ value: "", label: "暂无子类" }];
 
   function updateTargetReader(nextReader: TargetReader) {
     setTargetReader(nextReader);
@@ -194,25 +204,27 @@ export function AnalysisProjectForm() {
         <div className="analysis-taxonomy-stack">
           <div className="field">
             <div className="field-label">{taxonomyStyle === "qidian" ? "起点大类" : "题材方向"}</div>
-            <select name="genre" value={genre} onChange={(event) => updateGenre(event.target.value)}>
-              {genreOptions.map((category) => (
-                <option key={category.name} value={category.name}>
-                  {category.name} - {category.description}
-                </option>
-              ))}
-            </select>
+            <CustomSelect
+              id="analysis-genre"
+              value={genre}
+              options={genreSelectOptions}
+              openSelect={openSelect}
+              setOpenSelect={setOpenSelect}
+              onChange={updateGenre}
+            />
           </div>
 
           {taxonomyStyle === "qidian" ? (
             <div className="field">
               <div className="field-label">起点子类</div>
-              <select name="subCategory" value={selectedSubCategory} onChange={(event) => setSubCategory(event.target.value)}>
-                {qidianSubCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
+              <CustomSelect
+                id="analysis-sub-category"
+                value={selectedSubCategory}
+                options={subCategoryOptions}
+                openSelect={openSelect}
+                setOpenSelect={setOpenSelect}
+                onChange={setSubCategory}
+              />
             </div>
           ) : null}
 

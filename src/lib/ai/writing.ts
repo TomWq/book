@@ -32,6 +32,12 @@ type TaskCardContext = {
   characters: StoredCharacterProfile[];
   chapterCharacterConstraints?: string[];
   foreshadowings: StoredForeshadowing[];
+  relatedInspirations?: Array<{
+    title: string;
+    type: string;
+    content: string;
+    tags: string[];
+  }>;
   storyAnalysis?: StoredStoryAnalysis | null;
   recentChapterAnalyses?: StoredChapterAnalysis[];
   userInput?: Partial<
@@ -1123,6 +1129,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             characters: context.characters,
             chapterCharacterConstraints: context.chapterCharacterConstraints ?? [],
             foreshadowings: context.foreshadowings,
+            relatedInspirations: context.relatedInspirations ?? [],
             storyReference: buildStoryReference(context.storyAnalysis),
             chapterPatternReferences: buildChapterPatternReferences(context.recentChapterAnalyses),
             userInput: context.userInput ?? {},
@@ -1143,6 +1150,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
               "不得为了套用拆书结构而改变当前新书的目标读者、主分类、主题标签、角色标签、时代背景、核心人设或力量体系。",
               "如果 chapterCharacterConstraints 不为空，本章任务卡必须显式使用这些人物约束，并把相关人物写入 requiredCharacters。",
+              "如果 relatedInspirations 不为空，必须把这些灵感作为本章任务素材参考，抽象成当前项目自己的情节任务、爽点、伏笔或钩子；不要原样照搬为正文。",
               "如果拆书内容里出现具体人物、地点、道具、组织、案件、秘密、台词或章节事件，不得写入任务卡。",
               "可以借鉴“被压制 -> 反击 -> 获得收益 -> 引出更高压力”的节奏，但要换成当前新书自己的冲突、人物和伏笔。"
             ],

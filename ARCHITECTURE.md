@@ -188,7 +188,18 @@ AI Model
 3. 按题材和标签分类。
 4. 从模板生成新书大纲。
 
-### 4.5 Writing 模块
+### 4.5 Inspiration 模块
+
+负责：
+
+1. 新增、查看、编辑和删除灵感。
+2. 按关键词、类型、标签、项目和状态检索灵感。
+3. 保存 AI 润色、扩写、爽点分析和变体结果。
+4. 将灵感关联到项目。
+5. 将灵感转化为人物、伏笔、章节任务卡、创作圣经或世界观设定草稿。
+6. 写入正式项目资产前要求用户确认。
+
+### 4.6 Writing 模块
 
 负责：
 
@@ -201,7 +212,7 @@ AI Model
 7. 章节台账。
 8. 一致性审稿。
 
-### 4.6 Editor 模块
+### 4.7 Editor 模块
 
 负责：
 
@@ -210,7 +221,7 @@ AI Model
 3. 拆书文章改写。
 4. 小说正文增强。
 
-### 4.7 Job 模块
+### 4.8 Job 模块
 
 负责：
 
@@ -220,17 +231,17 @@ AI Model
 4. 保存 AI 输入摘要和输出结果。
 5. 提供任务进度给前端。
 
-### 4.8 Account 模块
+### 4.9 Account 模块
 
 负责：
 
 1. 展示账号与授权状态。
-2. 展示当前月 AI 任务、项目、模板和导入字符用量。
+2. 展示当前月 AI 任务、项目、模板、灵感和导入字符用量。
 3. 展示当前 AI 配置和本地用量概览。
 4. 导出账号数据。
 5. 提供新手引导完成状态。
 
-### 4.9 Admin 模块
+### 4.10 Admin 模块
 
 负责：
 
@@ -374,7 +385,25 @@ created_at
 updated_at
 ```
 
-### 5.8 outlines
+### 5.8 inspirations
+
+```text
+id
+owner_user_id
+project_id            nullable
+title
+content
+type                  plot / character / worldbuilding / pleasure_point / foreshadowing / setting / line / topic / title / other
+tags                  json
+status                raw / polished / used / archived
+ai_outputs            json
+linked_entity_type    project / character / foreshadowing / chapter / outline / bible / null
+linked_entity_id      nullable
+created_at
+updated_at
+```
+
+### 5.9 outlines
 
 ```text
 id
@@ -395,7 +424,7 @@ created_at
 updated_at
 ```
 
-### 5.9 writing_bibles
+### 5.10 writing_bibles
 
 ```text
 id
@@ -413,7 +442,7 @@ created_at
 updated_at
 ```
 
-### 5.10 character_profiles
+### 5.11 character_profiles
 
 ```text
 id
@@ -436,7 +465,7 @@ created_at
 updated_at
 ```
 
-### 5.11 foreshadowings
+### 5.12 foreshadowings
 
 ```text
 id
@@ -453,7 +482,7 @@ created_at
 updated_at
 ```
 
-### 5.12 plot_states
+### 5.13 plot_states
 
 ```text
 id
@@ -470,7 +499,7 @@ created_at
 updated_at
 ```
 
-### 5.13 chapter_ledgers
+### 5.14 chapter_ledgers
 
 ```text
 id
@@ -488,7 +517,7 @@ created_at
 updated_at
 ```
 
-### 5.14 chapter_drafts
+### 5.15 chapter_drafts
 
 ```text
 id
@@ -502,7 +531,7 @@ created_at
 updated_at
 ```
 
-### 5.15 review_reports
+### 5.16 review_reports
 
 ```text
 id
@@ -515,13 +544,13 @@ created_at
 updated_at
 ```
 
-### 5.16 ai_jobs
+### 5.17 ai_jobs
 
 ```text
 id
 user_id
 project_id
-type                  split_chapters / analyze_chapter / analyze_story / extract_formula / generate_outline / generate_task_card / generate_chapter / review_chapter / edit_second_draft
+type                  split_chapters / analyze_chapter / analyze_story / extract_formula / generate_outline / polish_inspiration / transform_inspiration / generate_task_card / generate_chapter / review_chapter / edit_second_draft
 status                pending / running / succeeded / failed / canceled
 input                 json
 output                json
@@ -534,7 +563,7 @@ started_at
 finished_at
 ```
 
-### 5.17 account_usage
+### 5.18 account_usage
 
 账号额度不单独拆表，第一版直接通过 `AppState` 统计实现。后续如果要做计费和限流，再拆分为独立的 usage 记录表和账单表。
 
@@ -542,7 +571,7 @@ finished_at
 
 API 路径以 REST 为主，后续可以根据框架调整。
 
-除 `/login`、`/logout` 和 `/api/health` 外，业务接口默认需要登录态。项目、模板、任务和设置接口必须以当前用户为权限边界。
+除 `/login`、`/logout` 和 `/api/health` 外，业务接口默认需要登录态。项目、模板、灵感、任务和设置接口必须以当前用户为权限边界。
 
 ### 6.1 Projects
 
@@ -584,7 +613,21 @@ DELETE /api/templates/:templateId
 POST   /api/templates/:templateId/generate-outline
 ```
 
-### 6.5 Writing
+### 6.5 Inspirations
+
+```text
+GET    /api/inspirations
+POST   /api/inspirations
+GET    /api/inspirations/:inspirationId
+PATCH  /api/inspirations/:inspirationId
+DELETE /api/inspirations/:inspirationId
+POST   /api/inspirations/:inspirationId/polish
+POST   /api/inspirations/:inspirationId/transform
+POST   /api/inspirations/:inspirationId/confirm-transform
+GET    /api/projects/:projectId/inspirations
+```
+
+### 6.6 Writing
 
 ```text
 GET   /api/projects/:projectId/writing-state
@@ -601,7 +644,7 @@ POST  /api/chapter-drafts/:chapterDraftId/review
 POST  /api/chapter-drafts/:chapterDraftId/accept
 ```
 
-### 6.6 Jobs
+### 6.7 Jobs
 
 ```text
 GET  /api/jobs/:jobId
@@ -609,7 +652,7 @@ POST /api/jobs/:jobId/retry
 GET  /api/projects/:projectId/jobs
 ```
 
-### 6.7 Auth
+### 6.8 Auth
 
 ```text
 GET   /login
@@ -833,6 +876,8 @@ POST  /logout
 /templates
 /templates/:templateId
 /templates/:templateId/generate-outline
+/inspirations
+/inspirations/:inspirationId
 /projects/:projectId/writing
 /projects/:projectId/state
 /projects/:projectId/editor
@@ -850,6 +895,8 @@ POST  /logout
 2. 新建拆书项目。
 3. 新建创作项目。
 4. 模板库入口。
+5. 灵感中心入口。
+6. 最近灵感。
 
 ### 10.2 拆书项目页
 
@@ -871,6 +918,20 @@ POST  /logout
 3. 右侧：人物、伏笔、主线、审稿提示。
 
 重点是效率，不做装饰性页面。
+
+### 10.4 灵感中心
+
+核心布局建议：
+
+1. 顶部：关键词搜索、类型、标签、项目和状态筛选。
+2. 左侧：灵感列表，展示标题、类型、标签、关联项目、状态和更新时间。
+3. 右侧：灵感详情、AI 整理结果、关联项目和一键转化入口。
+
+关键交互：
+
+1. 新增灵感要快，允许先保存原文，再补分类。
+2. AI 润色结果不能覆盖原文。
+3. 一键转化先生成草稿，用户确认后再写入正式项目资产。
 
 ## 11. 错误处理
 
@@ -905,7 +966,7 @@ AI 返回不符合结构时：
 2. 用户上传文本按项目隔离。
 3. 模板只保存结构公式，不保存可疑的大段原文。
 4. 输出必须避免鼓励照搬原作。
-5. 删除项目时需要删除关联文本、章节、分析和状态数据。
+5. 删除项目时需要删除关联文本、章节、分析和状态数据；项目关联灵感可按产品策略归档或解除关联，但不能转移到其他用户。
 
 ## 13. MVP 开发顺序
 
@@ -913,7 +974,7 @@ AI 返回不符合结构时：
 
 1. 初始化 Next.js + TypeScript 项目。
 2. 接入 SQLite 和 ORM。
-3. 建立核心 schema：projects、source_texts、chapters、ai_jobs。
+3. 建立核心 schema：projects、source_texts、chapters、inspirations、ai_jobs。
 4. 实现文本导入和自动分章。
 5. 实现章节列表与编辑。
 6. 封装 AI Provider。
@@ -921,9 +982,10 @@ AI 返回不符合结构时：
 8. 保存并展示章节分析结果。
 9. 实现整书分析和公式提取。
 10. 实现模板库。
-11. 实现大纲生成。
-12. 实现创作工作台状态表。
-13. 实现任务卡、正文、台账、审稿闭环。
+11. 实现灵感中心。
+12. 实现大纲生成。
+13. 实现创作工作台状态表。
+14. 实现任务卡、正文、台账、审稿闭环。
 
 ## 14. 第一版验收
 
@@ -945,6 +1007,10 @@ AI 返回不符合结构时：
 提取故事公式
 ↓
 保存模板
+↓
+记录和润色灵感
+↓
+关联到项目或转化为草稿
 ↓
 选择新题材生成大纲
 ↓

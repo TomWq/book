@@ -30,15 +30,15 @@
         user-select: none;
         transform-origin: center;
         transition:
-          opacity 360ms cubic-bezier(0.22, 1, 0.36, 1),
-          transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
-          filter 420ms cubic-bezier(0.22, 1, 0.36, 1);
+          opacity 520ms linear,
+          transform 520ms linear,
+          filter 520ms linear;
       }
 
       body.is-leaving {
         opacity: 0;
-        transform: scale(1.012);
-        filter: blur(4px) saturate(0.92);
+        transform: scale(1.004);
+        filter: blur(1.5px) saturate(0.96);
       }
 
       body::before {
@@ -84,13 +84,13 @@
         box-shadow: 0 34px 96px rgba(0, 0, 0, 0.38);
         backdrop-filter: blur(6px);
         transition:
-          opacity 280ms cubic-bezier(0.22, 1, 0.36, 1),
-          transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+          opacity 500ms linear,
+          transform 500ms linear;
       }
 
       body.is-leaving .shell {
         opacity: 0;
-        transform: translateY(10px) scale(0.985);
+        transform: translateY(4px) scale(0.992);
       }
 
       .shell::before {

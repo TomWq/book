@@ -18,6 +18,11 @@ import {
 } from "@/lib/ai/novel-analysis";
 import { generateOutlineWithAi, type OutlineVariables } from "@/lib/ai/outline";
 import {
+  polishInspirationWithAi,
+  transformInspirationWithAi,
+  type InspirationProjectContext
+} from "@/lib/ai/inspiration";
+import {
   generateProjectCreationAssistWithAi,
   type ProjectCreationAssistAction,
   type ProjectCreationAssistInput
@@ -127,6 +132,13 @@ import type {
   StoredStoryAnalysis,
   StoredAiSettings,
   StoredTemplate,
+  StoredInspiration,
+  InspirationType,
+  InspirationStatus,
+  InspirationPolishMode,
+  InspirationAiOutput,
+  InspirationTransformDraft,
+  InspirationTransformTarget,
   StoredOutline,
   StoredWritingBible,
   StoredCharacterProfile,
@@ -175,6 +187,13 @@ export type {
   StoredStoryAnalysis,
   StoredAiSettings,
   StoredTemplate,
+  StoredInspiration,
+  InspirationType,
+  InspirationStatus,
+  InspirationPolishMode,
+  InspirationAiOutput,
+  InspirationTransformDraft,
+  InspirationTransformTarget,
   StoredOutline,
   StoredWritingBible,
   StoredCharacterProfile,
@@ -355,6 +374,12 @@ function ensureTemplateOwner(template: StoredTemplate, userId: string) {
   }
 }
 
+function ensureInspirationOwner(inspiration: StoredInspiration, userId: string) {
+  if (inspiration.ownerUserId !== userId) {
+    throw new Error("无权访问该灵感");
+  }
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -388,6 +413,10 @@ function claimLegacyWorkspace(store: AppStore, userId: string) {
       template.updatedAt = timestamp;
     }
   });
+
+  store.inspirations = (store.inspirations ?? []).map((inspiration) =>
+    inspiration.ownerUserId ? inspiration : { ...inspiration, ownerUserId: userId, updatedAt: timestamp }
+  );
 
   store.aiSettings = normalizeStoredAiSettings(store.aiSettings).map((item) =>
     item.userId ? item : { ...item, userId, updatedAt: item.updatedAt ?? timestamp }
@@ -879,6 +908,7 @@ function removeUserWorkspaceData(store: AppStore, userId: string) {
   store.chapterLedgers = store.chapterLedgers.filter((item) => !ownedProjectIds.has(item.projectId));
   store.reviewReports = store.reviewReports.filter((item) => !ownedProjectIds.has(item.projectId));
   store.editReports = store.editReports.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.inspirations = (store.inspirations ?? []).filter((item) => item.ownerUserId !== userId);
   store.assistantThreads = (store.assistantThreads ?? []).filter((item) => !removedAssistantThreadIds.has(item.id));
   store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !removedAssistantThreadIds.has(item.threadId));
   store.outlines = store.outlines.filter((item) => !ownedTemplateIds.includes(item.templateId));
@@ -956,6 +986,19 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
   store.chapterLedgers.push(...arrayFromBackup<StoredChapterLedger>(data, "chapterLedgers").filter((item) => importedProjectIds.has(item.projectId)));
   store.reviewReports.push(...arrayFromBackup<StoredReviewReport>(data, "reviewReports").filter((item) => importedProjectIds.has(item.projectId)));
   store.editReports.push(...arrayFromBackup<StoredEditReport>(data, "editReports").filter((item) => importedProjectIds.has(item.projectId)));
+  store.inspirations = [
+    ...(store.inspirations ?? []),
+    ...arrayFromBackup<StoredInspiration>(data, "inspirations")
+      .filter((item) => !item.projectId || importedProjectIds.has(item.projectId))
+      .map((item) => ({
+        ...item,
+        ownerUserId: user.id,
+        tags: normalizeInspirationTags(item.tags),
+        status: normalizeInspirationStatus(item.status),
+        type: normalizeInspirationType(item.type),
+        aiOutputs: normalizeInspirationOutputs(item.aiOutputs)
+      }))
+  ];
   store.assistantThreads.push(...assistantThreads);
   store.assistantMessages.push(
     ...arrayFromBackup<StoredAssistantMessage>(data, "assistantMessages").filter((item) =>
@@ -1034,12 +1077,20 @@ function canReadTemplate(template: StoredTemplate, userId: string) {
   return !template.ownerUserId || template.ownerUserId === userId;
 }
 
+function canReadInspiration(inspiration: StoredInspiration, userId: string) {
+  return inspiration.ownerUserId === userId;
+}
+
 function getOwnedProjects(store: AppStore, userId: string) {
   return store.projects.filter((project) => canReadProject(project, userId));
 }
 
 function getOwnedProjectIds(store: AppStore, userId: string) {
   return new Set(getOwnedProjects(store, userId).map((project) => project.id));
+}
+
+function getOwnedInspirations(store: AppStore, userId: string) {
+  return (store.inspirations ?? []).filter((inspiration) => canReadInspiration(inspiration, userId));
 }
 
 function createDomainReadRepository(store: AppStore) {
@@ -1052,6 +1103,11 @@ function createDomainReadRepository(store: AppStore) {
     const template = store.templates.find((item) => item.id === templateId) ?? null;
 
     return template && canReadTemplate(template, userId) ? template : null;
+  };
+  const getInspirationForUser = (inspirationId: string, userId: string) => {
+    const inspiration = (store.inspirations ?? []).find((item) => item.id === inspirationId) ?? null;
+
+    return inspiration && canReadInspiration(inspiration, userId) ? inspiration : null;
   };
   const listChaptersForProjectForUser = (projectId: string, userId: string) => {
     const project = getProjectRecordForUser(projectId, userId);
@@ -1122,6 +1178,13 @@ function createDomainReadRepository(store: AppStore) {
     },
     getTemplateForUser(templateId: string, userId: string) {
       return getTemplateForUser(templateId, userId);
+    },
+    listInspirationsForUser(userId: string) {
+      return getOwnedInspirations(store, userId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+    getInspirationForUser(inspirationId: string, userId: string) {
+      return getInspirationForUser(inspirationId, userId);
     },
     getProjectIdsForUser(userId: string) {
       return new Set(getOwnedProjects(store, userId).map((project) => project.id));
@@ -1334,6 +1397,15 @@ function createDomainWriteRepository(store: AppStore) {
 
       return template;
     },
+    requireInspirationForUser(inspirationId: string, userId: string, message = "灵感不存在") {
+      const inspiration = reader.getInspirationForUser(inspirationId, userId);
+
+      if (!inspiration) {
+        throw new Error(message);
+      }
+
+      return inspiration;
+    },
     requireJobForUser(jobId: string, userId: string, message = "任务不存在") {
       const job = reader.getJobForUser(jobId, userId);
 
@@ -1385,6 +1457,11 @@ function createDomainWriteRepository(store: AppStore) {
     addTemplate(template: StoredTemplate) {
       store.templates.push(template);
       return template;
+    },
+    addInspiration(inspiration: StoredInspiration) {
+      store.inspirations = store.inspirations ?? [];
+      store.inspirations.push(inspiration);
+      return inspiration;
     },
     purgeUser(userId: string) {
       return purgeUserAccount(store, userId);
@@ -2187,6 +2264,9 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     storyAnalyses: store.storyAnalyses.filter((item) => ownedProjectIds.has(item.projectId)),
     aiJobs: store.aiJobs.filter((item) => item.userId === user.id || (item.projectId ? ownedProjectIds.has(item.projectId) : false)),
     templates: store.templates.filter((item) => ownedTemplateIds.includes(item.id)),
+    inspirations: (store.inspirations ?? []).filter(
+      (item) => item.ownerUserId === user.id && (!item.projectId || ownedProjectIds.has(item.projectId))
+    ),
     outlines: store.outlines.filter((item) => ownedTemplateIds.includes(item.templateId)),
     writingBibles: store.writingBibles.filter((item) => ownedProjectIds.has(item.projectId)),
     characterProfiles: store.characterProfiles.filter((item) => ownedProjectIds.has(item.projectId)),
@@ -2234,6 +2314,7 @@ async function purgeUserAccount(store: AppStore, userId: string) {
   store.chapterLedgers = store.chapterLedgers.filter((item) => !ownedProjectIds.has(item.projectId));
   store.reviewReports = store.reviewReports.filter((item) => !ownedProjectIds.has(item.projectId));
   store.editReports = store.editReports.filter((item) => !ownedProjectIds.has(item.projectId));
+  store.inspirations = (store.inspirations ?? []).filter((item) => item.ownerUserId !== userId);
   store.assistantThreads = (store.assistantThreads ?? []).filter((item) => !removedAssistantThreadIds.has(item.id));
   store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !removedAssistantThreadIds.has(item.threadId));
   store.outlines = store.outlines.filter((item) => !ownedTemplateIds.includes(item.templateId));
@@ -5330,6 +5411,736 @@ export async function getTemplate(templateId: string): Promise<StoredTemplate | 
   return createDomainReadRepository(store).getTemplateForUser(templateId, currentUser.id);
 }
 
+type InspirationListFilter = {
+  query?: string;
+  type?: InspirationType | "";
+  status?: InspirationStatus | "";
+  projectId?: string;
+};
+
+function normalizeInspirationType(value: unknown): InspirationType {
+  return value === "plot" ||
+    value === "character" ||
+    value === "worldbuilding" ||
+    value === "pleasure_point" ||
+    value === "foreshadowing" ||
+    value === "setting" ||
+    value === "line" ||
+    value === "topic" ||
+    value === "title"
+    ? value
+    : "other";
+}
+
+function normalizeInspirationStatus(value: unknown): InspirationStatus {
+  return value === "polished" || value === "used" || value === "archived" ? value : "raw";
+}
+
+function normalizeInspirationTags(value: unknown) {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean))).slice(0, 20)
+    : [];
+}
+
+function normalizeInspirationOutputs(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const raw = item as Partial<InspirationAiOutput>;
+      const mode = String(raw.mode ?? "") as InspirationPolishMode;
+
+      if (
+        mode !== "polish" &&
+        mode !== "expand_setting" &&
+        mode !== "web_novelize" &&
+        mode !== "selling_point" &&
+        mode !== "pleasure_analysis" &&
+        mode !== "variants" &&
+        mode !== "task_card" &&
+        mode !== "character_draft" &&
+        mode !== "foreshadowing_draft"
+      ) {
+        return null;
+      }
+
+      return {
+        id: String(raw.id ?? randomUUID()),
+        mode,
+        title: String(raw.title ?? "").trim(),
+        content: String(raw.content ?? "").trim(),
+        changes: Array.isArray(raw.changes)
+          ? raw.changes.map((item) => String(item).trim()).filter(Boolean)
+          : [],
+        suggestions: Array.isArray(raw.suggestions)
+          ? raw.suggestions.map((item) => String(item).trim()).filter(Boolean)
+          : [],
+        tags: Array.isArray(raw.tags)
+          ? raw.tags.map((item) => String(item).trim()).filter(Boolean)
+          : [],
+        usedAi: Boolean(raw.usedAi),
+        usedFallback: Boolean(raw.usedFallback),
+        createdAt: String(raw.createdAt ?? now())
+      } satisfies InspirationAiOutput;
+    })
+    .filter((item): item is InspirationAiOutput => Boolean(item));
+}
+
+function buildInspirationProjectContext(store: AppStore, inspiration: StoredInspiration): InspirationProjectContext | undefined {
+  if (!inspiration.projectId) {
+    return undefined;
+  }
+
+  const project = store.projects.find((item) => item.id === inspiration.projectId) ?? null;
+
+  if (!project || (project.ownerUserId && project.ownerUserId !== inspiration.ownerUserId)) {
+    return undefined;
+  }
+
+  const bible = store.writingBibles.find((item) => item.projectId === project.id) ?? null;
+  const plotState = store.plotStates.find((item) => item.projectId === project.id) ?? null;
+  const characters = store.characterProfiles
+    .filter((item) => item.projectId === project.id)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 8);
+  const foreshadowings = store.foreshadowings
+    .filter((item) => item.projectId === project.id)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 8);
+
+  return {
+    project,
+    bible: bible
+      ? {
+          corePleasure: bible.corePleasure,
+          worldRules: bible.worldRules,
+          goldenFingerRules: bible.goldenFingerRules,
+          immutableSettings: bible.immutableSettings,
+          styleGuide: bible.styleGuide
+        }
+      : null,
+    plotState: plotState
+      ? {
+          mainGoal: plotState.mainGoal,
+          shortTermGoal: plotState.shortTermGoal,
+          currentStage: plotState.currentStage,
+          openThreads: plotState.openThreads
+        }
+      : null,
+    characters,
+    foreshadowings
+  };
+}
+
+function matchesInspirationFilter(inspiration: StoredInspiration, filter?: InspirationListFilter) {
+  if (!filter) {
+    return true;
+  }
+
+  if (filter.type && inspiration.type !== filter.type) {
+    return false;
+  }
+
+  if (filter.status && inspiration.status !== filter.status) {
+    return false;
+  }
+
+  if (filter.projectId && inspiration.projectId !== filter.projectId) {
+    return false;
+  }
+
+  const query = filter.query?.trim().toLowerCase();
+
+  if (!query) {
+    return true;
+  }
+
+  const haystack = [
+    inspiration.title,
+    inspiration.content,
+    inspiration.type,
+    inspiration.status,
+    inspiration.tags.join(" "),
+    inspiration.projectId ?? ""
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes(query);
+}
+
+export async function getInspirations(filter?: InspirationListFilter) {
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+
+  if (!currentUser) {
+    return [];
+  }
+
+  return createDomainReadRepository(store)
+    .listInspirationsForUser(currentUser.id)
+    .filter((item) => matchesInspirationFilter(item, filter));
+}
+
+export async function getProjectInspirations(projectId: string) {
+  return getInspirations({ projectId });
+}
+
+export async function getInspiration(inspirationId: string): Promise<StoredInspiration | null> {
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+
+  if (!currentUser) {
+    return null;
+  }
+
+  return createDomainReadRepository(store).getInspirationForUser(inspirationId, currentUser.id);
+}
+
+export async function createInspiration(input: {
+  title: string;
+  content: string;
+  type?: InspirationType;
+  tags?: string[];
+  projectId?: string;
+  status?: InspirationStatus;
+  aiOutputs?: InspirationAiOutput[];
+}) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const timestamp = now();
+  const projectId = input.projectId?.trim() || "";
+
+  if (projectId) {
+    const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+    if (!project) {
+      throw new Error("项目不存在");
+    }
+  }
+
+  const inspiration: StoredInspiration = {
+    id: randomUUID(),
+    ownerUserId: currentUser.id,
+    projectId: projectId || undefined,
+    title: input.title.trim() || "未命名灵感",
+    content: input.content.trim(),
+    type: normalizeInspirationType(input.type),
+    tags: normalizeInspirationTags(input.tags),
+    status: normalizeInspirationStatus(input.status),
+    aiOutputs: normalizeInspirationOutputs(input.aiOutputs),
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  createDomainWriteRepository(store).addInspiration(inspiration);
+  await writeStore(store);
+  return inspiration;
+}
+
+export async function previewInspirationPolish(
+  input: {
+    title: string;
+    content: string;
+    type?: InspirationType;
+    tags?: string[];
+    projectId?: string;
+  },
+  mode: InspirationPolishMode
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const timestamp = now();
+  const projectId = input.projectId?.trim() || "";
+
+  if (projectId) {
+    createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  }
+
+  const inspiration: StoredInspiration = {
+    id: randomUUID(),
+    ownerUserId: currentUser.id,
+    projectId: projectId || undefined,
+    title: input.title.trim() || "未命名灵感",
+    content: input.content.trim(),
+    type: normalizeInspirationType(input.type),
+    tags: normalizeInspirationTags(input.tags),
+    status: "raw",
+    aiOutputs: [],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  const result = await polishInspirationWithAi(
+    inspiration,
+    mode,
+    buildInspirationProjectContext(store, inspiration)
+  );
+
+  return {
+    output: {
+      id: randomUUID(),
+      mode,
+      title: result.title,
+      content: result.content,
+      changes: result.changes,
+      suggestions: result.suggestions,
+      tags: result.tags,
+      usedAi: result.usedAi,
+      usedFallback: result.usedFallback,
+      createdAt: now()
+    } satisfies InspirationAiOutput
+  };
+}
+
+export async function updateInspiration(
+  inspirationId: string,
+  input: {
+    title?: string;
+    content?: string;
+    type?: InspirationType;
+    tags?: string[];
+    status?: InspirationStatus;
+    projectId?: string | null;
+    linkedEntityType?: StoredInspiration["linkedEntityType"] | null;
+    linkedEntityId?: string | null;
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const inspiration = createDomainWriteRepository(store).requireInspirationForUser(inspirationId, currentUser.id);
+  const projectId = input.projectId === null ? null : input.projectId?.trim() || inspiration.projectId || null;
+
+  if (projectId) {
+    createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  }
+
+  inspiration.title = input.title?.trim() || inspiration.title;
+  inspiration.content = input.content?.trim() || inspiration.content;
+  inspiration.type = normalizeInspirationType(input.type ?? inspiration.type);
+  inspiration.tags = normalizeInspirationTags(input.tags ?? inspiration.tags);
+  inspiration.status = normalizeInspirationStatus(input.status ?? inspiration.status);
+  inspiration.projectId = projectId || undefined;
+
+  if (input.linkedEntityType !== undefined) {
+    inspiration.linkedEntityType = input.linkedEntityType === null ? undefined : input.linkedEntityType;
+  }
+
+  if (input.linkedEntityId !== undefined) {
+    inspiration.linkedEntityId = input.linkedEntityId === null ? undefined : input.linkedEntityId?.trim() || undefined;
+  }
+
+  inspiration.updatedAt = now();
+
+  await writeStore(store);
+  return inspiration;
+}
+
+export async function deleteInspiration(inspirationId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const inspiration = createDomainWriteRepository(store).requireInspirationForUser(inspirationId, currentUser.id);
+
+  store.inspirations = (store.inspirations ?? []).filter((item) => item.id !== inspiration.id);
+  await writeStore(store);
+  return { deleted: true };
+}
+
+export async function polishInspiration(
+  inspirationId: string,
+  mode: InspirationPolishMode
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const inspiration = createDomainWriteRepository(store).requireInspirationForUser(inspirationId, currentUser.id);
+  const result = await polishInspirationWithAi(inspiration, mode, buildInspirationProjectContext(store, inspiration));
+  const output: InspirationAiOutput = {
+    id: randomUUID(),
+    mode,
+    title: result.title,
+    content: result.content,
+    changes: result.changes,
+    suggestions: result.suggestions,
+    tags: result.tags,
+    usedAi: result.usedAi,
+    usedFallback: result.usedFallback,
+    createdAt: now()
+  };
+
+  inspiration.aiOutputs = [output, ...(inspiration.aiOutputs ?? [])].slice(0, 10);
+  inspiration.title = result.title || inspiration.title;
+  inspiration.status = "polished";
+  inspiration.tags = normalizeInspirationTags([...(inspiration.tags ?? []), ...result.tags]);
+  inspiration.updatedAt = now();
+  await writeStore(store);
+
+  return {
+    inspiration,
+    output
+  };
+}
+
+function normalizeInspirationTransformTarget(value: unknown): InspirationTransformTarget {
+  return value === "character" ||
+    value === "foreshadowing" ||
+    value === "task_card" ||
+    value === "bible" ||
+    value === "worldbuilding" ||
+    value === "short_outline" ||
+    value === "variants"
+    ? value
+    : "task_card";
+}
+
+function transformTargetToOutputMode(target: InspirationTransformTarget) {
+  if (target === "character") {
+    return "character_draft" as const;
+  }
+
+  if (target === "foreshadowing") {
+    return "foreshadowing_draft" as const;
+  }
+
+  if (target === "task_card") {
+    return "task_card" as const;
+  }
+
+  if (target === "variants") {
+    return "variants" as const;
+  }
+
+  return "expand_setting" as const;
+}
+
+function trimOrEmpty(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function appendTextBlock(current: string, next: string) {
+  const currentText = current.trim();
+  const nextText = next.trim();
+
+  if (!currentText) {
+    return nextText;
+  }
+
+  if (!nextText) {
+    return currentText;
+  }
+
+  if (currentText.includes(nextText)) {
+    return currentText;
+  }
+
+  return `${currentText}\n${nextText}`;
+}
+
+export async function previewInspirationTransform(
+  inspirationId: string,
+  target: InspirationTransformTarget
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const inspiration = createDomainWriteRepository(store).requireInspirationForUser(inspirationId, currentUser.id);
+  const result = await transformInspirationWithAi(
+    inspiration,
+    target,
+    buildInspirationProjectContext(store, inspiration)
+  );
+
+  return {
+    draft: result
+  };
+}
+
+export async function confirmInspirationTransform(
+  inspirationId: string,
+  draft: InspirationTransformDraft
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const inspiration = createDomainWriteRepository(store).requireInspirationForUser(inspirationId, currentUser.id);
+  const projectId = inspiration.projectId?.trim();
+
+  if (!projectId) {
+    throw new Error("请先把灵感关联到项目后再转化");
+  }
+
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const timestamp = now();
+  ensureDefaultWritingState(store, project);
+
+  const output: InspirationAiOutput = {
+    id: randomUUID(),
+    mode: transformTargetToOutputMode(draft.target),
+    title: draft.title.trim() || inspiration.title,
+    content: [
+      draft.summary.trim(),
+      draft.character ? JSON.stringify(draft.character, null, 2) : "",
+      draft.foreshadowing ? JSON.stringify(draft.foreshadowing, null, 2) : "",
+      draft.taskCard ? JSON.stringify(draft.taskCard, null, 2) : "",
+      draft.biblePatch ? JSON.stringify(draft.biblePatch, null, 2) : "",
+      draft.shortOutline ? JSON.stringify(draft.shortOutline, null, 2) : "",
+      draft.variants ? JSON.stringify(draft.variants, null, 2) : ""
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join("\n\n"),
+    changes: cleanList([
+      ...draft.notes,
+      ...draft.warnings.map((item) => `注意：${item}`)
+    ]).slice(0, 8),
+    suggestions: cleanList(draft.warnings.length ? draft.warnings : draft.notes).slice(0, 8),
+    tags: cleanList([inspiration.type, ...inspiration.tags]).slice(0, 8),
+    usedAi: draft.usedAi,
+    usedFallback: draft.usedFallback,
+    createdAt: timestamp
+  };
+
+  inspiration.aiOutputs = [output, ...(inspiration.aiOutputs ?? [])].slice(0, 10);
+
+  if (draft.target === "character") {
+    const character = draft.character ?? {
+      name: draft.title.trim() || inspiration.title,
+      identity: draft.summary.trim(),
+      currentGoal: "",
+      longTermGoal: "",
+      secret: "",
+      relationshipToProtagonist: "",
+      attitude: "",
+      abilityBoundary: "",
+      voice: "",
+      knownInformation: "",
+      unknownInformation: "",
+      lastAppearance: "",
+      currentState: ""
+    };
+
+    if (!character.name.trim()) {
+      throw new Error("人物姓名不能为空");
+    }
+
+    const created: StoredCharacterProfile = {
+      id: randomUUID(),
+      projectId,
+      ...character,
+      knownInformation: character.knownInformation || draft.summary.trim(),
+      currentState: character.currentState || "来自灵感中心的转化草稿",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+
+    store.characterProfiles.push(created);
+
+    inspiration.status = "used";
+    inspiration.linkedEntityType = "character";
+    inspiration.linkedEntityId = created.id;
+    inspiration.updatedAt = timestamp;
+    project.updatedAt = timestamp;
+
+    await writeStore(store);
+    return { inspiration, output, entity: created, target: draft.target };
+  }
+
+  if (draft.target === "foreshadowing") {
+    const foreshadowing = draft.foreshadowing ?? {
+      name: draft.title.trim() || inspiration.title,
+      plantedChapter: "",
+      relatedCharacters: [],
+      relatedLocation: "",
+      status: "open" as const,
+      expectedRevealChapter: "",
+      revealMethod: "",
+      hiddenInformation: draft.summary.trim()
+    };
+
+    if (!foreshadowing.name.trim()) {
+      throw new Error("伏笔名称不能为空");
+    }
+
+    const created: StoredForeshadowing = {
+      id: randomUUID(),
+      projectId,
+      ...foreshadowing,
+      relatedCharacters: cleanList(foreshadowing.relatedCharacters),
+      hiddenInformation: foreshadowing.hiddenInformation || draft.summary.trim(),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+
+    store.foreshadowings.push(created);
+
+    inspiration.status = "used";
+    inspiration.linkedEntityType = "foreshadowing";
+    inspiration.linkedEntityId = created.id;
+    inspiration.updatedAt = timestamp;
+    project.updatedAt = timestamp;
+
+    await writeStore(store);
+    return { inspiration, output, entity: created, target: draft.target };
+  }
+
+  if (draft.target === "task_card") {
+    const latestTaskCard = getLatestWritingTaskCard(store, projectId);
+    const latestLedger = store.chapterLedgers
+      .filter((item) => item.projectId === projectId)
+      .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+    const nextChapterNumber = Math.max(latestTaskCard?.chapterNumber ?? 0, latestLedger?.chapterNumber ?? 0, 0) + 1;
+    const targetChapterNumber =
+      Number.isFinite(Number(draft.taskCard?.chapterNumber)) && Number(draft.taskCard?.chapterNumber) > 0
+        ? Math.floor(Number(draft.taskCard?.chapterNumber))
+        : nextChapterNumber;
+    const taskCard: StoredWritingTaskCard = {
+      id: randomUUID(),
+      projectId,
+      chapterNumber: targetChapterNumber,
+      title: trimOrEmpty(draft.taskCard?.title) || draft.title.trim() || inspiration.title,
+      chapterGoal: trimOrEmpty(draft.taskCard?.chapterGoal) || draft.summary.trim(),
+      continuity: trimOrEmpty(draft.taskCard?.continuity) || "承接当前主线状态",
+      mainPlotProgress: trimOrEmpty(draft.taskCard?.mainPlotProgress) || "推进主线一步",
+      requiredCharacters: cleanList(draft.taskCard?.requiredCharacters).slice(0, 8),
+      pleasurePoint: trimOrEmpty(draft.taskCard?.pleasurePoint) || "安排一次明确的情绪回报",
+      foreshadowingTasks: cleanList(draft.taskCard?.foreshadowingTasks).slice(0, 8),
+      rulesNotToBreak: cleanList([
+        ...(draft.taskCard?.rulesNotToBreak ?? []),
+        ...(store.writingBibles.find((item) => item.projectId === projectId)?.immutableSettings ? [store.writingBibles.find((item) => item.projectId === projectId)!.immutableSettings] : [])
+      ]).slice(0, 12),
+      endingHook: trimOrEmpty(draft.taskCard?.endingHook) || "留下可继续往下读的钩子",
+      status: "draft",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+
+    store.writingTaskCards.push(taskCard);
+    project.status = "writing";
+    project.updatedAt = timestamp;
+
+    inspiration.status = "used";
+    inspiration.linkedEntityType = "task_card";
+    inspiration.linkedEntityId = taskCard.id;
+    inspiration.updatedAt = timestamp;
+
+    await writeStore(store);
+    return { inspiration, output, entity: taskCard, target: draft.target };
+  }
+
+  if (draft.target === "short_outline") {
+    const outlineId = randomUUID();
+    const currentStage = [
+      trimOrEmpty(draft.shortOutline?.logline) || draft.summary.trim(),
+      trimOrEmpty(draft.shortOutline?.coreConflict),
+      (draft.shortOutline?.firstChapters ?? []).join(" / "),
+      trimOrEmpty(draft.shortOutline?.pacing),
+      (draft.shortOutline?.foreshadowingPlan ?? []).join(" / ")
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join("\n");
+
+    const existingPlan = store.longFormPlans.find((item) => item.projectId === projectId);
+
+    if (existingPlan) {
+      existingPlan.corePromise = appendTextBlock(existingPlan.corePromise, draft.summary.trim());
+      existingPlan.first10Chapters = uniqueList([
+        ...existingPlan.first10Chapters,
+        ...(draft.shortOutline?.firstChapters ?? [])
+      ]).slice(0, 12);
+      existingPlan.first100Pacing = appendTextBlock(existingPlan.first100Pacing, trimOrEmpty(draft.shortOutline?.pacing));
+      existingPlan.progressionRules = uniqueList([
+        ...existingPlan.progressionRules,
+        ...(draft.shortOutline?.foreshadowingPlan ?? [])
+      ]).slice(0, 24);
+      existingPlan.updatedAt = timestamp;
+    }
+
+    const plotState = store.plotStates.find((item) => item.projectId === projectId);
+    if (plotState) {
+      plotState.mainGoal = appendTextBlock(plotState.mainGoal, trimOrEmpty(draft.shortOutline?.logline) || draft.summary.trim());
+      plotState.currentStage = appendTextBlock(plotState.currentStage, currentStage || "已生成短大纲草稿");
+      plotState.nextMilestones = uniqueList([
+        ...plotState.nextMilestones,
+        ...(draft.shortOutline?.firstChapters ?? [])
+      ]).slice(0, 8);
+      plotState.unresolvedQuestions = uniqueList([
+        ...plotState.unresolvedQuestions,
+        ...(draft.shortOutline?.foreshadowingPlan ?? [])
+      ]).slice(0, 12);
+      plotState.updatedAt = timestamp;
+    }
+
+    inspiration.status = "used";
+    inspiration.linkedEntityType = "outline";
+    inspiration.linkedEntityId = outlineId;
+    inspiration.updatedAt = timestamp;
+    project.updatedAt = timestamp;
+
+    await writeStore(store);
+    return { inspiration, output, entity: { id: outlineId, target: draft.target }, target: draft.target };
+  }
+
+  if (draft.target === "variants") {
+    const bible = store.writingBibles.find((item) => item.projectId === projectId);
+
+    if (!bible) {
+      throw new Error("项目创作圣经不存在");
+    }
+
+    const variantsText = (draft.variants ?? [])
+      .map((item, index) =>
+        [
+          `变体${index + 1}：${item.title}`,
+          `方向：${item.direction}`,
+          `冲突：${item.conflict}`,
+          `收益：${item.payoff}`,
+          `钩子：${item.nextHook}`
+        ].join("\n")
+      )
+      .join("\n\n");
+
+    bible.styleGuide = appendTextBlock(bible.styleGuide, variantsText || draft.summary.trim());
+    bible.corePleasure = appendTextBlock(bible.corePleasure, draft.summary.trim());
+    bible.updatedAt = timestamp;
+
+    inspiration.status = "used";
+    inspiration.linkedEntityType = "bible";
+    inspiration.linkedEntityId = bible.id;
+    inspiration.updatedAt = timestamp;
+    project.updatedAt = timestamp;
+
+    await writeStore(store);
+    return { inspiration, output, entity: bible, target: draft.target };
+  }
+
+  const bible = store.writingBibles.find((item) => item.projectId === projectId);
+
+  if (!bible) {
+    throw new Error("项目创作圣经不存在");
+  }
+
+  const patch = draft.biblePatch ?? {};
+  bible.corePleasure = appendTextBlock(bible.corePleasure, patch.corePleasure || draft.summary);
+  bible.worldRules = appendTextBlock(bible.worldRules, patch.worldRules ?? "");
+  bible.goldenFingerRules = appendTextBlock(bible.goldenFingerRules, patch.goldenFingerRules ?? "");
+  bible.narrativeTaboos = appendTextBlock(bible.narrativeTaboos, patch.narrativeTaboos ?? "");
+  bible.immutableSettings = appendTextBlock(bible.immutableSettings, patch.immutableSettings ?? "");
+  bible.styleGuide = appendTextBlock(bible.styleGuide, patch.styleGuide ?? "");
+  bible.updatedAt = timestamp;
+
+  inspiration.status = "used";
+  inspiration.linkedEntityType = "bible";
+  inspiration.linkedEntityId = bible.id;
+  inspiration.updatedAt = timestamp;
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+  return { inspiration, output, entity: bible, target: draft.target };
+}
+
 export async function getLatestOutlineByTemplate(templateId: string): Promise<StoredOutline | null> {
   const store = await readStore();
   const currentUser = await getCurrentUserFromStore(store);
@@ -6947,6 +7758,7 @@ export async function generateWritingTaskCard(
   > & {
     chapterNumber?: number;
     useAnalysisContext?: boolean;
+    relatedInspirationIds?: string[];
   },
   options?: { existingJobId?: string; retryOfJobId?: string }
 ) {
@@ -6965,6 +7777,19 @@ export async function generateWritingTaskCard(
         .filter((item) => item.projectId === projectId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
     : null;
+  const relatedInspirations = (input?.relatedInspirationIds ?? [])
+    .map((id) => store.inspirations.find((item) => item.id === id && item.projectId === projectId && item.ownerUserId === currentUser.id))
+    .filter((item): item is StoredInspiration => Boolean(item))
+    .map((item) => ({
+      title: item.title,
+      type: item.type,
+      content: item.content,
+      tags: item.tags
+    }))
+    .slice(0, 6);
+  const relatedInspirationText = relatedInspirations
+    .map((item) => `灵感「${item.title}」：${compactStateText(item.content, 120)}`)
+    .join("；");
   const chapterIdsByNumber = new Map(
     store.chapters
       .filter((chapter) => chapter.projectId === projectId)
@@ -7057,6 +7882,7 @@ export async function generateWritingTaskCard(
     title: input?.title?.trim() || `第${targetChapterNumber}章 反击前夜`,
     chapterGoal: withCharacterTaskRequirement(
       input?.chapterGoal?.trim() ||
+        (relatedInspirationText ? `参考相关灵感：${relatedInspirationText}。` : "") ||
         `${project.description.trim() ? `参考作品简介的开局方向：${project.description.trim()}。` : ""}围绕“${plotStateContext.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，让主角获得可见收益或新线索。`,
       chapterCharacterConstraints
     ),
@@ -7075,6 +7901,7 @@ export async function generateWritingTaskCard(
     ),
     mainPlotProgress: withCharacterTaskRequirement(
       input?.mainPlotProgress?.trim() ||
+        (relatedInspirationText ? `把相关灵感转成当前主线里的具体推进：${relatedInspirationText}` : "") ||
         `${project.description.trim() ? "避免明显偏离作品简介里的主角身份、初始危机和核心卖点。" : ""}按“${storyAnalysis?.mainLoop || plotStateContext.currentStage}”继续推进到下一个冲突点。`,
       chapterCharacterConstraints
     ),
@@ -7130,6 +7957,7 @@ export async function generateWritingTaskCard(
         characters: allCharacters,
         chapterCharacterConstraints,
         foreshadowings: contextForeshadowings,
+        relatedInspirations,
         storyAnalysis,
         recentChapterAnalyses,
         userInput: input,
@@ -8492,6 +9320,21 @@ export async function deleteProject(projectId: string) {
   store.chapterLedgers = store.chapterLedgers.filter((item) => item.projectId !== projectId);
   store.reviewReports = store.reviewReports.filter((item) => item.projectId !== projectId);
   store.editReports = store.editReports.filter((item) => item.projectId !== projectId);
+  store.inspirations = (store.inspirations ?? []).map((item) => {
+    const linkedToDeletedProject = item.linkedEntityType === "project" && item.linkedEntityId === projectId;
+
+    if (item.projectId !== projectId && !linkedToDeletedProject) {
+      return item;
+    }
+
+    return {
+      ...item,
+      projectId: item.projectId === projectId ? undefined : item.projectId,
+      linkedEntityType: linkedToDeletedProject ? undefined : item.linkedEntityType,
+      linkedEntityId: linkedToDeletedProject ? undefined : item.linkedEntityId,
+      updatedAt: now()
+    };
+  });
   const removedAssistantThreadIds = new Set(
     (store.assistantThreads ?? []).filter((item) => item.projectId === projectId).map((item) => item.id)
   );

@@ -1,9 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
-import { Panel } from "@/components/panel";
 import { getProjectWritingState } from "@/lib/projects";
-import { formatReviewText } from "@/lib/review-display";
 
 const styleOptions = ["快节奏强爽点", "悬疑推进", "轻松爽文", "热血升级", "压迫反转", "细腻情绪"];
 
@@ -44,10 +42,6 @@ export default async function ProjectStatePage({
         ? `继续写第 ${maxChapterNumber} 章`
         : `继续创作第 ${maxChapterNumber + 1} 章`;
   const openForeshadowingCount = state.foreshadowings.filter((item) => item.status !== "closed").length;
-  const latestTaskCard = state.taskCards[0];
-  const latestLedger = state.ledgers[0];
-  const latestReview = state.reviews[0];
-  const latestCharacter = state.characters[0];
   const latestLongFormPlan = state.longFormPlans[0] ?? null;
   const keySettingCount = [
     state.bible.corePleasure,
@@ -754,62 +748,6 @@ export default async function ProjectStatePage({
             <a href="#characters">人物</a>
             <a href="#foreshadowings">伏笔</a>
           </nav>
-          <Panel title="状态摘要" description="创作页生成任务卡和正文时会读取这些内容。">
-            <div className="list compact-list">
-              <div className="task-block">
-                <div className="task-title">当前故事</div>
-                <div className="muted">{state.project.name}</div>
-                <div className="muted">{state.project.description || "暂无故事简介"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">当前主线</div>
-                <div className="muted">{state.plotState.mainGoal || "未填写主线目标"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">下一步</div>
-                <div className="muted">{state.plotState.nextStageGoal || "未填写下一阶段目标"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">核心限制</div>
-                <div className="muted">{state.bible.immutableSettings || "未填写不可违反设定"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">状态数量</div>
-                <div className="meta-row">
-                  <span className="chip">人物 {profileCount}</span>
-                  <span className="chip">伏笔 {foreshadowingCount}</span>
-                  <span className="chip">台账 {state.ledgers.length}</span>
-                  <span className="chip">审稿 {state.reviews.length}</span>
-                </div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">最近自动状态</div>
-                <div className="muted">
-                  {latestTaskCard ? `任务卡：第 ${latestTaskCard.chapterNumber} 章 ${latestTaskCard.title}` : "暂无任务卡"}
-                </div>
-                <div className="muted">
-                  {latestLedger ? `台账：第 ${latestLedger.chapterNumber} 章 ${latestLedger.cliffhanger || latestLedger.payoff}` : "暂无章节台账"}
-                </div>
-                <div className="muted">
-                  {latestReview ? `审稿：第 ${latestReview.chapterNumber} 章 ${formatReviewText(latestReview.overall)}` : "暂无审稿报告"}
-                </div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">最近更新人物</div>
-                <div className="muted">
-                  {latestCharacter
-                    ? `${latestCharacter.name}：${latestCharacter.currentState || latestCharacter.identity || "未填写状态"}`
-                    : "暂无人物档案"}
-                </div>
-              </div>
-              <Link className="button primary" href={`/projects/${projectId}/writing`}>
-                {writingButtonText}
-              </Link>
-              <Link className="button" href={`/projects/${projectId}/state/graph`}>
-                查看关系图谱
-              </Link>
-            </div>
-          </Panel>
         </aside>
     </div>
     </div>

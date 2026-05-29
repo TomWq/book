@@ -1,9 +1,15 @@
 import Link from "next/link";
 import { formatProjectStatus, getProjects, type ProjectWithCounts } from "@/lib/projects";
-import { Panel } from "@/components/panel";
 import { ProjectCover } from "@/components/project-cover";
 
 function ProjectRow({ project }: { project: ProjectWithCounts }) {
+  const updatedAt = new Date(project.updatedAt).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
   return (
     <Link
       key={project.id}
@@ -25,7 +31,7 @@ function ProjectRow({ project }: { project: ProjectWithCounts }) {
             {project.type === "analysis" ? "拆书" : "创作"}
           </span>
         </div>
-        <div className="muted clamped-text three-lines">{project.description || "尚未添加项目说明。"}</div>
+        <div className="muted clamped-text two-lines">{project.description || "尚未添加项目说明。"}</div>
         <div className="meta-row">
           <span className="chip project-genre-chip">{project.genre || "未填写题材"}</span>
           <span className="chip">{formatProjectStatus(project.status)}</span>
@@ -33,17 +39,15 @@ function ProjectRow({ project }: { project: ProjectWithCounts }) {
             <>
               <span className="chip">已写 {project._count.chapterDrafts} 章</span>
               <span className="chip">任务卡 {project._count.writingTaskCards}</span>
-              <span className="chip">审稿 {project._count.reviewReports}</span>
             </>
           ) : (
             <>
               <span className="chip">导入 {project._count.chapters} 章</span>
               <span className="chip">拆解 {project._count.chapterAnalyses} 章</span>
-              <span className="chip">整书分析 {project._count.storyAnalyses}</span>
+              <span className="chip">分析 {project._count.storyAnalyses}</span>
             </>
           )}
-          <span className="chip">{project._count.aiJobs} 个任务</span>
-          <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
+          <span className="chip">更新 {updatedAt}</span>
         </div>
       </div>
     </Link>
@@ -54,6 +58,8 @@ export default async function ProjectsPage() {
   const projects = await getProjects();
   const analysisProjects = projects.filter((project) => project.type === "analysis");
   const writingProjects = projects.filter((project) => project.type === "writing");
+  const latestWritingProject = writingProjects[0];
+  const latestAnalysisProject = analysisProjects[0];
   const writingStats = [
     { label: "创作项目", value: writingProjects.length },
     { label: "已写正文", value: writingProjects.reduce((total, project) => total + project._count.chapterDrafts, 0) },
@@ -66,46 +72,63 @@ export default async function ProjectsPage() {
     { label: "章节拆解", value: analysisProjects.reduce((total, project) => total + project._count.chapterAnalyses, 0) },
     { label: "整书分析", value: analysisProjects.reduce((total, project) => total + project._count.storyAnalyses, 0) }
   ];
+  const summaryStats = [
+    { label: "全部项目", value: projects.length, tone: "neutral" },
+    { label: "创作项目", value: writingProjects.length, tone: "writing" },
+    { label: "已写正文", value: writingStats[1].value, tone: "writing" },
+    { label: "拆书项目", value: analysisProjects.length, tone: "analysis" },
+    { label: "导入章节", value: analysisStats[1].value, tone: "analysis" },
+    { label: "AI 任务", value: projects.reduce((total, project) => total + project._count.aiJobs, 0), tone: "neutral" }
+  ];
 
   return (
-    <div className="grid">
-      <section className="page-intro">
-        <h1>项目中心</h1>
-        <p>创作项目和拆书项目分开管理，各自显示对应进度。</p>
+    <div className="project-center-page">
+      <section className="project-center-hero">
+        <div>
+          <span className="project-center-kicker">项目中心</span>
+          <h1>今天从哪个项目继续？</h1>
+          <p>左手推进连载，右手拆解爆款。</p>
+          <div className="project-center-mini-stats" aria-label="项目总览">
+            {summaryStats.map((item) => (
+              <span key={item.label}>
+                <strong>{item.value}</strong>
+                {item.label}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="project-center-launchpad" aria-label="快捷入口">
+          <Link
+            href={latestWritingProject ? `/projects/${latestWritingProject.id}/writing` : "/projects/new"}
+            className="project-launch-card project-launch-writing"
+          >
+            <span>创作工作台</span>
+            <strong>{latestWritingProject ? latestWritingProject.name : "新建创作项目"}</strong>
+            <em>{latestWritingProject ? `已写 ${latestWritingProject._count.chapterDrafts} 章` : "从设定、目录和任务卡开始"}</em>
+          </Link>
+          <Link
+            href={latestAnalysisProject ? `/projects/${latestAnalysisProject.id}/chapters` : "/projects/new/analysis"}
+            className="project-launch-card project-launch-analysis"
+          >
+            <span>拆书工作台</span>
+            <strong>{latestAnalysisProject ? latestAnalysisProject.name : "新建拆书项目"}</strong>
+            <em>{latestAnalysisProject ? `导入 ${latestAnalysisProject._count.chapters} 章 · 拆解 ${latestAnalysisProject._count.chapterAnalyses} 章` : "导入文本，沉淀公式"}</em>
+          </Link>
+        </div>
       </section>
 
-      <div className="grid two-col">
-        <Panel
-          title="创作概览"
-          description="正文连载、任务卡和一致性审稿。"
-        >
-          <div className="grid stats" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-            {writingStats.map((item) => (
-              <div key={item.label} className="stat-card">
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
+      <div className="project-center-board">
+        <section className="project-center-section project-center-section-writing">
+          <div className="project-center-section-head">
+            <div>
+              <h2>创作项目</h2>
+              <p>进入创作台、目录、状态和任务页面。</p>
+            </div>
+            <div className="project-center-section-stats">
+              <span>正文 {writingStats[1].value}</span>
+              <span>审稿 {writingStats[3].value}</span>
+            </div>
           </div>
-        </Panel>
-
-        <Panel
-          title="拆书概览"
-          description="文本导入、章节拆解和整书分析。"
-        >
-          <div className="grid stats" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-            {analysisStats.map((item) => (
-              <div key={item.label} className="stat-card">
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      </div>
-
-      <div className="grid two-col">
-        <Panel title="创作项目" description="进入创作台、目录、状态和任务页面。">
           <div className="project-list">
             {writingProjects.length === 0 ? (
               <div className="empty-state">
@@ -119,9 +142,19 @@ export default async function ProjectsPage() {
               writingProjects.map((project) => <ProjectRow key={project.id} project={project} />)
             )}
           </div>
-        </Panel>
+        </section>
 
-        <Panel title="拆书项目" description="进入导入、章节拆解、分析和公式页面。">
+        <section className="project-center-section project-center-section-analysis">
+          <div className="project-center-section-head">
+            <div>
+              <h2>拆书项目</h2>
+              <p>进入导入、章节拆解、分析和公式页面。</p>
+            </div>
+            <div className="project-center-section-stats">
+              <span>导入 {analysisStats[1].value}</span>
+              <span>拆解 {analysisStats[2].value}</span>
+            </div>
+          </div>
           <div className="project-list">
             {analysisProjects.length === 0 ? (
               <div className="empty-state">
@@ -135,7 +168,7 @@ export default async function ProjectsPage() {
               analysisProjects.map((project) => <ProjectRow key={project.id} project={project} />)
             )}
           </div>
-        </Panel>
+        </section>
       </div>
     </div>
   );

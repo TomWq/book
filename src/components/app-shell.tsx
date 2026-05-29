@@ -15,8 +15,9 @@ import { AutoUpdatePrompt } from "@/components/auto-update-prompt";
 const navItems: SideNavItem[] = [
   { href: "/", label: "首页" },
   { href: "/projects", label: "项目中心" },
-  { href: "/templates", label: "模板库" },
-  { href: "/assistant", label: "墨澜" }
+  { href: "/inspirations", label: "灵感中心" },
+  { href: "/assistant", label: "墨澜" },
+  { href: "/templates", label: "模板库" }
 ];
 
 const standaloneAuthPaths = new Set(["/activate", "/login", "/register", "/download", "/downloads"]);

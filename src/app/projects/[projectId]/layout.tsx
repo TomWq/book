@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ProjectCoverEditor } from "@/components/project-cover-editor";
 import { ProjectNav } from "@/components/project-nav";
-import { getProject } from "@/lib/projects";
+import { getProject, getProjectInspirations } from "@/lib/projects";
 
 const analysisProjectNav = [
   { key: "overview", label: "概览", href: "" },
@@ -39,21 +39,46 @@ export default async function ProjectLayout({
     notFound();
   }
 
+  const relatedInspirations = await getProjectInspirations(project.id);
+  const recentInspirations = relatedInspirations
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 3);
   const isAnalysisProject = project.type === "analysis";
+  const updatedAt = new Date(project.updatedAt).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const projectStats = isAnalysisProject
+    ? [
+        { label: "导入", value: `${project._count.chapters} 章` },
+        { label: "拆解", value: `${project._count.chapterAnalyses} 章` },
+        { label: "任务", value: `${project._count.aiJobs} 次` }
+      ]
+    : [
+        { label: "正文", value: `${project._count.chapterDrafts} 章` },
+        { label: "台账", value: `${project._count.chapterLedgers} 条` },
+        { label: "审稿", value: `${project._count.reviewReports} 份` }
+      ];
 
   return (
     <div className="grid" style={{ gap: 18 }}>
-      <section className={`panel project-shell-panel ${isAnalysisProject ? "project-shell-panel-compact" : ""}`}>
+      <section className={`panel project-shell-panel ${isAnalysisProject ? "project-shell-panel-compact" : "project-shell-panel-writing"}`}>
         <div className="project-shell-head">
           {isAnalysisProject ? (
-            <div className="project-shell-copy">
-              <div className="pill">拆书项目</div>
-              <h2>{project.name}</h2>
-              <p>{project.description || "尚未填写项目说明。"}</p>
+            <div className="project-shell-copy project-shell-copy-analysis">
+              <div className="project-shell-title-row">
+                <span className="pill project-shell-type">拆书项目</span>
+                <h2>{project.name}</h2>
+              </div>
+              <p className="project-shell-description">{project.description || "尚未填写项目说明。"}</p>
               <div className="project-shell-meta">
                 <span className="chip">{project.genre || "未填写题材"}</span>
-                <span className="chip">导入 {project._count.chapters} 章</span>
-                <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
+                <span className="chip">公式 {project._count.storyAnalyses > 0 ? "已生成" : "待生成"}</span>
+                <span className="chip">更新 {updatedAt}</span>
               </div>
             </div>
           ) : (
@@ -65,22 +90,48 @@ export default async function ProjectLayout({
                 subtitle="创作项目"
               />
               <div className="project-shell-copy">
-                <div className="pill">创作项目</div>
-                <h2>{project.name}</h2>
-                <p>{project.description || "尚未填写项目说明。"}</p>
+                <div className="project-shell-title-row">
+                  <span className="pill project-shell-type">创作项目</span>
+                  <h2>{project.name}</h2>
+                </div>
+                <p className="project-shell-description">{project.description || "尚未填写项目说明。"}</p>
                 <div className="project-shell-meta">
                   <span className="chip">{project.genre || "未填写题材"}</span>
-                  <span className="chip">已写 {project._count.chapterDrafts} 章</span>
-                  <span className="chip">{new Date(project.updatedAt).toLocaleString("zh-CN")}</span>
+                  <span className="chip">更新 {updatedAt}</span>
                 </div>
               </div>
             </div>
           )}
-          <div className="project-shell-actions">
+          <aside className="project-shell-side" aria-label="项目状态">
+            <div className="project-shell-stat-grid">
+              {projectStats.map((item) => (
+                <div key={item.label} className="project-shell-stat">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
             <Link href="/projects" className="button">
               返回项目中心
             </Link>
-          </div>
+            <Link href={`/inspirations?projectId=${project.id}`} className="button">
+              项目灵感
+            </Link>
+            <div className="project-shell-inspirations">
+              <span>相关灵感 {relatedInspirations.length}</span>
+              {recentInspirations.length ? (
+                <div>
+                  {recentInspirations.map((inspiration) => (
+                    <Link key={inspiration.id} href={`/inspirations?projectId=${project.id}`}>
+                      {inspiration.title}
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <p>暂无关联灵感</p>
+              )}
+            </div>
+          </aside>
         </div>
 
         <ProjectNav
