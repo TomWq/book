@@ -49,9 +49,22 @@ function list(value: unknown) {
     : [];
 }
 
+function cleanTitleText(value: string) {
+  return String(value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[“"‘'「『【\[（(]+/, "")
+    .replace(/[”"’'」』】\]）)]+$/, "")
+    .trim();
+}
+
+function titleCharacterLength(value: string) {
+  return Array.from(value.replace(/\s/g, "")).length;
+}
+
 function normalizeResult(value: Partial<ProjectCreationAssistResult>) {
   return attachAiTokenUsage({
-    titles: list(value.titles).slice(0, 8),
+    titles: list(value.titles).map(cleanTitleText).filter(Boolean).slice(0, 8),
     protagonistNames: list(value.protagonistNames).slice(0, 8),
     protagonistCharacters: normalizeCharacters(value.protagonistCharacters),
     description: String(value.description ?? "").trim()
@@ -109,9 +122,9 @@ function titleCraftRules(titleNamingStyle: TitleNamingStyle) {
       ]
     : [
         ...sharedRules,
-        "番茄风格可以更直给，但要像一个剧情钩子，而不是标签清单。建议 12-32 个中文字符，最多 46 字。",
-        "番茄长标题优先使用“处境 + 反差动作 + 爽点后果”的结构，可以用冒号，但冒号前后都必须有剧情信息。",
-        "番茄长标题可以从开局误判、第一次反击、隐藏身份、规则漏洞、关系张力里找钩子；不要照搬这些规则里的词。"
+        "番茄风格可以更直给，但要像一个剧情钩子，而不是标签清单。建议 8-20 个中文字符，最多 24 字。",
+        "番茄标题优先使用“处境 + 反差动作 + 爽点后果”的结构，可以用冒号，但冒号前后都必须有剧情信息。",
+        "番茄标题可以从开局误判、第一次反击、隐藏身份、规则漏洞、关系张力里找钩子；不要照搬这些规则里的词。"
       ];
 }
 
@@ -176,7 +189,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       task:
         titleNamingStyle === "qidian"
           ? "只生成 6 个中文网文新书名。风格偏起点：更短、更传统、更有类型辨识度和意象感，优先 2-8 个中文字符，最多 12 字。可以使用职业身份、世界观概念、核心意象、命运主题来命名，但严禁照搬任何现有作品名、角色名、专有名词。避免番茄式长句、第一人称设问、逗号标题、强行解释剧情的标题。"
-          : "只生成 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、反差动作、爽点后果或追读悬念。不要把构思原句压缩成标题，不要照搬任何现有作品名、角色名、专有名词。标题可长一些，建议 12-32 个中文字符，最多 46 字。",
+          : "只生成 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、反差动作、爽点后果或追读悬念。不要把构思原句压缩成标题，不要照搬任何现有作品名、角色名、专有名词。标题可以比起点更直给，但不要写成一句简介；建议 8-20 个中文字符，最多 24 字。",
       outputSchema: {
         titles: "string[]"
       },
@@ -213,7 +226,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
   const styleRules = [
     titleNamingStyle === "qidian"
       ? "书名优先短、稳、耐看，有类型气质和记忆点；不要把完整剧情塞进标题，不要使用“我都……怎么……”这类番茄长标题句式。"
-      : "书名优先给长标题、强冲突、强卖点、强反差，但不要标题党到看不懂。",
+      : "书名可以比起点更直给，突出强冲突、强卖点、强反差，但不要写成一句简介，也不要长到像推文标题。",
     input.action === "titles" && input.titleConcept?.trim()
       ? "如果提供了起名构思 titleConcept，优先依据它来命名；不要把它原句压缩成标题，也不要让上一轮生成出的 title 反过来主导这一轮。"
       : null,
@@ -286,7 +299,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
             compactRetryRules: compact
               ? [
                   "只返回 titles 数组，不要返回其他字段。",
-                  "每个标题控制在 10-28 个中文字符。",
+                  "每个标题控制在 8-18 个中文字符，绝对不要超过 24 个中文字符。",
                   "不要复述 titleConcept 的原句，不要使用现成作品或角色名。",
                   "优先生成有人物身份反差、具体动作、第一章危机和追读钩子的标题。",
                   "不要把 genre 和 tags 直接拼成标题。"
@@ -307,7 +320,36 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       maxTokens: currentTask.maxTokens
     });
 
-    return normalizeResult(response);
+    const normalized = normalizeResult(response);
+
+    if (input.action === "titles" && titleNamingStyle === "fanqie") {
+      const acceptableTitles = normalized.titles.filter((title) => titleCharacterLength(title) <= 24);
+      const hasEnoughShortTitles = acceptableTitles.length >= 3;
+      const looksTooLong = normalized.titles.length > 0 && normalized.titles.every((title) => titleCharacterLength(title) > 24);
+
+      if (!hasEnoughShortTitles || looksTooLong) {
+        const compactResponse = await requestAiJson<Partial<ProjectCreationAssistResult>>({
+          messages: buildMessages(true),
+          temperature: 0.65,
+          maxTokens: 900
+        });
+
+        const compactNormalized = normalizeResult(compactResponse);
+        const compactShortTitles = compactNormalized.titles.filter((title) => titleCharacterLength(title) <= 24);
+
+        return attachAiTokenUsage({
+          ...compactNormalized,
+          titles: compactShortTitles.length > 0 ? compactShortTitles : compactNormalized.titles
+        }, getAiTokenUsage(compactResponse));
+      }
+
+      return attachAiTokenUsage({
+        ...normalized,
+        titles: acceptableTitles
+      }, getAiTokenUsage(response));
+    }
+
+    return normalized;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
 

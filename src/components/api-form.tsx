@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/lib/client-toast";
 
@@ -37,7 +38,7 @@ export function ActionLoadingOverlay({
   title: string;
   description: string;
 }) {
-  return (
+  const overlay = (
     <div className="action-loading-overlay" aria-live="polite" role="status">
       <div className="route-loading-board">
         <div className="route-loading-head">
@@ -53,6 +54,12 @@ export function ActionLoadingOverlay({
       </div>
     </div>
   );
+
+  if (typeof document === "undefined") {
+    return overlay;
+  }
+
+  return createPortal(overlay, document.body);
 }
 
 function useApiMutation() {

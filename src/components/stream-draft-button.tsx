@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ActionLoadingOverlay } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
 
@@ -45,6 +46,40 @@ export function StreamDraftButton({
     : "正在生成正文，实时内容会持续出现在下方。";
   const normalizedPreviewTarget = normalizedTargetWordCount();
   const targetRangeText = `${Math.floor(normalizedPreviewTarget * 0.7)}-${Math.ceil(normalizedPreviewTarget * 1.25)}`;
+  const previewOverlay = (
+    <div className="draft-preview-overlay" role="dialog" aria-modal="true" aria-label="正文全屏预览">
+      <div className="draft-preview-panel">
+        <div className="draft-preview-head">
+          <div>
+            <div className="mini-label">正文预览</div>
+            <strong>{isRunning ? "正在生成中" : "当前正文"}</strong>
+          </div>
+          <div className="hero-actions">
+            <span className="chip">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
+            <DraftExportActions
+              content={state.content}
+              projectName={projectName}
+              chapterNumber={chapterNumber}
+              title={title}
+              compact
+            />
+            <button className="button" type="button" onClick={() => setIsPreviewOpen(false)}>
+              关闭预览
+            </button>
+          </div>
+        </div>
+        <article className="draft-preview-reader">
+          {state.content
+            .split(/\n+/)
+            .map((paragraph) => paragraph.trim())
+            .filter(Boolean)
+            .map((paragraph, index) => (
+              <p key={`${index}-${paragraph.slice(0, 12)}`}>{paragraph.replace(/^#\s*/, "")}</p>
+            ))}
+        </article>
+      </div>
+    </div>
+  );
 
   useEffect(() => {
     if (!isPreviewOpen) {
@@ -285,40 +320,11 @@ function normalizedTargetWordCount() {
           {state.status === "error" ? <div className="pill danger">{state.error}</div> : null}
         </div>
       ) : null}
-      {isPreviewOpen ? (
-        <div className="draft-preview-overlay" role="dialog" aria-modal="true" aria-label="正文全屏预览">
-          <div className="draft-preview-panel">
-            <div className="draft-preview-head">
-              <div>
-                <div className="mini-label">正文预览</div>
-                <strong>{isRunning ? "正在生成中" : "当前正文"}</strong>
-              </div>
-              <div className="hero-actions">
-                <span className="chip">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
-                <DraftExportActions
-                  content={state.content}
-                  projectName={projectName}
-                  chapterNumber={chapterNumber}
-                  title={title}
-                  compact
-                />
-                <button className="button" type="button" onClick={() => setIsPreviewOpen(false)}>
-                  关闭预览
-                </button>
-              </div>
-            </div>
-            <article className="draft-preview-reader">
-              {state.content
-                .split(/\n+/)
-                .map((paragraph) => paragraph.trim())
-                .filter(Boolean)
-                .map((paragraph, index) => (
-                  <p key={`${index}-${paragraph.slice(0, 12)}`}>{paragraph.replace(/^#\s*/, "")}</p>
-                ))}
-            </article>
-          </div>
-        </div>
-      ) : null}
+      {isPreviewOpen
+        ? typeof document === "undefined"
+          ? previewOverlay
+          : createPortal(previewOverlay, document.body)
+        : null}
     </div>
   );
 }

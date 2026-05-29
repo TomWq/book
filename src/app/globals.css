@@ -12583,14 +12583,16 @@ body.update-prompt-open .floating-ai-launcher {
 .character-list {
   display: grid;
   width: 100%;
-  grid-template-columns: repeat(2, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 10px;
-  justify-content: start;
+  align-items: start;
 }
 
 .character-row {
+  width: 100%;
+  min-width: 0;
   display: grid;
-  grid-template-columns: 104px minmax(120px, 1fr) 44px;
+  grid-template-columns: minmax(92px, 108px) minmax(0, 1fr) 44px;
   gap: 8px;
   align-items: center;
 }

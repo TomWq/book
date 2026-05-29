@@ -31,6 +31,10 @@ type IssueFocusResult = {
   found: boolean;
   message: string;
 };
+type TextRange = {
+  start: number;
+  end: number;
+};
 
 function countTextCharacters(value: string) {
   return value.replace(/\s/g, "").length;
@@ -131,29 +135,106 @@ function compactTextWithMap(value: string) {
   };
 }
 
-function issueOriginalTexts(content: string, issue: ReviewIssue) {
+function uniqueCandidates(candidates: string[]) {
+  return Array.from(new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean)));
+}
+
+function suggestionOriginalText(issue: ReviewIssue) {
   const suggestionQuotes = quotedTexts(issue.suggestion);
-  const quotedOriginal =
-    suggestionQuotes.length >= 2 && /将|把|在|原句|后补|补入|改为|改成|替换/.test(issue.suggestion)
-      ? suggestionQuotes[0]
-      : "";
+
+  return suggestionQuotes.length >= 2 && /将|把|在|原句|后补|补入|改为|改成|替换/.test(issue.suggestion)
+    ? suggestionQuotes[0]
+    : "";
+}
+
+function issueOriginalTexts(content: string, issue: ReviewIssue) {
+  const quotedOriginal = suggestionOriginalText(issue);
   const paragraphNumber = paragraphReference(issue);
   const paragraphOriginal = paragraphNumber ? contentParagraphs(content)[paragraphNumber - 1] ?? "" : "";
   const candidates = [paragraphOriginal, quotedOriginal, ...quotedTexts(issue.location), plainLocationText(issue)];
-  return Array.from(new Set(candidates.filter(Boolean)));
+  return uniqueCandidates(candidates);
+}
+
+function isGenericLocationText(value: string) {
+  return /^(?:全文|全篇|通篇|多处|多段|开头|结尾|开头段|结尾段|正文相关段落|相关段落|正文第\s*[一二两三四五六七八九十\d]{1,3}\s*段|第\s*[一二两三四五六七八九十\d]{1,3}\s*段)$/u.test(
+    value.trim()
+  );
+}
+
+function exactCandidateRange(content: string, candidate: string): TextRange | null {
+  const index = content.indexOf(candidate);
+
+  if (index >= 0) {
+    return { start: index, end: index + candidate.length };
+  }
+
+  return null;
+}
+
+function compactCandidateRange(content: string, candidate: string): TextRange | null {
+  const compactCandidate = compactTextWithMap(candidate).text;
+
+  if (compactCandidate.length < 8) {
+    return null;
+  }
+
+  const compactContent = compactTextWithMap(content);
+  const index = compactContent.text.indexOf(compactCandidate);
+
+  if (index < 0) {
+    return null;
+  }
+
+  const start = compactContent.map[index] ?? 0;
+  const end = (compactContent.map[index + compactCandidate.length - 1] ?? start) + 1;
+  return { start, end };
+}
+
+function candidateRange(content: string, candidate: string): TextRange | null {
+  return exactCandidateRange(content, candidate) ?? compactCandidateRange(content, candidate);
+}
+
+function locationQuotedRange(content: string, issue: ReviewIssue): TextRange | null {
+  const quoted = quotedTexts(issue.location);
+
+  if (quoted.length < 2 || !/[至到-]/.test(issue.location)) {
+    return null;
+  }
+
+  const startIndex = content.indexOf(quoted[0]);
+  const endIndex = content.indexOf(quoted[1], Math.max(0, startIndex));
+
+  if (startIndex < 0 || endIndex < 0) {
+    return null;
+  }
+
+  const end = endIndex + quoted[1].length;
+  return end > startIndex && end - startIndex <= 1600 ? { start: startIndex, end } : null;
+}
+
+function issueFocusCandidates(issue: ReviewIssue) {
+  const plainLocation = plainLocationText(issue);
+  return uniqueCandidates([
+    ...quotedTexts(issue.location),
+    plainLocation && !isGenericLocationText(plainLocation) ? plainLocation : "",
+    suggestionOriginalText(issue)
+  ]);
 }
 
 function findIssueTextRange(content: string, issue: ReviewIssue) {
-  const analysis = analyzeIssueApply(content, issue);
-  const exactCandidates = Array.from(
-    new Set([analysis.original, ...issueOriginalTexts(content, issue)].filter(Boolean))
-  ).sort((a, b) => b.length - a.length);
+  const quotedRange = locationQuotedRange(content, issue);
+
+  if (quotedRange) {
+    return quotedRange;
+  }
+
+  const exactCandidates = issueFocusCandidates(issue);
 
   for (const candidate of exactCandidates) {
-    const index = content.indexOf(candidate);
+    const range = candidateRange(content, candidate);
 
-    if (index >= 0) {
-      return { start: index, end: index + candidate.length };
+    if (range) {
+      return range;
     }
   }
 
@@ -164,22 +245,6 @@ function findIssueTextRange(content: string, issue: ReviewIssue) {
 
     if (paragraph) {
       return { start: paragraph.start, end: paragraph.end };
-    }
-  }
-
-  const compactContent = compactTextWithMap(content);
-  const compactCandidates = exactCandidates
-    .map((candidate) => compactTextWithMap(candidate).text)
-    .filter((candidate) => candidate.length >= 8)
-    .sort((a, b) => b.length - a.length);
-
-  for (const candidate of compactCandidates) {
-    const index = compactContent.text.indexOf(candidate);
-
-    if (index >= 0) {
-      const start = compactContent.map[index] ?? 0;
-      const end = (compactContent.map[index + candidate.length - 1] ?? start) + 1;
-      return { start, end };
     }
   }
 

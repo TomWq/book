@@ -827,7 +827,7 @@ export function ProjectForm() {
                 />
                 <span>
                   <strong>番茄小说风格</strong>
-                  <small>长标题，强反差，直接抛爽点</small>
+                  <small>适中长标题，强反差，直接抛爽点</small>
                 </span>
               </label>
               <label>
@@ -851,11 +851,14 @@ export function ProjectForm() {
               name="name"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="请输入作品名称，或让 AI 生成榜单风格长书名"
+              placeholder="请输入作品名称，或让 AI 生成番茄风格标题"
               maxLength={60}
               required
             />
-            <div className="field-hint">{name.length}/60</div>
+            <div className="field-hint">
+              {name.length}/60
+              {titleNamingStyle === "fanqie" ? " · AI 起名建议 8-24 字" : " · AI 起名建议 2-12 字"}
+            </div>
             {titleSuggestions.length > 0 ? (
               <div className="assist-suggestion-list">
                 {titleSuggestions.map((title) => (

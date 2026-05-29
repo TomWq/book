@@ -33,6 +33,7 @@ import {
   type WritingAssistantChatMessage
 } from "@/lib/ai/writing-assistant";
 import { novelTaxonomy, qidianTaxonomyByReader, type TargetReader } from "@/lib/novel-taxonomy";
+import { formatReviewText } from "@/lib/review-display";
 import {
   assertEditedTextComplete,
   compressChapterDraftToTarget,
@@ -3859,6 +3860,16 @@ function uniqueReviewIssues(issues: ReviewIssue[]) {
 
 function mergeReviewIssues(currentIssues: ReviewIssue[], previousIssues: ReviewIssue[]) {
   return uniqueReviewIssues([...currentIssues, ...previousIssues]);
+}
+
+function sanitizeReviewIssueText(issue: ReviewIssue): ReviewIssue {
+  return {
+    ...issue,
+    type: formatReviewText(issue.type),
+    location: formatReviewText(issue.location),
+    suggestion: formatReviewText(issue.suggestion),
+    problem: issue.problem ? formatReviewText(issue.problem) : undefined
+  };
 }
 
 function extractLinesByKeywords(content: string, keywords: string[], limit = 6) {
@@ -8814,10 +8825,10 @@ export async function reviewChapterDraft(
     projectId,
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
-    overall: finalOverall,
-    issues: mergedIssues,
+    overall: formatReviewText(finalOverall),
+    issues: mergedIssues.map(sanitizeReviewIssueText),
     shouldUpdateState,
-    stateUpdateSuggestions: finalStateSuggestions,
+    stateUpdateSuggestions: finalStateSuggestions.map(formatReviewText),
     createdAt: timestamp,
     updatedAt: timestamp
   };

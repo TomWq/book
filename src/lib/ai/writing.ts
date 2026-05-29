@@ -1684,7 +1684,7 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
                 "如果任务卡 rulesNotToBreak 与正文冲突，应指出冲突位置和改法。",
                 "AI 味要单独检查：长段落、抽象总结、书面腔、模板式推进、过度解释、句式平均、缺少具体动作和对话，都要明确指出。",
                 "如果正文存在明显 AI 味，即使章末钩子也有问题，也不能只报钩子；AI 味问题必须单独列出。",
-                "problem、location、suggestion 和 overall 都是给用户看的中文文案，不要写 characters、taskCard、plotState、bible、ledger、draft、cliffhanger、payoff、style 等内部字段名；请改写成人物档案、章节任务卡、主线状态、创作圣经、章节台账、正文草稿、章末钩子、爽点回报、风格。",
+                "problem、location、suggestion 和 overall 都是给用户看的中文文案，不要写 characters、taskCard、chapterGoal、mainPlotProgress、pleasurePoint、endingHook、plotState、bible、ledger、draft、cliffhanger、payoff、style 等内部字段名；请改写成人物档案、章节任务卡、本章目标、主线推进、爽点回报、章末钩子、主线状态、创作圣经、章节台账、正文草稿、风格。",
                 "不要把人物档案、章节台账或代词推断说成“创作圣经明确规定”。只有 bible 字段原文直接写明的内容，才能称为创作圣经设定；人物姓名、身份、代词、已知/未知信息应称为人物档案或正文证据。",
                 "每条 issue 必须可执行：location 优先填写正文中可定位的原句或原段，不要只写“结尾段/全文”；suggestion 必须写成“将‘原句’改为‘改句’”或“在‘原句’后补入‘补写内容’”。",
                 "如果 suggestion 使用“将原句改为改句”，改句必须是可以直接放回正文的完整句子或完整段落，不能只给半句话、摘要、修改方向或省略上下文；否则请明确写“需手动处理：……”并说明处理方向。",
