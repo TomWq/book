@@ -266,6 +266,18 @@ export function AutoUpdatePrompt() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.body.classList.toggle("update-prompt-open", visible);
+
+    return () => {
+      document.body.classList.remove("update-prompt-open");
+    };
+  }, [visible]);
+
   if (!visible || !result) {
     return null;
   }
