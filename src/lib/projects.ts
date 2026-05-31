@@ -8308,6 +8308,153 @@ export async function generateChapterDraft(
   return draft;
 }
 
+export async function regenerateChapterDraftContent(
+  projectId: string,
+  draftId: string,
+  options?: { targetWordCount?: number; existingJobId?: string; retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(store, project);
+  const draft = store.chapterDrafts.find((item) => item.id === draftId && item.projectId === projectId);
+
+  if (!draft) {
+    throw new Error("要重写的章节正文不存在");
+  }
+
+  const taskCard = store.writingTaskCards.find(
+    (item) => item.id === draft.taskCardId && item.projectId === projectId
+  );
+
+  if (!taskCard) {
+    throw new Error("章节任务卡不存在，无法只重写正文");
+  }
+
+  const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
+  const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const longFormPlan = getLatestLongFormPlan(store, projectId);
+  const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
+  const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
+  const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
+  const plotStateContext = plotStateForChapterContext(
+    plotState,
+    foreshadowings,
+    taskCard.chapterNumber,
+    lastLedger
+  );
+  const targetWordCount = normalizeDraftTargetWordCount(
+    options?.targetWordCount ?? countDraftCharacters(draft.content)
+  );
+  const job = options?.existingJobId
+    ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
+    : createAiJob(store, {
+        userId: currentUser.id,
+        projectId,
+        type: "generate_chapter",
+        payload: {
+          draftId: draft.id,
+          taskCardId: taskCard.id,
+          chapterNumber: taskCard.chapterNumber,
+          targetWordCount,
+          regenerateOnlyContent: true
+        },
+        model: getActiveAiModel(store, "local-writing-chapter-generator", currentUser.id),
+        retryOfJobId: options?.retryOfJobId
+      });
+
+  if (!job) {
+    throw new Error("任务不存在");
+  }
+
+  if (!options?.existingJobId) {
+    await writeStore(store);
+    startAiJob(job);
+    await writeStore(store);
+  }
+
+  if (!hasConfiguredAiSettings(store, currentUser.id)) {
+    const message = "AI 未配置，无法重写章节正文";
+    failAiJob(job, message);
+    refundAiJobCredits(store, job, "章节正文重写失败返还");
+    await writeStore(store);
+    throw new Error(message);
+  }
+
+  let aiDraft: Awaited<ReturnType<typeof generateChapterDraftWithAi>>;
+
+  try {
+    aiDraft = await generateChapterDraftWithAi({
+      taskCard,
+      projectName: project.name,
+      projectDescription: project.description,
+      bible,
+      plotState: plotStateContext,
+      longFormPlan,
+      lastLedger,
+      previousDraftTail: getPreviousDraftTail(store, projectId, taskCard.chapterNumber),
+      characters,
+      foreshadowings,
+      targetWordCount
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "章节正文 AI 重写失败";
+    failAiJob(job, message);
+    refundAiJobCredits(store, job, "章节正文重写失败返还");
+    await writeStore(store);
+    throw new Error(message);
+  }
+
+  const content = prepareChapterDraftContentForSave(aiDraft.content, targetWordCount);
+  const actualCharacters = countDraftCharacters(content);
+
+  if (actualCharacters < minimumSavableDraftCharacters(targetWordCount)) {
+    const message = `正文重写结果偏短：当前 ${actualCharacters} 字，最低保存要求 ${minimumSavableDraftCharacters(targetWordCount)} 字。请降低目标字数或重新生成。`;
+    failAiJob(job, message, withAiBillingOutput(store, job, {
+      usedAi: true,
+      usedFallback: false,
+      failed: true,
+      draftId: draft.id,
+      chapterNumber: taskCard.chapterNumber,
+      targetWordCount,
+      actualCharacters
+    }, getAiTokenUsage(aiDraft)));
+    await writeStore(store);
+    throw new Error(message);
+  }
+
+  const timestamp = now();
+  const deletedReviewCount = store.reviewReports.filter((item) => item.draftId === draft.id).length;
+  const preservedLedgerCount = store.chapterLedgers.filter((item) => item.draftId === draft.id).length;
+
+  store.reviewReports = store.reviewReports.filter((item) => item.draftId !== draft.id);
+  draft.content = content;
+  draft.status = "draft";
+  draft.updatedAt = timestamp;
+  project.status = "writing";
+  project.updatedAt = timestamp;
+  finishAiJob(job, withAiBillingOutput(store, job, {
+    usedAi: true,
+    usedFallback: false,
+    draftId: draft.id,
+    chapterNumber: draft.chapterNumber,
+    targetWordCount,
+    actualCharacters,
+    regenerateOnlyContent: true,
+    preservedLedgerCount,
+    deletedReviewCount,
+    stateUpdated: false
+  }, getAiTokenUsage(aiDraft)));
+  await writeStore(store);
+
+  return {
+    draft,
+    preservedLedgerCount,
+    deletedReviewCount
+  };
+}
+
 export async function prepareChapterDraftStream(
   projectId: string,
   taskCardId?: string,
@@ -9667,6 +9814,52 @@ export async function enqueueChapterDraftJob(
   return job;
 }
 
+export async function enqueueRegenerateChapterDraftContentJob(
+  projectId: string,
+  draftId: string,
+  options?: { targetWordCount?: number; retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const draft = store.chapterDrafts.find((item) => item.id === draftId && item.projectId === projectId);
+
+  if (!draft) {
+    throw new Error("要重写的章节正文不存在");
+  }
+
+  const taskCard = store.writingTaskCards.find(
+    (item) => item.id === draft.taskCardId && item.projectId === projectId
+  );
+
+  if (!taskCard) {
+    throw new Error("章节任务卡不存在，无法只重写正文");
+  }
+
+  const targetWordCount = normalizeDraftTargetWordCount(
+    options?.targetWordCount ?? countDraftCharacters(draft.content)
+  );
+  const job = createAiJob(store, {
+    userId: currentUser.id,
+    projectId,
+    type: "generate_chapter",
+    payload: {
+      draftId: draft.id,
+      taskCardId: taskCard.id,
+      chapterNumber: taskCard.chapterNumber,
+      targetWordCount,
+      regenerateOnlyContent: true
+    },
+    model: getActiveAiModel(store, "local-writing-chapter-generator", currentUser.id),
+    retryOfJobId: options?.retryOfJobId
+  });
+
+  project.status = "writing";
+  project.updatedAt = now();
+  await writeStore(store);
+  return job;
+}
+
 export async function enqueueReviewChapterJob(
   projectId: string,
   draftId?: string,
@@ -9859,10 +10052,15 @@ export async function processAiJob(jobId: string) {
       }
 
       const payload = getJobInputRecord(job);
-      const draft = await generateChapterDraft(job.projectId, String(payload?.taskCardId ?? ""), {
-        existingJobId: job.id,
-        targetWordCount: Number(payload?.targetWordCount ?? 0) || undefined
-      });
+      const draft = payload?.regenerateOnlyContent
+        ? await regenerateChapterDraftContent(job.projectId, String(payload?.draftId ?? ""), {
+            existingJobId: job.id,
+            targetWordCount: Number(payload?.targetWordCount ?? 0) || undefined
+          })
+        : await generateChapterDraft(job.projectId, String(payload?.taskCardId ?? ""), {
+            existingJobId: job.id,
+            targetWordCount: Number(payload?.targetWordCount ?? 0) || undefined
+          });
       const latestStore = await readStore();
       const updatedJob = latestStore.aiJobs.find((item) => item.id === job.id) ?? job;
       return { job: updatedJob, projectId: job.projectId, result: draft };
@@ -10063,6 +10261,16 @@ export async function retryAiJob(jobId: string) {
     case "generate_chapter":
       if (!job.projectId) {
         throw new Error("该任务缺少项目归属，无法重试");
+      }
+      if (input?.regenerateOnlyContent) {
+        return {
+          projectId: job.projectId,
+          jobType: job.type,
+          job: await enqueueRegenerateChapterDraftContentJob(job.projectId, String(input?.draftId ?? ""), {
+            targetWordCount: Number(input?.targetWordCount ?? 0) || undefined,
+            retryOfJobId: job.id
+          })
+        };
       }
       return {
         projectId: job.projectId,

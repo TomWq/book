@@ -492,6 +492,15 @@ export default async function ProjectWritingPage({
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
+                    body={{ action: "regenerate_draft_content", draftId: activeDraft.id }}
+                    label="只重写正文"
+                    confirmMessage="确定只重写当前正文吗？会替换正文内容，保留任务卡和章节台账；旧审稿会清空，需要重新审稿。"
+                    pendingTitle={`正在重写第 ${activeDraft.chapterNumber} 章正文`}
+                    pendingDescription="正在按原任务卡重新生成正文，不删除章节台账和长期状态。"
+                    successMessage="正文已重写，台账已保留"
+                  />
+                  <ApiButton
+                    endpoint={`/api/projects/${projectId}/writing`}
                     body={{ action: "delete_task_card", taskCardId: activeDraft.taskCardId }}
                     label="删除本章并重新生成"
                     className="button danger"
@@ -614,6 +623,18 @@ export default async function ProjectWritingPage({
                           chapterNumber={chapter.draft.chapterNumber}
                           title={chapter.draft.title}
                           compact
+                        />
+                      ) : null}
+                      {chapter.draft ? (
+                        <ApiButton
+                          endpoint={`/api/projects/${projectId}/writing`}
+                          body={{ action: "regenerate_draft_content", draftId: chapter.draft.id }}
+                          label="只重写正文"
+                          className="button small-button"
+                          confirmMessage={`确定只重写第 ${chapter.chapterNumber} 章正文吗？会替换正文内容，保留任务卡和章节台账；旧审稿会清空，需要重新审稿。`}
+                          pendingTitle={`正在重写第 ${chapter.chapterNumber} 章正文`}
+                          pendingDescription="正在按原任务卡重新生成正文，不删除章节台账和长期状态。"
+                          successMessage="正文已重写，台账已保留"
                         />
                       ) : null}
                       <ApiButton

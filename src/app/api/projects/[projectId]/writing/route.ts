@@ -6,11 +6,13 @@ import {
   editDraftText,
   enqueueChapterDraftJob,
   enqueueEditSecondDraftJob,
+  enqueueRegenerateChapterDraftContentJob,
   enqueueReviewChapterJob,
   enqueueWritingTaskCardJob,
   generateChapterDraft,
   generateLongFormPlan,
   generateWritingTaskCard,
+  regenerateChapterDraftContent,
   getProjectWritingState,
   reviewChapterDraft
 } from "@/lib/projects";
@@ -91,6 +93,22 @@ export async function POST(
         targetWordCount
       });
       return Response.json({ draft }, { status: 201 });
+    }
+
+    if (action === "regenerate_draft_content") {
+      const targetWordCount = Number(body.targetWordCount ?? 0) || undefined;
+
+      if (body.defer === true) {
+        const job = await enqueueRegenerateChapterDraftContentJob(projectId, String(body.draftId ?? ""), {
+          targetWordCount
+        });
+        return Response.json({ job }, { status: 202 });
+      }
+
+      const result = await regenerateChapterDraftContent(projectId, String(body.draftId ?? ""), {
+        targetWordCount
+      });
+      return Response.json(result, { status: 201 });
     }
 
     if (action === "delete_task_card") {

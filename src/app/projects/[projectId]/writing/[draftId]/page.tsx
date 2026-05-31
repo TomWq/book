@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ApiButton } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
 import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { Panel } from "@/components/panel";
@@ -95,6 +96,15 @@ export default async function ChapterDraftReaderPage({
                 chapterNumber={draft.chapterNumber}
                 title={draft.title}
                 compact
+              />
+              <ApiButton
+                endpoint={`/api/projects/${projectId}/writing`}
+                body={{ action: "regenerate_draft_content", draftId: draft.id }}
+                label="只重写正文"
+                confirmMessage="确定只重写当前正文吗？会替换正文内容，保留任务卡和章节台账；旧审稿会清空，需要重新审稿。"
+                pendingTitle={`正在重写第 ${draft.chapterNumber} 章正文`}
+                pendingDescription="正在按原任务卡重新生成正文，不删除章节台账和长期状态。"
+                successMessage="正文已重写，台账已保留"
               />
             </div>
             <article className="draft-reader">
