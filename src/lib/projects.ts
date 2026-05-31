@@ -606,10 +606,6 @@ export async function activateSubscriptionLicense(
   return toAuthUser(user);
 }
 
-function webLicenseMachineHash(codeHash: string) {
-  return normalizeMachineHash(`web:${codeHash}`);
-}
-
 function webLicenseEmail(license: { customerContact?: string; customerId: string }) {
   const contact = normalizeLicenseText(license.customerContact).toLowerCase();
 
@@ -622,13 +618,17 @@ function webLicenseEmail(license: { customerContact?: string; customerId: string
 
 export async function activateWebLicenseSession(input: LicenseActivationInput) {
   const normalizedCode = normalizeActivationCode(input.activationCode);
+  const machineHash = normalizeMachineHash(input.machineHash);
 
   if (!normalizedCode) {
     throw new Error("请填写授权码");
   }
 
+  if (!machineHash) {
+    throw new Error("缺少网页设备标识，请刷新后重试");
+  }
+
   const codeHash = hashActivationCode(normalizedCode);
-  const machineHash = webLicenseMachineHash(codeHash);
   const license = await activateLicenseWithCenter({
     activationCode: normalizedCode,
     machineHash,

@@ -64,10 +64,12 @@ export async function proxy(request: NextRequest) {
       pathname === "/activate" ||
       pathname === "/download" ||
       pathname === "/downloads" ||
+      pathname === "/manual" ||
       pathname === "/api/license/activate" ||
       pathname === "/api/license/restore" ||
       pathname === "/api/license/status" ||
       pathname === "/api/license/verify" ||
+      pathname === "/api/manual" ||
       pathname === "/api/app/update/manifest" ||
       pathname === "/api/app/update/check" ||
       pathname.startsWith("/api/app/tauri-update/") ||
@@ -109,8 +111,10 @@ export async function proxy(request: NextRequest) {
     "/activate",
     "/download",
     "/downloads",
+    "/manual",
     "/legal",
     "/api/health",
+    "/api/manual",
     "/api/app/update/manifest",
     "/api/app/update/check",
     "/api/download",

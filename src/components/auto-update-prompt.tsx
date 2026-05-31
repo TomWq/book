@@ -413,9 +413,9 @@ export function AutoUpdatePrompt() {
                 <span>更新说明</span>
                 {result.announcement ? <p>{result.announcement}</p> : null}
                 {result.notes ? <p>{result.notes}</p> : null}
-                <button type="button" onClick={() => void openDownloadCenter()}>
+                {/* <button type="button" onClick={() => void openDownloadCenter()}>
                   查看更新详情
-                </button>
+                </button> */}
               </div>
               <img className="update-prompt-rocket" src="/update/rocket-launch.webp" alt="" aria-hidden="true" />
             </div>

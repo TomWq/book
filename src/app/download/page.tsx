@@ -52,7 +52,7 @@ function formatDate(value: string) {
 
 export default function DownloadPage() {
   const manifest = getLocalUpdateManifest();
-  const manualHtmlUrl = "/manual/AI网文写作助手使用手册.html";
+  const manualHtmlUrl = "/manual";
   const manualPdfUrl = "/manual/AI网文写作助手使用手册.pdf";
   const options: DownloadOption[] = [
     {
