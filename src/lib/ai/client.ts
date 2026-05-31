@@ -207,8 +207,20 @@ function parseJsonContent<T>(content: string): T {
   try {
     return parseJsonCandidate<T>(candidate);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "AI 响应不是有效 JSON";
-    throw new Error(`AI 响应不是有效 JSON：${message}`);
+    const detail = error instanceof Error ? error.message : "";
+
+    if (detail) {
+      console.warn("[ai-json] JSON 解析失败：", detail);
+    }
+
+    const friendlyMessage =
+      /unterminated string|unexpected end of json input|unexpected token|end of json input/i.test(detail)
+        ? "AI 返回的 JSON 不完整，可能是内容被截断了。请重试。"
+        : /control character|bad escaped character/i.test(detail)
+          ? "AI 返回的 JSON 格式不正确，可能包含了未转义的特殊字符。请重试。"
+          : "AI 返回的内容不是有效 JSON，请重试。";
+
+    throw new Error(friendlyMessage);
   }
 }
 

@@ -1172,7 +1172,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
       }
     ],
     temperature: 0.25,
-    maxTokens: 2200
+    maxTokens: 4200
   });
 
   return attachAiTokenUsage({
