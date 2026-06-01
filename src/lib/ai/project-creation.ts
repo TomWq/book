@@ -43,6 +43,8 @@ export type ProjectCreationAssistResult = {
   description: string;
 };
 
+const maxProjectCharacters = 20;
+
 function list(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => String(item).trim()).filter(Boolean)
@@ -58,14 +60,215 @@ function cleanTitleText(value: string) {
     .trim();
 }
 
+function titleFingerprint(value: string) {
+  return cleanTitleText(value)
+    .replace(/[《》“”"‘'「」『』【】[\]（）()：:，,。.!！?？、\s_-]+/g, "")
+    .toLowerCase();
+}
+
+function titleBigrams(value: string) {
+  const chars = Array.from(titleFingerprint(value));
+
+  if (chars.length <= 1) {
+    return chars;
+  }
+
+  return chars.slice(0, -1).map((char, index) => `${char}${chars[index + 1]}`);
+}
+
+function titleSimilarity(a: string, b: string) {
+  const left = titleBigrams(a);
+  const right = titleBigrams(b);
+
+  if (left.length === 0 || right.length === 0) {
+    return 0;
+  }
+
+  const rightCounts = new Map<string, number>();
+  right.forEach((item) => rightCounts.set(item, (rightCounts.get(item) ?? 0) + 1));
+  const overlap = left.reduce((sum, item) => {
+    const count = rightCounts.get(item) ?? 0;
+
+    if (count <= 0) {
+      return sum;
+    }
+
+    rightCounts.set(item, count - 1);
+    return sum + 1;
+  }, 0);
+
+  return (2 * overlap) / (left.length + right.length);
+}
+
+function isTitleTooClose(candidate: string, avoidTitle: string) {
+  const candidateKey = titleFingerprint(candidate);
+  const avoidKey = titleFingerprint(avoidTitle);
+
+  if (!candidateKey || !avoidKey) {
+    return false;
+  }
+
+  if (candidateKey === avoidKey) {
+    return true;
+  }
+
+  if ((candidateKey.length >= 4 || avoidKey.length >= 4) && (candidateKey.includes(avoidKey) || avoidKey.includes(candidateKey))) {
+    return true;
+  }
+
+  return titleSimilarity(candidateKey, avoidKey) >= 0.72;
+}
+
+function uniqueTitles(titles: string[], avoidTitles: string[]) {
+  return titles.reduce<string[]>((result, title) => {
+    const cleanTitle = cleanTitleText(title);
+
+    if (!cleanTitle) {
+      return result;
+    }
+
+    const isRepeated = result.some((item) => isTitleTooClose(cleanTitle, item));
+    const isAvoided = avoidTitles.some((item) => isTitleTooClose(cleanTitle, item));
+
+    if (!isRepeated && !isAvoided) {
+      result.push(cleanTitle);
+    }
+
+    return result;
+  }, []);
+}
+
 function titleCharacterLength(value: string) {
   return Array.from(value.replace(/\s/g, "")).length;
 }
 
-function normalizeResult(value: Partial<ProjectCreationAssistResult>) {
+type TitleQualityOptions = {
+  style: TitleNamingStyle;
+  titleConcept?: string;
+  directLabelTerms?: string[];
+  strict?: boolean;
+};
+
+function titleQualityScore(title: string, options: TitleQualityOptions) {
+  const cleanTitle = cleanTitleText(title);
+  const compactTitle = cleanTitle.replace(/\s+/g, "");
+  const compactFingerprint = titleFingerprint(cleanTitle);
+  const length = titleCharacterLength(cleanTitle);
+  const titleConceptFingerprint = titleFingerprint(options.titleConcept ?? "");
+  const hardRejectPatterns = [
+    /我的?[^，,：:]{0,10}(修为|工资|月薪|境界|系统|金手指)/,
+    /(使我|让我|令我)/,
+    /我[^，,：:]{0,8}(成仙|暴涨|起飞|渡劫|逆袭|无敌)/,
+    /(工资条上写着|上写着|决定境界|决定修为|挂钩)/,
+    /(指南|手册|攻略|速成)$/,
+    /[：:][^：:]*[、，,][^：:]*[、，,]/,
+    /^(打工|加班).{0,6}(使|让|令)?我/
+  ];
+
+  if (!compactTitle || !compactFingerprint) {
+    return -100;
+  }
+
+  if (options.style === "qidian" && (length < 2 || length > 12)) {
+    return -90;
+  }
+
+  if (options.style === "fanqie" && (length < 4 || length > 24)) {
+    return -80;
+  }
+
+  if (hardRejectPatterns.some((pattern) => pattern.test(compactTitle))) {
+    return -70;
+  }
+
+  let score = 100;
+
+  if (/[，,。.!！?？；;]/.test(cleanTitle)) {
+    score -= 18;
+  }
+
+  if (/[：:]/.test(cleanTitle)) {
+    score -= 8;
+  }
+
+  if (/(^我|我的|我靠|我在|我把|我被)/.test(compactTitle)) {
+    score -= 32;
+  }
+
+  if (/(打工使我|加班使我|月薪百万|工资条|暴涨|杀疯|起飞|震惊|竟然|居然)/.test(compactTitle)) {
+    score -= 24;
+  }
+
+  if (/(打工人|打工|加班|工资|月薪)/.test(compactTitle)) {
+    score -= 10;
+  }
+
+  if (/(了|啦|吗|吧|啊)$/.test(compactTitle)) {
+    score -= 14;
+  }
+
+  if (titleConceptFingerprint.length >= 8 && titleConceptFingerprint.includes(compactFingerprint)) {
+    score -= 26;
+  }
+
+  const directLabelHits = (options.directLabelTerms ?? [])
+    .map((item) => titleFingerprint(item))
+    .filter((item) => item.length >= 2 && compactFingerprint.includes(item)).length;
+
+  if (directLabelHits >= 2) {
+    score -= 18;
+  } else if (directLabelHits === 1 && compactFingerprint.length <= 6) {
+    score -= 12;
+  }
+
+  if (options.style === "qidian") {
+    if (length >= 3 && length <= 8) {
+      score += 8;
+    }
+
+    if (/[录传纪书令图谱]/.test(compactTitle)) {
+      score += 4;
+    }
+  } else {
+    if (length >= 8 && length <= 18) {
+      score += 7;
+    }
+
+    if (/(开局|觉醒|绑定|破境|反派|天命|长生|通天|万界|幕后|被迫|全宗|全城)/.test(compactTitle)) {
+      score += 4;
+    }
+  }
+
+  return score;
+}
+
+function normalizeTitles(titles: string[], avoidTitles: string[], qualityOptions?: TitleQualityOptions) {
+  const uniqueCandidates = uniqueTitles(titles, avoidTitles);
+
+  if (!qualityOptions) {
+    return uniqueCandidates.slice(0, 8);
+  }
+
+  const scoredTitles = uniqueCandidates
+    .map((title, index) => ({
+      title,
+      index,
+      score: titleQualityScore(title, qualityOptions)
+    }))
+    .filter((item) => !qualityOptions.strict || item.score >= 62)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+
+  return scoredTitles.map((item) => item.title).slice(0, 8);
+}
+
+function normalizeResult(
+  value: Partial<ProjectCreationAssistResult>,
+  avoidTitles: string[] = [],
+  titleQualityOptions?: TitleQualityOptions
+) {
   return attachAiTokenUsage({
-    titles: list(value.titles).map(cleanTitleText).filter(Boolean).slice(0, 8),
-    protagonistNames: list(value.protagonistNames).slice(0, 8),
+    titles: normalizeTitles(list(value.titles), avoidTitles, titleQualityOptions),
+    protagonistNames: list(value.protagonistNames).slice(0, maxProjectCharacters),
     protagonistCharacters: normalizeCharacters(value.protagonistCharacters),
     description: String(value.description ?? "").trim()
   }, getAiTokenUsage(value));
@@ -98,7 +301,7 @@ function normalizeCharacters(value: unknown): ProjectCreationCharacterInput[] {
         name
       }];
     })
-    .slice(0, 8);
+    .slice(0, maxProjectCharacters);
 }
 
 function titleCraftRules(titleNamingStyle: TitleNamingStyle) {
@@ -110,7 +313,10 @@ function titleCraftRules(titleNamingStyle: TitleNamingStyle) {
     "关系类标签只能转成关系张力、阵营牵引或剧情矛盾，不要写成低质占有式卖点。",
     "性格类标签不要直接写成标签词，要体现为行动方式、选择代价、布局方式或剧情结果。",
     "高频类型词可以使用，但不能成为标题唯一卖点；每个标题都要有一个具体新信息。",
-    "同一批 6 个标题必须走不同卖点方向，不要围绕同一个名词反复变体。"
+    "同一批 6 个标题必须走不同卖点方向，不要围绕同一个名词反复变体。",
+    "严禁把用户构思压缩成低质梗句、口号句、吐槽句或关键词拼接句。",
+    "严禁这类书名质感：打工使我渡劫、我的修为和工资挂钩、月薪百万，我成仙了、工资条上写着：筑基、金丹、元婴、打工人修仙指南、加班使我修为暴涨。",
+    "遇到“打工/工资/月薪/修为/境界”这类直白设定时，要转成更有书架感的概念、制度、命运或冲突，不要直接写成段子。"
   ];
 
   return titleNamingStyle === "qidian"
@@ -169,7 +375,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       role: normalizeCharacterRole(item.role, index === 1 ? "女主" : "男主"),
       name: String(item.name ?? "").trim()
     }))
-    .slice(0, 8);
+    .slice(0, maxProjectCharacters);
   const requestedCharacterSlots = characterSlots.length > 0
     ? characterSlots
     : [
@@ -188,8 +394,8 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     titles: {
       task:
         titleNamingStyle === "qidian"
-          ? "只生成 6 个中文网文新书名。风格偏起点：更短、更传统、更有类型辨识度和意象感，优先 2-8 个中文字符，最多 12 字。可以使用职业身份、世界观概念、核心意象、命运主题来命名，但严禁照搬任何现有作品名、角色名、专有名词。避免番茄式长句、第一人称设问、逗号标题、强行解释剧情的标题。"
-          : "只生成 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、反差动作、爽点后果或追读悬念。不要把构思原句压缩成标题，不要照搬任何现有作品名、角色名、专有名词。标题可以比起点更直给，但不要写成一句简介；建议 8-20 个中文字符，最多 24 字。",
+          ? "先在内部生成至少 12 个方向并质检，最后只返回 6 个中文网文新书名。风格偏起点：更短、更传统、更有类型辨识度和意象感，优先 2-8 个中文字符，最多 12 字。可以使用职业身份、世界观概念、核心意象、命运主题来命名，但严禁照搬任何现有作品名、角色名、专有名词。避免番茄式长句、第一人称设问、逗号标题、强行解释剧情的标题。"
+          : "先在内部生成至少 12 个方向并质检，最后只返回 6 个中文网文新书名。风格偏番茄小说：标题本身要直接带出人物处境、反差动作、爽点后果或追读悬念。不要把构思原句压缩成标题，不要照搬任何现有作品名、角色名、专有名词。标题可以比起点更直给，但不要写成一句简介、吐槽句或短视频段子；建议 8-20 个中文字符，最多 24 字。",
       outputSchema: {
         titles: "string[]"
       },
@@ -262,7 +468,15 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     "所有输出必须服务当前题材和标签，不要生成泛泛模板话。"
   ].filter((item): item is string => Boolean(item));
 
-  const buildMessages = (compact = false) => [
+  const mergedAvoidTitles = (extraAvoidTitles: string[] = []) =>
+    Array.from(new Set([...(input.avoidTitles ?? []), ...extraAvoidTitles].map(cleanTitleText).filter(Boolean))).slice(0, 100);
+  const titleQualityOptions: TitleQualityOptions = {
+    style: titleNamingStyle,
+    titleConcept: input.titleConcept,
+    directLabelTerms,
+    strict: true
+  };
+  const buildMessages = (compact = false, extraAvoidTitles: string[] = []) => [
       {
         role: "system" as const,
         content:
@@ -291,7 +505,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               titleNamingStyle,
               tagTaxonomyStyle,
               descriptionWritingStyle,
-              avoidTitles: input.avoidTitles ?? [],
+              avoidTitles: mergedAvoidTitles(extraAvoidTitles),
               directLabelTerms
             },
             styleRules,
@@ -299,10 +513,14 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
             compactRetryRules: compact
               ? [
                   "只返回 titles 数组，不要返回其他字段。",
-                  "每个标题控制在 8-18 个中文字符，绝对不要超过 24 个中文字符。",
+                  titleNamingStyle === "qidian"
+                    ? "每个标题控制在 2-10 个中文字符，绝对不要超过 12 个中文字符。"
+                    : "每个标题控制在 8-18 个中文字符，绝对不要超过 24 个中文字符。",
                   "不要复述 titleConcept 的原句，不要使用现成作品或角色名。",
+                  "必须避开 avoidTitles 和本轮已拒绝的重复标题，不要只换一个字、换词序或换同义词。",
                   "优先生成有人物身份反差、具体动作、第一章危机和追读钩子的标题。",
-                  "不要把 genre 和 tags 直接拼成标题。"
+                  "不要把 genre 和 tags 直接拼成标题。",
+                  "不要使用“我的”“使我”“让我”“工资条上写着”“决定境界”“指南”“暴涨”“月薪百万，我成仙了”这类低质句式。"
                 ]
               : [],
             outputSchema: currentTask.outputSchema
@@ -320,21 +538,29 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       maxTokens: currentTask.maxTokens
     });
 
-    const normalized = normalizeResult(response);
+    const normalized = normalizeResult(
+      response,
+      mergedAvoidTitles(),
+      input.action === "titles" ? titleQualityOptions : undefined
+    );
+    const generatedTitles = list(response.titles).map(cleanTitleText).filter(Boolean);
+    const rejectedTitles = input.action === "titles"
+      ? generatedTitles.filter((title) => !normalized.titles.some((item) => titleFingerprint(item) === titleFingerprint(title)))
+      : [];
 
     if (input.action === "titles" && titleNamingStyle === "fanqie") {
       const acceptableTitles = normalized.titles.filter((title) => titleCharacterLength(title) <= 24);
       const hasEnoughShortTitles = acceptableTitles.length >= 3;
       const looksTooLong = normalized.titles.length > 0 && normalized.titles.every((title) => titleCharacterLength(title) > 24);
 
-      if (!hasEnoughShortTitles || looksTooLong) {
+      if (!hasEnoughShortTitles || looksTooLong || normalized.titles.length < 3) {
         const compactResponse = await requestAiJson<Partial<ProjectCreationAssistResult>>({
-          messages: buildMessages(true),
+          messages: buildMessages(true, rejectedTitles),
           temperature: 0.65,
           maxTokens: 900
         });
 
-        const compactNormalized = normalizeResult(compactResponse);
+        const compactNormalized = normalizeResult(compactResponse, mergedAvoidTitles(rejectedTitles), titleQualityOptions);
         const compactShortTitles = compactNormalized.titles.filter((title) => titleCharacterLength(title) <= 24);
 
         return attachAiTokenUsage({
@@ -349,6 +575,16 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       }, getAiTokenUsage(response));
     }
 
+    if (input.action === "titles" && normalized.titles.length < 3) {
+      const retryResponse = await requestAiJson<Partial<ProjectCreationAssistResult>>({
+        messages: buildMessages(true, rejectedTitles),
+        temperature: 0.7,
+        maxTokens: 900
+      });
+
+      return normalizeResult(retryResponse, mergedAvoidTitles(rejectedTitles), titleQualityOptions);
+    }
+
     return normalized;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -360,7 +596,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
         maxTokens: 900
       });
 
-      return normalizeResult(response);
+      return normalizeResult(response, mergedAvoidTitles(), titleQualityOptions);
     }
 
     throw error;

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { AiCoverGeneratorDialog } from "@/components/ai-cover-generator-dialog";
 import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
 const fanqieTagSections = [
@@ -23,6 +24,7 @@ const creationSteps = [
 ] as const;
 
 const maxSelectedTagsPerGroup = 2;
+const maxProjectCharacters = 20;
 const draftStorageKey = "ai-novel-workbench:new-writing-project-draft:v1";
 
 type TitleNamingStyle = "fanqie" | "qidian";
@@ -193,7 +195,7 @@ function normalizeCharacters(rawCharacters: unknown, legacyNames: string[]): Cha
         };
       })
       .filter((item): item is CharacterDraft => Boolean(item))
-      .slice(0, 8);
+      .slice(0, maxProjectCharacters);
 
     if (characters.length > 0) {
       return characters;
@@ -274,6 +276,7 @@ export function ProjectForm() {
   const [genre, setGenre] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
+  const [isAiCoverDialogOpen, setIsAiCoverDialogOpen] = useState(false);
   const [activeTagSection, setActiveTagSection] = useState<TagSectionKey>("mainCategories");
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [protagonistSuggestions, setProtagonistSuggestions] = useState<CharacterNameSuggestion[]>([]);
@@ -541,7 +544,7 @@ export function ProjectForm() {
   }
 
   function addCharacter(role: CharacterRole) {
-    setCharacters((current) => [...current, createCharacterDraft(role)].slice(0, 8));
+    setCharacters((current) => [...current, createCharacterDraft(role)].slice(0, maxProjectCharacters));
   }
 
   function removeCharacter(id: string) {
@@ -555,7 +558,7 @@ export function ProjectForm() {
         name: character.name.trim()
       }))
       .filter((character) => character.name)
-      .slice(0, 8);
+      .slice(0, maxProjectCharacters);
   }
 
   function getCurrentContext() {
@@ -638,7 +641,7 @@ export function ProjectForm() {
           role: characters[index]?.role ?? (index === 1 ? "女主" : "男主"),
           name: item
         }));
-        const suggestions = (suggestedCharacters.length > 0 ? suggestedCharacters : fallbackSuggestions).slice(0, 8);
+        const suggestions = (suggestedCharacters.length > 0 ? suggestedCharacters : fallbackSuggestions).slice(0, maxProjectCharacters);
 
         setProtagonistSuggestions(suggestions);
         if (suggestions.length > 0) {
@@ -665,7 +668,7 @@ export function ProjectForm() {
               };
             });
 
-            return next.slice(0, 8);
+            return next.slice(0, maxProjectCharacters);
           });
         }
       }
@@ -768,6 +771,9 @@ export function ProjectForm() {
             上传封面
             <input type="file" accept="image/*" onChange={handleCoverUpload} />
           </label>
+          <button className="button" type="button" onClick={() => setIsAiCoverDialogOpen(true)}>
+            AI 生成封面
+          </button>
           {coverImageUrl ? (
             <button className="button" type="button" onClick={clearCoverImage}>
               恢复默认
@@ -782,6 +788,14 @@ export function ProjectForm() {
           {selectedTagText ? <span className="chip">{selectedTagText}</span> : <span className="chip">未选择标签</span>}
         </div>
       </aside>
+
+      <AiCoverGeneratorDialog
+        open={isAiCoverDialogOpen}
+        title={name}
+        authorName={authorName}
+        onClose={() => setIsAiCoverDialogOpen(false)}
+        onGenerated={(nextCoverImageUrl) => setCoverImageUrl(nextCoverImageUrl)}
+      />
 
       <div className="book-create-main">
         <div className="book-create-section" id="book-step-identity">
@@ -1179,7 +1193,7 @@ export function ProjectForm() {
             </div>
             <div className="character-add-actions" aria-label="添加人物">
               {characterRoleOptions.map((role) => (
-                <button key={role} type="button" onClick={() => addCharacter(role)} disabled={characters.length >= 8}>
+                <button key={role} type="button" onClick={() => addCharacter(role)} disabled={characters.length >= maxProjectCharacters}>
                   + {role}
                 </button>
               ))}

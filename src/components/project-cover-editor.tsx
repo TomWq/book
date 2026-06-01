@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
+import { AiCoverGeneratorDialog } from "@/components/ai-cover-generator-dialog";
 
 type ProjectCoverEditorProps = {
   projectId: string;
@@ -88,11 +90,31 @@ export function ProjectCoverEditor({
   const [previewUrl, setPreviewUrl] = useState(() => String(coverImageUrl ?? "").trim());
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [isMethodDialogOpen, setIsMethodDialogOpen] = useState(false);
+  const [isAiCoverDialogOpen, setIsAiCoverDialogOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     setPreviewUrl(String(coverImageUrl ?? "").trim());
     setError("");
   }, [coverImageUrl]);
+
+  useEffect(() => {
+    if (!isMethodDialogOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMethodDialogOpen]);
 
   const storedCoverUrl = String(coverImageUrl ?? "").trim();
   const effectiveCoverUrl = getRenderableCoverUrl(previewUrl);
@@ -151,6 +173,11 @@ export function ProjectCoverEditor({
     await persistCover("");
   }
 
+  async function handleGeneratedCover(nextCoverImageUrl: string) {
+    setPreviewUrl(nextCoverImageUrl);
+    await persistCover(nextCoverImageUrl);
+  }
+
   return (
     <div className="project-cover-editor">
       <div className={`book-cover ${hasRenderableCover ? "has-custom-cover" : ""}`}>
@@ -168,7 +195,7 @@ export function ProjectCoverEditor({
         <button
           className="button cover-upload-button"
           type="button"
-          onClick={() => inputRef.current?.click()}
+          onClick={() => setIsMethodDialogOpen(true)}
           disabled={isSaving}
         >
           {isSaving ? "保存中..." : hasStoredCover ? "更换封面" : "上传封面"}
@@ -185,6 +212,66 @@ export function ProjectCoverEditor({
       </div>
 
       {error ? <div className="field-hint project-cover-error">{error}</div> : null}
+
+      {isMethodDialogOpen && mounted
+        ? createPortal(
+            <div className="tag-dialog-backdrop cover-method-backdrop" role="presentation" onMouseDown={() => setIsMethodDialogOpen(false)}>
+              <div
+                className="cover-method-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="cover-method-title"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="tag-dialog-head">
+                  <h3 id="cover-method-title">更换封面</h3>
+                  <button className="tag-dialog-close" type="button" onClick={() => setIsMethodDialogOpen(false)} aria-label="关闭更换封面">
+                    ×
+                  </button>
+                </div>
+                <div className="cover-method-options">
+                  <button
+                    className="taxonomy-card taxonomy-card-main"
+                    type="button"
+                    onClick={() => {
+                      setIsMethodDialogOpen(false);
+                      inputRef.current?.click();
+                    }}
+                  >
+                    <span className="taxonomy-card-icon" aria-hidden="true">传</span>
+                    <span>
+                      <strong>本地上传</strong>
+                      <small>从电脑选择已有封面图片。</small>
+                    </span>
+                  </button>
+                  <button
+                    className="taxonomy-card taxonomy-card-main"
+                    type="button"
+                    onClick={() => {
+                      setIsMethodDialogOpen(false);
+                      setIsAiCoverDialogOpen(true);
+                    }}
+                  >
+                    <span className="taxonomy-card-icon alt" aria-hidden="true">AI</span>
+                    <span>
+                      <strong>AI 生成</strong>
+                      <small>按当前 Key 的后台次数限制，生成成功后自动替换当前封面。</small>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      <AiCoverGeneratorDialog
+        open={isAiCoverDialogOpen}
+        title={title}
+        authorName={subtitle === "项目封面" ? "" : subtitle}
+        onClose={() => setIsAiCoverDialogOpen(false)}
+        onGenerated={handleGeneratedCover}
+      />
     </div>
   );
 }

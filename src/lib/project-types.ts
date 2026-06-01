@@ -158,6 +158,28 @@ export type StoredAiSettings = {
   updatedAt?: string;
 };
 
+export type StoredCoverImageSettings = {
+  id?: string;
+  userId?: string;
+  providerName: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  timeoutMs: number;
+  dailyLimit?: number;
+  updatedAt?: string;
+};
+
+export type StoredCoverImageUsage = {
+  id: string;
+  userId: string;
+  dateKey: string;
+  keyHash?: string;
+  count: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type StoredTemplate = {
   id: string;
   ownerUserId?: string;
@@ -681,6 +703,8 @@ export type AppStore = {
   licenseCodes: StoredLicenseCode[];
   licenseActivationLogs: StoredLicenseActivationLog[];
   aiSettings?: StoredAiSettings | StoredAiSettings[];
+  coverImageSettings?: StoredCoverImageSettings | StoredCoverImageSettings[];
+  coverImageUsages?: StoredCoverImageUsage[];
 };
 
 export type ProjectWithCounts = StoredProject & {

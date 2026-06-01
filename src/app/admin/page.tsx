@@ -2,12 +2,13 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
 import { CopyButton } from "@/components/copy-button";
+import { CoverImageSettingsForm } from "@/components/cover-image-settings-form";
 import { LicenseCodeGenerator } from "@/components/license-code-generator";
 import { Panel } from "@/components/panel";
 import { ReleaseSettingsForm } from "@/components/release-settings-form";
 import { getLocalUpdateManifest, type AppUpdateFile } from "@/lib/app-update";
 import { isDesktopRuntime } from "@/lib/app-runtime";
-import { getAdminLicenseCenter } from "@/lib/projects";
+import { getAdminCoverImageSettings, getAdminLicenseCenter } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -206,12 +207,14 @@ export default async function AdminPage({
   const requestedLogsPage = numberParam(query.logsPage);
 
   let licenseCenter;
+  let coverImageSettings;
 
   try {
     licenseCenter = await getAdminLicenseCenter({
       recentLogLimit: RECENT_LOG_PAGE_SIZE,
       recentLogOffset: (requestedLogsPage - 1) * RECENT_LOG_PAGE_SIZE
     });
+    coverImageSettings = await getAdminCoverImageSettings();
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
 
@@ -309,6 +312,10 @@ export default async function AdminPage({
             )}
           </div>
         </div>
+      </Panel>
+
+      <Panel title="AI 封面生图" description="后台统一配置封面生成服务。普通客户端只会读取这里的配置，不会在前台填写 Key。">
+        <CoverImageSettingsForm settings={coverImageSettings} />
       </Panel>
 
       <Panel title="批量生成授权码" description="当前为单设备授权。生成后可在授权码列表继续复制，旧版只保存哈希的授权码无法还原完整内容。">

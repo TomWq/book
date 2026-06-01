@@ -2,6 +2,7 @@ import { assistProjectCreation } from "@/lib/projects";
 import type { ProjectCreationCharacterInput, ProjectCreationCharacterRole } from "@/lib/ai/project-creation";
 
 export const runtime = "nodejs";
+const maxProjectCharacters = 20;
 
 function list(value: unknown) {
   return Array.isArray(value)
@@ -37,7 +38,7 @@ function characterList(value: unknown): ProjectCreationCharacterInput[] {
         name: String(raw.name ?? "").trim()
       }];
     })
-    .slice(0, 8);
+    .slice(0, maxProjectCharacters);
 }
 
 function readWorkLengthType(value: unknown) {

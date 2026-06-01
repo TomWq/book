@@ -478,6 +478,28 @@ function ensureSqliteSchema() {
       "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS "CoverImageSetting" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "userId" TEXT,
+      "providerName" TEXT NOT NULL,
+      "baseUrl" TEXT NOT NULL,
+      "apiKey" TEXT NOT NULL,
+      "model" TEXT NOT NULL,
+      "timeoutMs" INTEGER NOT NULL,
+      "dailyLimit" INTEGER,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS "CoverImageUsage" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "userId" TEXT NOT NULL,
+      "dateKey" TEXT NOT NULL,
+      "keyHash" TEXT,
+      "count" INTEGER NOT NULL,
+      "createdAt" DATETIME NOT NULL,
+      "updatedAt" DATETIME NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS "User" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "email" TEXT NOT NULL UNIQUE,
@@ -596,6 +618,8 @@ function ensureSqliteSchema() {
     'ALTER TABLE "AiSetting" ADD COLUMN "profileName" TEXT',
     'ALTER TABLE "AiSetting" ADD COLUMN "models" JSON',
     'ALTER TABLE "AiSetting" ADD COLUMN "active" INTEGER',
+    'ALTER TABLE "CoverImageSetting" ADD COLUMN "dailyLimit" INTEGER',
+    'ALTER TABLE "CoverImageUsage" ADD COLUMN "keyHash" TEXT',
     'ALTER TABLE "PlotState" ADD COLUMN "currentMap" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "shortTermGoal" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "currentEnemy" TEXT NOT NULL DEFAULT \'\'',
@@ -713,6 +737,8 @@ function syncCoreTables(store: unknown) {
   const licenseActivationLogs = asRecordArray(store, "licenseActivationLogs");
   const inspirations = asRecordArray(store, "inspirations");
   const aiSettings = asEntityRecordArray(store, "aiSettings");
+  const coverImageSettings = asEntityRecordArray(store, "coverImageSettings");
+  const coverImageUsages = asRecordArray(store, "coverImageUsages");
   const projectIds = new Set(projects.map((project) => text(project.id)));
   const storyAnalysisIds = new Set(storyAnalyses.map((analysis) => text(analysis.id)));
 
@@ -739,6 +765,8 @@ function syncCoreTables(store: unknown) {
     db.prepare('DELETE FROM "AssistantMessage"').run();
     db.prepare('DELETE FROM "AssistantThread"').run();
     db.prepare('DELETE FROM "Project"').run();
+    db.prepare('DELETE FROM "CoverImageUsage"').run();
+    db.prepare('DELETE FROM "CoverImageSetting"').run();
     db.prepare('DELETE FROM "AiSetting"').run();
     db.prepare('DELETE FROM "CreditTransaction"').run();
     db.prepare('DELETE FROM "LicenseActivationLog"').run();
@@ -1402,6 +1430,48 @@ function syncCoreTables(store: unknown) {
       });
     });
 
+    const insertCoverImageSetting = db.prepare(`
+        INSERT INTO "CoverImageSetting" (
+          "id", "userId", "providerName", "baseUrl", "apiKey", "model", "timeoutMs", "dailyLimit", "updatedAt"
+        ) VALUES (
+          @id, @userId, @providerName, @baseUrl, @apiKey, @model, @timeoutMs, @dailyLimit, @updatedAt
+        )
+      `);
+
+    coverImageSettings.forEach((settings, index) => {
+      insertCoverImageSetting.run({
+        id: text(settings.id) || text(settings.userId) || `${DEFAULT_STATE_ID}:cover-image:${index}`,
+        userId: nullableText(settings.userId),
+        providerName: text(settings.providerName),
+        baseUrl: text(settings.baseUrl),
+        apiKey: text(settings.apiKey),
+        model: text(settings.model),
+        timeoutMs: integer(settings.timeoutMs),
+        dailyLimit: settings.dailyLimit == null ? null : integer(settings.dailyLimit),
+        updatedAt: dateText(settings.updatedAt)
+      });
+    });
+
+    const insertCoverImageUsage = db.prepare(`
+      INSERT INTO "CoverImageUsage" (
+        "id", "userId", "dateKey", "keyHash", "count", "createdAt", "updatedAt"
+      ) VALUES (
+        @id, @userId, @dateKey, @keyHash, @count, @createdAt, @updatedAt
+      )
+    `);
+
+    coverImageUsages.forEach((usage) => {
+      insertCoverImageUsage.run({
+        id: text(usage.id),
+        userId: text(usage.userId),
+        dateKey: text(usage.dateKey),
+        keyHash: nullableText(usage.keyHash),
+        count: integer(usage.count),
+        createdAt: dateText(usage.createdAt),
+        updatedAt: dateText(usage.updatedAt)
+      });
+    });
+
     const insertCreditTransaction = db.prepare(`
       INSERT INTO "CreditTransaction" (
         "id", "userId", "type", "amount", "balanceAfter", "reason", "relatedJobId", "orderId", "createdAt"
@@ -1709,6 +1779,8 @@ function readCoreStoreFromDb<T>(fallback: T) {
       "AssistantThread",
       "AssistantMessage",
       "AiSetting",
+      "CoverImageSetting",
+      "CoverImageUsage",
       "User",
       "Session",
       "CreditTransaction"
@@ -1725,6 +1797,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
     }
 
     const aiSettingRows = rows<Record<string, unknown>>(db, "AiSetting");
+    const coverImageSettingRows = rows<Record<string, unknown>>(db, "CoverImageSetting");
 
     return {
       ...fallback,
@@ -2074,6 +2147,26 @@ function readCoreStoreFromDb<T>(fallback: T) {
         active: Boolean(aiSetting.active),
         timeoutMs: integer(aiSetting.timeoutMs),
         updatedAt: dateText(aiSetting.updatedAt)
+      })),
+      coverImageSettings: coverImageSettingRows.map((item) => ({
+        id: maybeString(item.id),
+        userId: maybeString(item.userId),
+        providerName: text(item.providerName),
+        baseUrl: text(item.baseUrl),
+        apiKey: text(item.apiKey),
+        model: text(item.model),
+        timeoutMs: integer(item.timeoutMs),
+        dailyLimit: item.dailyLimit == null ? undefined : integer(item.dailyLimit),
+        updatedAt: dateText(item.updatedAt)
+      })),
+      coverImageUsages: rows(db, "CoverImageUsage").map((item) => ({
+        id: text(item.id),
+        userId: text(item.userId),
+        dateKey: text(item.dateKey),
+        keyHash: maybeString(item.keyHash),
+        count: integer(item.count),
+        createdAt: dateText(item.createdAt),
+        updatedAt: dateText(item.updatedAt)
       })),
       users: rows(db, "User").map((item) => ({
         id: text(item.id),

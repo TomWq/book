@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   analyzeChapter,
@@ -169,6 +169,8 @@ import type {
   StoredLicenseCode,
   StoredLicenseActivationLog,
   StoredSession,
+  StoredCoverImageSettings,
+  StoredCoverImageUsage,
   AppStore,
   ProjectWithCounts,
   DashboardStat,
@@ -224,6 +226,8 @@ export type {
   StoredLicenseCode,
   StoredLicenseActivationLog,
   StoredSession,
+  StoredCoverImageSettings,
+  StoredCoverImageUsage,
   AppStore,
   ProjectWithCounts,
   DashboardStat,
@@ -428,12 +432,48 @@ function claimLegacyWorkspace(store: AppStore, userId: string) {
   store.aiSettings = normalizeStoredAiSettings(store.aiSettings).map((item) =>
     item.userId ? item : { ...item, userId, updatedAt: item.updatedAt ?? timestamp }
   );
+
+  store.coverImageSettings = normalizeStoredCoverImageSettings(store.coverImageSettings).map((item) =>
+    item.userId ? item : { ...item, userId, updatedAt: item.updatedAt ?? timestamp }
+  );
 }
 
 function createAuthServiceHooks(): AuthServiceHooks {
   return {
     claimLegacyWorkspace
   };
+}
+
+function normalizeTitleCandidate(value: unknown) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[“"‘'「『【\[（(]+/, "")
+    .replace(/[”"’'」』】\]）)]+$/, "")
+    .trim();
+}
+
+function collectProjectCreationAvoidTitles(store: AppStore, userId: string, explicitAvoidTitles: string[] = []) {
+  const ownedProjectNames = store.projects
+    .filter((project) => !project.ownerUserId || project.ownerUserId === userId)
+    .map((project) => project.name);
+  const recentJobTitles = store.aiJobs
+    .filter((job) => job.userId === userId && job.type === "project_creation_assist")
+    .slice(-40)
+    .flatMap((job) => {
+      const output = job.output && typeof job.output === "object" ? (job.output as Record<string, unknown>) : null;
+      const result = output?.result && typeof output.result === "object" ? (output.result as Record<string, unknown>) : null;
+      return Array.isArray(result?.titles) ? result.titles : [];
+    })
+    .map(normalizeTitleCandidate);
+
+  return Array.from(
+    new Set([
+      ...explicitAvoidTitles.map(normalizeTitleCandidate),
+      ...ownedProjectNames.map(normalizeTitleCandidate),
+      ...recentJobTitles
+    ].filter(Boolean))
+  ).slice(0, 120);
 }
 
 export async function getCurrentUser() {
@@ -1012,6 +1052,20 @@ function pickBackupAiSettings(payload: Record<string, unknown>, user: StoredUser
     settings[0];
 }
 
+function pickBackupCoverImageSettings(payload: Record<string, unknown>, user: StoredUser, sourceUser: Partial<StoredUser> | null) {
+  const settings = normalizeStoredCoverImageSettings(
+    payload.coverImageSettings as StoredCoverImageSettings | StoredCoverImageSettings[] | undefined
+  );
+
+  if (settings.length === 0) {
+    return null;
+  }
+
+  return settings.find((item) => sourceUser?.id && item.userId === sourceUser.id) ??
+    settings.find((item) => item.userId === user.id) ??
+    settings[0];
+}
+
 const backupCountKeys = [
   "projects",
   "sourceTexts",
@@ -1075,6 +1129,128 @@ function restoreBackupWarnings(payload: Record<string, unknown>, counts: Record<
   return warnings;
 }
 
+function assertUniqueBackupIds<T extends { id?: unknown }>(items: T[], label: string) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+
+  items.forEach((item) => {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+
+    if (!id) {
+      throw new Error(`备份文件中的${label}数据缺少 ID，无法恢复`);
+    }
+
+    if (seen.has(id)) {
+      duplicates.add(id);
+      return;
+    }
+
+    seen.add(id);
+  });
+
+  if (duplicates.size > 0) {
+    throw new Error(`备份文件中存在重复的${label}记录，无法恢复。请重新导出备份后再试`);
+  }
+}
+
+function removeProjectWorkspaceData(store: AppStore, projectIds: Set<string>) {
+  if (projectIds.size === 0) {
+    return;
+  }
+
+  const removedTemplateIds = new Set(
+    store.templates
+      .filter((template) => template.sourceProjectId && projectIds.has(template.sourceProjectId))
+      .map((template) => template.id)
+  );
+  const removedAssistantThreadIds = new Set(
+    (store.assistantThreads ?? [])
+      .filter((thread) => thread.projectId && projectIds.has(thread.projectId))
+      .map((thread) => thread.id)
+  );
+
+  store.sourceTexts = store.sourceTexts.filter((item) => !projectIds.has(item.projectId));
+  store.chapters = store.chapters.filter((item) => !projectIds.has(item.projectId));
+  store.chapterAnalyses = store.chapterAnalyses.filter((item) => !projectIds.has(item.projectId));
+  store.storyAnalyses = store.storyAnalyses.filter((item) => !projectIds.has(item.projectId));
+  store.writingBibles = store.writingBibles.filter((item) => !projectIds.has(item.projectId));
+  store.characterProfiles = store.characterProfiles.filter((item) => !projectIds.has(item.projectId));
+  store.foreshadowings = store.foreshadowings.filter((item) => !projectIds.has(item.projectId));
+  store.plotStates = store.plotStates.filter((item) => !projectIds.has(item.projectId));
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => !projectIds.has(item.projectId));
+  store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => !projectIds.has(item.projectId));
+  store.writingTaskCards = store.writingTaskCards.filter((item) => !projectIds.has(item.projectId));
+  store.chapterDrafts = store.chapterDrafts.filter((item) => !projectIds.has(item.projectId));
+  store.chapterLedgers = store.chapterLedgers.filter((item) => !projectIds.has(item.projectId));
+  store.reviewReports = store.reviewReports.filter((item) => !projectIds.has(item.projectId));
+  store.editReports = store.editReports.filter((item) => !projectIds.has(item.projectId));
+  store.inspirations = (store.inspirations ?? []).filter((item) => !item.projectId || !projectIds.has(item.projectId));
+  store.assistantThreads = (store.assistantThreads ?? []).filter((item) => !removedAssistantThreadIds.has(item.id));
+  store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !removedAssistantThreadIds.has(item.threadId));
+  store.outlines = store.outlines.filter((item) => !removedTemplateIds.has(item.templateId));
+  store.templates = store.templates.filter(
+    (item) => !removedTemplateIds.has(item.id) && (!item.sourceProjectId || !projectIds.has(item.sourceProjectId))
+  );
+  store.projects = store.projects.filter((item) => !projectIds.has(item.id));
+  store.aiJobs = store.aiJobs.filter((item) => !item.projectId || !projectIds.has(item.projectId));
+}
+
+function backupIds<T extends { id?: unknown }>(payload: Record<string, unknown>, key: string) {
+  return new Set(
+    arrayFromBackup<T>(payload, key)
+      .map((item) => typeof item.id === "string" ? item.id : "")
+      .filter(Boolean)
+  );
+}
+
+function removeExactBackupRecordConflicts(store: AppStore, payload: Record<string, unknown>) {
+  const sourceTextIds = backupIds<StoredSourceText>(payload, "sourceTexts");
+  const chapterIds = backupIds<StoredChapter>(payload, "chapters");
+  const chapterAnalysisIds = backupIds<StoredChapterAnalysis>(payload, "chapterAnalyses");
+  const storyAnalysisIds = backupIds<StoredStoryAnalysis>(payload, "storyAnalyses");
+  const templateIds = backupIds<StoredTemplate>(payload, "templates");
+  const inspirationIds = backupIds<StoredInspiration>(payload, "inspirations");
+  const outlineIds = backupIds<StoredOutline>(payload, "outlines");
+  const writingBibleIds = backupIds<StoredWritingBible>(payload, "writingBibles");
+  const characterProfileIds = backupIds<StoredCharacterProfile>(payload, "characterProfiles");
+  const foreshadowingIds = backupIds<StoredForeshadowing>(payload, "foreshadowings");
+  const plotStateIds = backupIds<StoredPlotState>(payload, "plotStates");
+  const longFormPlanIds = backupIds<StoredLongFormPlan>(payload, "longFormPlans");
+  const customRelationGraphIds = backupIds<StoredCustomRelationGraph>(payload, "customRelationGraphs");
+  const writingTaskCardIds = backupIds<StoredWritingTaskCard>(payload, "writingTaskCards");
+  const chapterDraftIds = backupIds<StoredChapterDraft>(payload, "chapterDrafts");
+  const chapterLedgerIds = backupIds<StoredChapterLedger>(payload, "chapterLedgers");
+  const reviewReportIds = backupIds<StoredReviewReport>(payload, "reviewReports");
+  const editReportIds = backupIds<StoredEditReport>(payload, "editReports");
+  const assistantThreadIds = backupIds<StoredAssistantThread>(payload, "assistantThreads");
+  const assistantMessageIds = backupIds<StoredAssistantMessage>(payload, "assistantMessages");
+  const aiJobIds = backupIds<StoredAiJob>(payload, "aiJobs");
+  const creditTransactionIds = backupIds<StoredCreditTransaction>(payload, "creditTransactions");
+
+  store.sourceTexts = store.sourceTexts.filter((item) => !sourceTextIds.has(item.id));
+  store.chapters = store.chapters.filter((item) => !chapterIds.has(item.id));
+  store.chapterAnalyses = store.chapterAnalyses.filter((item) => !chapterAnalysisIds.has(item.id));
+  store.storyAnalyses = store.storyAnalyses.filter((item) => !storyAnalysisIds.has(item.id));
+  store.templates = store.templates.filter((item) => !templateIds.has(item.id));
+  store.inspirations = (store.inspirations ?? []).filter((item) => !inspirationIds.has(item.id));
+  store.outlines = store.outlines.filter((item) => !outlineIds.has(item.id));
+  store.writingBibles = store.writingBibles.filter((item) => !writingBibleIds.has(item.id));
+  store.characterProfiles = store.characterProfiles.filter((item) => !characterProfileIds.has(item.id));
+  store.foreshadowings = store.foreshadowings.filter((item) => !foreshadowingIds.has(item.id));
+  store.plotStates = store.plotStates.filter((item) => !plotStateIds.has(item.id));
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => !longFormPlanIds.has(item.id));
+  store.customRelationGraphs = (store.customRelationGraphs ?? []).filter((item) => !customRelationGraphIds.has(item.id));
+  store.writingTaskCards = store.writingTaskCards.filter((item) => !writingTaskCardIds.has(item.id));
+  store.chapterDrafts = store.chapterDrafts.filter((item) => !chapterDraftIds.has(item.id));
+  store.chapterLedgers = store.chapterLedgers.filter((item) => !chapterLedgerIds.has(item.id));
+  store.reviewReports = store.reviewReports.filter((item) => !reviewReportIds.has(item.id));
+  store.editReports = store.editReports.filter((item) => !editReportIds.has(item.id));
+  store.assistantThreads = (store.assistantThreads ?? []).filter((item) => !assistantThreadIds.has(item.id));
+  store.assistantMessages = (store.assistantMessages ?? []).filter((item) => !assistantMessageIds.has(item.id));
+  store.aiJobs = store.aiJobs.filter((item) => !aiJobIds.has(item.id));
+  store.creditTransactions = store.creditTransactions.filter((item) => !creditTransactionIds.has(item.id));
+}
+
 function removeUserWorkspaceData(store: AppStore, userId: string) {
   const ownedProjectIds = getOwnedProjectIds(store, userId);
   const ownedTemplateIds = store.templates
@@ -1112,6 +1288,8 @@ function removeUserWorkspaceData(store: AppStore, userId: string) {
   store.aiJobs = store.aiJobs.filter((item) => item.userId !== userId && !(item.projectId && ownedProjectIds.has(item.projectId)));
   store.creditTransactions = store.creditTransactions.filter((item) => item.userId !== userId);
   store.aiSettings = normalizeStoredAiSettings(store.aiSettings).filter((item) => item.userId !== userId);
+  store.coverImageSettings = normalizeStoredCoverImageSettings(store.coverImageSettings).filter((item) => item.userId !== userId);
+  store.coverImageUsages = (store.coverImageUsages ?? []).filter((item) => item.userId !== userId);
 }
 
 export async function restoreCurrentUserDataFromBackup(payload: unknown) {
@@ -1126,12 +1304,27 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
   }
 
   const projects = arrayFromBackup<StoredProject>(data, "projects");
+  assertUniqueBackupIds(projects, "项目");
   const store = await readStore();
   const user = await requireCurrentUser(store);
   const sourceUser = pickBackupSourceUser(data, user);
   const backupPath = await backupStoreSnapshot(store, "before-restore");
+  const importedProjectIds = new Set(projects.map((project) => project.id));
 
   removeUserWorkspaceData(store, user.id);
+
+  const existingUserIds = new Set(store.users.map((item) => item.id));
+  const conflictingProjects = store.projects.filter((project) => importedProjectIds.has(project.id));
+  const protectedConflicts = conflictingProjects.filter(
+    (project) => project.ownerUserId && existingUserIds.has(project.ownerUserId) && project.ownerUserId !== user.id
+  );
+
+  if (protectedConflicts.length > 0) {
+    throw new Error("备份中的项目与其他账号已有项目冲突，无法直接恢复。请切换到原账号后恢复，或先导出当前数据");
+  }
+
+  removeProjectWorkspaceData(store, new Set(conflictingProjects.map((project) => project.id)));
+  removeExactBackupRecordConflicts(store, data);
 
   const exportedPenName = typeof sourceUser?.penName === "string" ? sourceUser.penName.trim() : "";
   const exportedAssistantName = typeof sourceUser?.assistantName === "string" ? sourceUser.assistantName.trim() : "";
@@ -1151,8 +1344,8 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
 
   user.updatedAt = now();
 
-  const importedProjectIds = new Set(projects.map((project) => project.id));
   const templates = arrayFromBackup<StoredTemplate>(data, "templates");
+  assertUniqueBackupIds(templates, "模板");
   const importedTemplateIds = new Set(templates.map((template) => template.id));
   const assistantThreads = arrayFromBackup<StoredAssistantThread>(data, "assistantThreads")
     .filter((thread) => !thread.projectId || importedProjectIds.has(thread.projectId))
@@ -1220,9 +1413,27 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
       updatedAt: now()
     }
     : null;
+  const restoredCoverImageSettings = pickBackupCoverImageSettings(data, user, sourceUser);
+  const coverImageSettings = restoredCoverImageSettings
+    ? {
+      ...restoredCoverImageSettings,
+      id: restoredCoverImageSettings.userId === user.id
+        ? restoredCoverImageSettings.id
+        : `${user.id}:${restoredCoverImageSettings.id || "cover-image-restored"}`,
+      userId: user.id,
+      updatedAt: now()
+    }
+    : null;
 
   if (aiSettings) {
     store.aiSettings = [...normalizeStoredAiSettings(store.aiSettings), aiSettings];
+  }
+
+  if (coverImageSettings) {
+    store.coverImageSettings = [
+      ...normalizeStoredCoverImageSettings(store.coverImageSettings).filter((item) => item.userId !== user.id),
+      coverImageSettings
+    ];
   }
 
   await writeStore(store);
@@ -2492,7 +2703,8 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     assistantMessages: (store.assistantMessages ?? []).filter((item) => assistantThreadIds.has(item.threadId)),
     creditTransactions: store.creditTransactions.filter((item) => item.userId === user.id),
     creditsBalance: getUserCreditBalance(user),
-    aiSettings: getPrimaryAiSettings(store, user.id)
+    aiSettings: getPrimaryAiSettings(store, user.id),
+    coverImageSettings: getUserCoverImageSettings(store, user.id)
   };
 
   return {
@@ -2539,6 +2751,8 @@ async function purgeUserAccount(store: AppStore, userId: string) {
   store.aiJobs = store.aiJobs.filter((item) => item.userId !== userId && !(item.projectId && ownedProjectIds.has(item.projectId)));
   store.creditTransactions = store.creditTransactions.filter((item) => item.userId !== userId);
   store.aiSettings = normalizeStoredAiSettings(store.aiSettings).filter((item) => item.userId !== userId);
+  store.coverImageSettings = normalizeStoredCoverImageSettings(store.coverImageSettings).filter((item) => item.userId !== userId);
+  store.coverImageUsages = (store.coverImageUsages ?? []).filter((item) => item.userId !== userId);
   store.sessions = store.sessions.filter((item) => item.userId !== userId);
   store.users = store.users.filter((item) => item.id !== userId);
 
@@ -2979,7 +3193,7 @@ function applyInitialProjectState(
 
   const timestamp = now();
   const tags = cleanList(input.tags);
-  const protagonistCharacters = normalizeInitialCharacters(input).slice(0, 8);
+  const protagonistCharacters = normalizeInitialCharacters(input).slice(0, 20);
   const protagonists = protagonistCharacters.map((character) => character.name);
   const projectPromise = buildProjectPromiseText(project);
   const coreSellingPoint = input.coreSellingPoint?.trim() ?? "";
@@ -6466,6 +6680,415 @@ export async function getPublicAiSettings() {
   };
 }
 
+const COVER_IMAGE_DAILY_LIMIT = 3;
+const DEFAULT_COVER_IMAGE_BASE_URL = "https://newapi.602774041.xyz/v1";
+const DEFAULT_COVER_IMAGE_MODEL = "gpt-image-2";
+const COVER_IMAGE_TIME_ZONE = "Asia/Shanghai";
+const COVER_IMAGE_PLATFORM_SETTINGS_USER_ID = "__platform_cover_image__";
+
+function normalizeCoverImageDailyLimit(value: unknown) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return COVER_IMAGE_DAILY_LIMIT;
+  }
+
+  return Math.min(999, Math.max(1, Math.floor(parsed)));
+}
+
+function normalizeCoverImageModel(value: unknown, fallback = DEFAULT_COVER_IMAGE_MODEL) {
+  const model = String(value ?? "").trim().replace(/[‐‑‒–—―]/g, "-");
+
+  return model || fallback;
+}
+
+function isCoverImageSettingsConfigured(settings: StoredCoverImageSettings) {
+  return Boolean(settings.baseUrl.trim() && settings.apiKey.trim() && settings.model.trim());
+}
+
+function normalizeStoredCoverImageSettings(settings?: StoredCoverImageSettings | StoredCoverImageSettings[]) {
+  if (Array.isArray(settings)) {
+    return settings;
+  }
+
+  return settings ? [settings] : [];
+}
+
+function getUserCoverImageSettings(store: AppStore, userId: string) {
+  return normalizeStoredCoverImageSettings(store.coverImageSettings)
+    .filter((item) => item.userId === userId)[0] ?? null;
+}
+
+function getPlatformCoverImageSettings(store: AppStore) {
+  return normalizeStoredCoverImageSettings(store.coverImageSettings)
+    .find((item) => item.userId === COVER_IMAGE_PLATFORM_SETTINGS_USER_ID) ?? null;
+}
+
+function mergeCoverImageSettings(settings?: StoredCoverImageSettings | null): StoredCoverImageSettings {
+  return {
+    id: settings?.id,
+    userId: settings?.userId,
+    providerName: settings?.providerName || "OpenAI Compatible Image",
+    baseUrl: (settings?.baseUrl || process.env.COVER_IMAGE_BASE_URL || DEFAULT_COVER_IMAGE_BASE_URL).replace(/\/+$/, ""),
+    apiKey: settings?.apiKey || process.env.COVER_IMAGE_API_KEY || "",
+    model: normalizeCoverImageModel(settings?.model || process.env.COVER_IMAGE_MODEL),
+    timeoutMs: settings?.timeoutMs || Number(process.env.COVER_IMAGE_TIMEOUT_MS ?? 90000),
+    dailyLimit: normalizeCoverImageDailyLimit(settings?.dailyLimit ?? process.env.COVER_IMAGE_DAILY_LIMIT),
+    updatedAt: settings?.updatedAt
+  };
+}
+
+function setUserCoverImageSettings(store: AppStore, userId: string, settings: StoredCoverImageSettings) {
+  const list = normalizeStoredCoverImageSettings(store.coverImageSettings).slice();
+  const index = list.findIndex((item) => item.userId === userId);
+
+  if (index >= 0) {
+    list[index] = settings;
+  } else {
+    list.push(settings);
+  }
+
+  store.coverImageSettings = list;
+}
+
+function setPlatformCoverImageSettings(store: AppStore, settings: StoredCoverImageSettings) {
+  setUserCoverImageSettings(store, COVER_IMAGE_PLATFORM_SETTINGS_USER_ID, settings);
+}
+
+function coverImageDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: COVER_IMAGE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function coverImageResetAt(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  return new Date(Date.UTC(year, month - 1, day + 1, -8, 0, 0)).toISOString();
+}
+
+function coverImageKeyHash(apiKey: string) {
+  const key = apiKey.trim();
+
+  return key ? createHash("sha256").update(key).digest("hex").slice(0, 24) : "no-key";
+}
+
+function getCoverImageQuotaFromStore(store: AppStore, userId: string, settings: StoredCoverImageSettings) {
+  const dateKey = coverImageDateKey();
+  const keyHash = coverImageKeyHash(settings.apiKey);
+  const limit = normalizeCoverImageDailyLimit(settings.dailyLimit);
+  const usage = (store.coverImageUsages ?? []).find((item) =>
+    item.userId === userId &&
+      item.dateKey === dateKey &&
+      (item.keyHash || "legacy") === keyHash
+  );
+  const used = Math.max(0, usage?.count ?? 0);
+
+  return {
+    limit,
+    used,
+    remaining: Math.max(0, limit - used),
+    dateKey,
+    keyHash,
+    resetAt: coverImageResetAt(dateKey)
+  };
+}
+
+function publicCoverImageQuota(quota: ReturnType<typeof getCoverImageQuotaFromStore>) {
+  return {
+    limit: quota.limit,
+    used: quota.used,
+    remaining: quota.remaining,
+    dateKey: quota.dateKey,
+    resetAt: quota.resetAt
+  };
+}
+
+function reserveCoverImageQuota(store: AppStore, userId: string, settings: StoredCoverImageSettings) {
+  store.coverImageUsages ??= [];
+  const quota = getCoverImageQuotaFromStore(store, userId, settings);
+
+  if (quota.remaining <= 0) {
+    throw new Error("今天的 AI 生成封面次数已用完，请明天再试");
+  }
+
+  const timestamp = now();
+  let usage = store.coverImageUsages.find((item) =>
+    item.userId === userId &&
+      item.dateKey === quota.dateKey &&
+      (item.keyHash || "legacy") === quota.keyHash
+  );
+
+  if (!usage) {
+    usage = {
+      id: randomUUID(),
+      userId,
+      dateKey: quota.dateKey,
+      keyHash: quota.keyHash,
+      count: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.coverImageUsages.push(usage);
+  }
+
+  usage.count += 1;
+  usage.updatedAt = timestamp;
+
+  return getCoverImageQuotaFromStore(store, userId, settings);
+}
+
+async function refundCoverImageQuota(userId: string, dateKey: string, keyHash: string) {
+  const store = await readStore();
+  const usage = (store.coverImageUsages ?? []).find((item) =>
+    item.userId === userId &&
+      item.dateKey === dateKey &&
+      (item.keyHash || "legacy") === keyHash
+  );
+
+  if (usage && usage.count > 0) {
+    usage.count -= 1;
+    usage.updatedAt = now();
+    await writeStore(store);
+  }
+}
+
+function assertCoverImageProviderConfigured(settings: StoredCoverImageSettings) {
+  const missing = [
+    !settings.baseUrl ? "请求地址" : "",
+    !settings.apiKey ? "API Key" : "",
+    !settings.model ? "模型名称" : ""
+  ].filter(Boolean);
+
+  if (missing.length > 0) {
+    throw new Error(`封面生图配置不完整：请填写 ${missing.join("、")}`);
+  }
+}
+
+function buildNovelCoverPrompt(input: { title: string; authorName?: string; stylePrompt?: string }) {
+  const title = input.title.trim();
+  const authorName = input.authorName?.trim() || "作者";
+  const stylePrompt = input.stylePrompt?.trim() || "网文商业封面，强类型感，主体清晰，适合中文小说平台展示";
+
+  return [
+    "为一本网文小说生成竖版商业封面图。",
+    `书名：${title}`,
+    `作者名：${authorName}`,
+    `画面风格与元素：${stylePrompt}`,
+    "构图要求：2:3 竖版封面，主体明确，留出书名和作者名排版空间，远看能看清类型和卖点。",
+    "文字要求：不要在图片里生成任何真实可读文字、平台 logo、水印、二维码或出版社标识，书名和作者名由产品界面单独叠加。",
+    "合规要求：不要照搬已有小说、影视、动漫、游戏的角色形象、标志性场景或专有设定。"
+  ].join("\n");
+}
+
+function withFetchTimeout(timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timer)
+  };
+}
+
+function extractGeneratedCoverUrl(payload: unknown) {
+  const data = payload && typeof payload === "object" ? (payload as { data?: unknown }).data : null;
+  const first = Array.isArray(data) ? data[0] : null;
+
+  if (first && typeof first === "object") {
+    const record = first as Record<string, unknown>;
+    const b64 = typeof record.b64_json === "string" ? record.b64_json : "";
+    const url = typeof record.url === "string" ? record.url : "";
+
+    if (b64) {
+      return `data:image/png;base64,${b64}`;
+    }
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return "";
+}
+
+export async function getPublicCoverImageSettings() {
+  const store = await readStore();
+  const currentUser = await getCurrentUserFromStore(store);
+
+  if (!currentUser) {
+    throw new Error("请先登录");
+  }
+
+  const saved = getPlatformCoverImageSettings(store);
+  const settings = mergeCoverImageSettings(saved);
+  const quota = getCoverImageQuotaFromStore(store, currentUser.id, settings);
+  const key = settings.apiKey.trim();
+
+  return {
+    model: settings.model,
+    configured: isCoverImageSettingsConfigured(settings),
+    quota: publicCoverImageQuota(quota)
+  };
+}
+
+export async function getAdminCoverImageSettings() {
+  const store = await readStore();
+  await requireAdminUser(store);
+  const settings = mergeCoverImageSettings(getPlatformCoverImageSettings(store));
+  const quota = getCoverImageQuotaFromStore(store, COVER_IMAGE_PLATFORM_SETTINGS_USER_ID, settings);
+  const key = settings.apiKey.trim();
+
+  return {
+    providerName: settings.providerName,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    timeoutMs: settings.timeoutMs,
+    dailyLimit: normalizeCoverImageDailyLimit(settings.dailyLimit),
+    hasApiKey: key.length > 0,
+    apiKeyPreview: key ? `...${key.slice(-4)}` : "",
+    configured: isCoverImageSettingsConfigured(settings),
+    updatedAt: settings.updatedAt,
+    quota: publicCoverImageQuota(quota)
+  };
+}
+
+export async function updateAdminCoverImageSettings(input: {
+  providerName?: string;
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+  timeoutMs: number;
+  dailyLimit?: number;
+  clearApiKey?: boolean;
+}) {
+  const store = await readStore();
+  await requireAdminUser(store);
+  const current = getPlatformCoverImageSettings(store);
+  const timestamp = now();
+  const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
+  const model = normalizeCoverImageModel(input.model, "");
+  const nextApiKey = input.clearApiKey ? "" : input.apiKey?.trim() || current?.apiKey?.trim() || "";
+
+  if (!baseUrl) {
+    throw new Error("请先填写封面生图请求地址");
+  }
+
+  if (!model) {
+    throw new Error("请先填写封面生图模型名称");
+  }
+
+  if (!nextApiKey) {
+    throw new Error("请先填写封面生图 API Key；首次配置时不能留空");
+  }
+
+  const nextSettings: StoredCoverImageSettings = {
+    id: current?.id || randomUUID(),
+    userId: COVER_IMAGE_PLATFORM_SETTINGS_USER_ID,
+    providerName: input.providerName?.trim() || "OpenAI Compatible Image",
+    baseUrl,
+    apiKey: nextApiKey,
+    model,
+    timeoutMs: Number.isFinite(input.timeoutMs) && input.timeoutMs > 0 ? input.timeoutMs : 90000,
+    dailyLimit: normalizeCoverImageDailyLimit(input.dailyLimit),
+    updatedAt: timestamp
+  };
+
+  setPlatformCoverImageSettings(store, nextSettings);
+  await writeStore(store);
+  return getAdminCoverImageSettings();
+}
+
+export async function generateNovelCoverImage(input: {
+  title: string;
+  authorName?: string;
+  stylePrompt?: string;
+}) {
+  const title = input.title.trim();
+
+  if (!title) {
+    throw new Error("请先填写书名");
+  }
+
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const settings = mergeCoverImageSettings(getPlatformCoverImageSettings(store));
+  assertCoverImageProviderConfigured(settings);
+
+  const reservedQuota = reserveCoverImageQuota(store, currentUser.id, settings);
+  await writeStore(store);
+
+  const timeout = withFetchTimeout(settings.timeoutMs);
+
+  try {
+    const response = await fetch(`${settings.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        prompt: buildNovelCoverPrompt(input),
+        n: 1,
+        size: "1024x1536"
+      }),
+      signal: timeout.signal,
+      cache: "no-store"
+    });
+    const rawText = await response.text();
+    const payload = rawText
+      ? (() => {
+          try {
+            return JSON.parse(rawText);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+
+    if (!response.ok) {
+      const errorMessage =
+        payload && typeof payload === "object" && "error" in payload
+          ? JSON.stringify((payload as { error: unknown }).error)
+          : rawText;
+      throw new Error(`封面生成失败：${response.status} ${errorMessage}`);
+    }
+
+    const coverImageUrl = extractGeneratedCoverUrl(payload);
+
+    if (!coverImageUrl) {
+      throw new Error("封面生成失败：接口没有返回图片");
+    }
+
+    return {
+      coverImageUrl,
+      quota: publicCoverImageQuota(reservedQuota),
+      model: settings.model
+    };
+  } catch (error) {
+    await refundCoverImageQuota(currentUser.id, reservedQuota.dateKey, reservedQuota.keyHash);
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("封面生成超时，请稍后重试");
+    }
+
+    throw error;
+  } finally {
+    timeout.clear();
+  }
+}
+
 export async function getCurrentUserAiSetupStatus() {
   const store = await readStore();
   const currentUser = await getCurrentUserFromStore(store);
@@ -6687,7 +7310,10 @@ export async function assistProjectCreation(input: ProjectCreationAssistInput) {
     input.action === "protagonists" || input.action === "description" ? input.action : "titles";
   const payload = {
     ...input,
-    action
+    action,
+    avoidTitles: action === "titles"
+      ? collectProjectCreationAvoidTitles(store, currentUser.id, input.avoidTitles ?? [])
+      : input.avoidTitles
   };
   const job = createAiJob(store, {
     userId: currentUser.id,

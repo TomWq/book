@@ -11114,6 +11114,46 @@ body.update-prompt-open .floating-ai-launcher {
   color: #c2410c;
 }
 
+.ai-cover-dialog {
+  width: min(760px, calc(100dvw - 48px));
+  height: auto;
+  max-height: calc(100dvh - 48px);
+}
+
+.ai-cover-dialog-body {
+  min-height: 0;
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+  padding: 22px 24px;
+}
+
+.ai-cover-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ai-cover-style-grid .assist-suggestion {
+  min-height: 58px;
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.cover-method-dialog {
+  width: min(560px, calc(100dvw - 40px));
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(18, 26, 44, 0.24);
+}
+
+.cover-method-options {
+  display: grid;
+  gap: 12px;
+  padding: 20px 22px 22px;
+}
+
 .book-create-main {
   display: grid;
   gap: 14px;
@@ -13038,7 +13078,8 @@ body.update-prompt-open .floating-ai-launcher {
 }
 
 :root[data-theme="dark"] .book-create-section,
-:root[data-theme="dark"] .tag-dialog {
+:root[data-theme="dark"] .tag-dialog,
+:root[data-theme="dark"] .cover-method-dialog {
   border-color: var(--line);
   background: var(--bg-elevated);
 }
@@ -13893,6 +13934,10 @@ body.update-prompt-open .floating-ai-launcher {
   }
 
   .book-create-preview {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-cover-style-grid {
     grid-template-columns: 1fr;
   }
 

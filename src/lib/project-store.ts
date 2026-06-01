@@ -35,7 +35,9 @@ export const initialStore: AppStore = {
   creditTransactions: [],
   licenseCodes: [],
   licenseActivationLogs: [],
-  aiSettings: undefined
+  aiSettings: undefined,
+  coverImageSettings: undefined,
+  coverImageUsages: []
 };
 
 const dataDir = path.join(process.cwd(), "data");
