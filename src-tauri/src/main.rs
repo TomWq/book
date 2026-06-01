@@ -41,6 +41,12 @@ const MAIN_WINDOW_ENTER_SCRIPT: &str = r#"
   if (window.__tauriWindowEnterInstalled) return;
   window.__tauriWindowEnterInstalled = true;
 
+  try {
+    if (window.sessionStorage.getItem("aiNovelTauriWindowEntered") === "1") {
+      return;
+    }
+  } catch {}
+
   const css = `
     html.app-window-entering,
     html.app-window-entering body {
@@ -499,6 +505,9 @@ fn transition_to_main_window(main_window: WebviewWindow, splash: WebviewWindow) 
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const root = document.documentElement;
+            try {
+              window.sessionStorage.setItem("aiNovelTauriWindowEntered", "1");
+            } catch {}
             root.classList.add("app-window-ready");
 
             window.setTimeout(() => {
@@ -601,6 +610,7 @@ fn create_main_window(
         .min_inner_size(1040.0, 720.0)
         .center()
         .resizable(true)
+        .maximized(true)
         .visible(false)
         .initialization_script(MAIN_WINDOW_ENTER_SCRIPT)
         .on_page_load(move |main_window, payload| {

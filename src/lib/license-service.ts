@@ -34,6 +34,11 @@ export type LicenseVerificationInput = {
   clientName?: string;
 };
 
+export type TrialLicenseInput = {
+  machineHash?: string;
+  clientName?: string;
+};
+
 export type LicenseActivationResult = {
   licenseId: string;
   customerId: string;
@@ -225,6 +230,7 @@ function getConfiguredActivationCodeHashes() {
 const ROUTINE_LICENSE_CHECK_CLIENT = "本地客户端状态校验";
 const ROUTINE_LICENSE_LOG_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_OFFLINE_GRACE_DAYS = 7;
+const DEFAULT_DESKTOP_TRIAL_MINUTES = 24 * 60;
 
 function isRoutineLicenseCheck(clientName?: string) {
   return normalizeLicenseText(clientName) === ROUTINE_LICENSE_CHECK_CLIENT;
@@ -312,6 +318,35 @@ function getOfflineGraceMs() {
   const days = Number(process.env.LICENSE_OFFLINE_GRACE_DAYS ?? DEFAULT_OFFLINE_GRACE_DAYS);
   const safeDays = Number.isFinite(days) ? Math.max(0, Math.min(30, days)) : DEFAULT_OFFLINE_GRACE_DAYS;
   return safeDays * 24 * 60 * 60 * 1000;
+}
+
+function getDesktopTrialDurationMinutes() {
+  const minutes = Number(process.env.DESKTOP_TRIAL_DURATION_MINUTES ?? "");
+  const hours = Number(process.env.DESKTOP_TRIAL_DURATION_HOURS ?? "");
+
+  if (Number.isFinite(minutes) && minutes > 0) {
+    return Math.floor(minutes);
+  }
+
+  if (Number.isFinite(hours) && hours > 0) {
+    return Math.floor(hours * 60);
+  }
+
+  return DEFAULT_DESKTOP_TRIAL_MINUTES;
+}
+
+export function getTrialLicenseCodeHash(machineHash: string) {
+  const normalizedMachineHash = normalizeMachineHash(machineHash);
+  return createHash("sha256")
+    .update("ai-novel-workbench-desktop-trial-v1")
+    .update(":")
+    .update(normalizedMachineHash)
+    .digest("hex");
+}
+
+function previewTrialLicense(machineHash: string) {
+  const compactMachine = machineHash.length > 12 ? `${machineHash.slice(0, 6)}...${machineHash.slice(-4)}` : machineHash;
+  return `TRIAL-${compactMachine}`;
 }
 
 function isTransientLicenseCenterError(message: string) {
@@ -581,6 +616,183 @@ export async function verifyLicenseViaRemoteCenter(input: LicenseVerificationInp
   return (result.body as { license?: LicenseActivationResult } | null)?.license as LicenseActivationResult;
 }
 
+export async function requestTrialLicenseViaRemoteCenter(input: TrialLicenseInput) {
+  const serverUrl = getLicenseServerUrl();
+
+  if (!serverUrl) {
+    return null;
+  }
+
+  const timeoutMs = Number(process.env.LICENSE_SERVER_TIMEOUT_MS ?? 30000);
+  const url = serverUrl + "/api/license/trial";
+  const payload = {
+    machineHash: input.machineHash,
+    clientName: input.clientName,
+    centerOnly: true
+  };
+  const proxyAgent = getLicenseServerProxyAgent();
+  let result: { ok: boolean; status: number; body: unknown };
+
+  try {
+    if (proxyAgent) {
+      result = await postJsonWithSocksProxy({ url, payload, timeoutMs, agent: proxyAgent });
+    } else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const raw = await response.text();
+        let body: unknown = null;
+
+        try {
+          body = raw ? JSON.parse(raw) : null;
+        } catch {
+          body = raw;
+        }
+
+        result = {
+          ok: response.ok,
+          status: response.status,
+          body
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    const isTimeout = error instanceof Error && (error.name === "AbortError" || message === "timeout");
+    const proxyHint = proxyAgent ? "，当前代理：" + process.env.LICENSE_SERVER_PROXY : "";
+    throw new Error(isTimeout ? "连接授权中心超时：" + serverUrl + proxyHint : "无法连接授权中心：" + serverUrl + proxyHint + "，" + message);
+  }
+
+  if (!result.ok) {
+    throw new Error(readRemoteLicenseErrorMessage(result.body));
+  }
+
+  return (result.body as { license?: LicenseActivationResult } | null)?.license as LicenseActivationResult;
+}
+
+export async function requestTrialLicenseWithCenter(input: TrialLicenseInput): Promise<LicenseActivationResult> {
+  const machineHash = normalizeMachineHash(input.machineHash);
+
+  if (!machineHash) {
+    throw new Error("缺少本机安装标识，请刷新后重试");
+  }
+
+  const store = await readStore();
+  normalizePreActivationTrialExpiry(store);
+
+  const timestamp = now();
+  const codeHash = getTrialLicenseCodeHash(machineHash);
+  const clientName = normalizeLicenseText(input.clientName);
+  const durationMinutes = getDesktopTrialDurationMinutes();
+  const existingLicense = store.licenseCodes.find((item) => item.codeHash === codeHash);
+
+  function toResult(license: StoredLicenseCode): LicenseActivationResult {
+    return {
+      licenseId: license.id,
+      customerId: license.id,
+      codePreview: license.codePreview,
+      purpose: normalizeLicenseCodePurpose(license.purpose),
+      status: license.status,
+      activatedAt: license.activatedAt ?? timestamp,
+      expiresAt: license.expiresAt,
+      isTrial: true,
+      customerName: license.customerName,
+      customerContact: license.customerContact
+    };
+  }
+
+  function log(license: StoredLicenseCode | undefined, result: StoredLicenseActivationLog["result"], reason: string) {
+    const entry = {
+      id: randomUUID(),
+      licenseCodeId: license?.id,
+      codeHash,
+      machineHash,
+      result,
+      reason,
+      clientName,
+      createdAt: timestamp
+    };
+
+    if (!shouldAppendLicenseLog(store.licenseActivationLogs, entry)) {
+      return;
+    }
+
+    store.licenseActivationLogs.unshift(entry);
+    store.licenseActivationLogs = store.licenseActivationLogs.slice(0, 300);
+  }
+
+  if (!existingLicense) {
+    const expiresAt = new Date(Date.parse(timestamp) + durationMinutes * 60 * 1000).toISOString();
+    const license: StoredLicenseCode = {
+      id: randomUUID(),
+      codeHash,
+      codePreview: previewTrialLicense(machineHash),
+      purpose: "desktop",
+      customerName: "24 小时自动体验",
+      customerContact: "",
+      status: "used",
+      maxActivations: 1,
+      activationCount: 1,
+      machineHash,
+      activatedAt: timestamp,
+      lastVerifiedAt: timestamp,
+      durationMinutes,
+      expiresAt,
+      notes: "客户端首次启动自动领取体验授权",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+
+    store.licenseCodes.unshift(license);
+    log(license, "success", "trial_started");
+    await writeStore(store);
+    return toResult(license);
+  }
+
+  if (existingLicense.status === "disabled") {
+    log(existingLicense, "failed", "trial_disabled");
+    await writeStore(store);
+    throw new Error("体验授权已被管理员禁用");
+  }
+
+  existingLicense.durationMinutes = existingLicense.durationMinutes || durationMinutes;
+  existingLicense.machineHash = existingLicense.machineHash || machineHash;
+  existingLicense.activatedAt = existingLicense.activatedAt || timestamp;
+  ensureLicenseExpiryStarted(existingLicense, existingLicense.activatedAt);
+
+  if (existingLicense.expiresAt && Date.parse(existingLicense.expiresAt) <= Date.now()) {
+    existingLicense.status = "expired";
+    existingLicense.updatedAt = timestamp;
+    log(existingLicense, "failed", "trial_expired");
+    await writeStore(store);
+    throw new Error("体验时间已到期。如需继续使用，请联系管理员获取正式授权码。");
+  }
+
+  if (existingLicense.machineHash && existingLicense.machineHash !== machineHash) {
+    log(existingLicense, "failed", "trial_machine_mismatch");
+    await writeStore(store);
+    throw new Error("体验授权设备不匹配");
+  }
+
+  existingLicense.status = "used";
+  existingLicense.activationCount = Math.max(existingLicense.activationCount, 1);
+  existingLicense.lastVerifiedAt = timestamp;
+  existingLicense.updatedAt = timestamp;
+  log(existingLicense, "success", "trial_verified");
+  await writeStore(store);
+  return toResult(existingLicense);
+}
+
 export function getDesktopLicenseCandidate(store: AppStore) {
   const candidates = store.users
     .filter((item) => Boolean(item.licenseCustomerId || item.licenseCodeHash))
@@ -636,7 +848,7 @@ export function resolveDesktopLicenseState(store: AppStore, user: StoredUser): D
       return {
         status: "expired",
         expiresAt,
-        message: "体验已到期",
+        message: "体验时间已到期。如需继续使用，请联系管理员获取正式授权码。",
         changed: false
       };
     }
@@ -683,7 +895,7 @@ export function resolveDesktopLicenseState(store: AppStore, user: StoredUser): D
     return {
       status: "expired",
       expiresAt: resolvedExpiresAt,
-      message: "体验已到期",
+      message: "体验时间已到期。如需继续使用，请联系管理员获取正式授权码。",
       changed: true
     };
   }
@@ -1054,7 +1266,7 @@ export async function verifyLicenseWithCenter(input: LicenseVerificationInput): 
     license.updatedAt = timestamp;
     log("failed", "expired");
     await writeStore(store);
-    throw new Error("体验已到期");
+    throw new Error("体验时间已到期。如需继续使用，请联系管理员获取正式授权码。");
   }
 
   if (license.status !== "used") {

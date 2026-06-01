@@ -91,6 +91,7 @@ import {
 } from "@/lib/auth-service";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getBillingMode, isSubscriptionBillingMode } from "@/lib/billing-mode";
+import { getDesktopMachineHash } from "@/lib/desktop-machine-id";
 import { clearDesktopActivationStatusCache } from "@/lib/desktop-license-status";
 import {
   activationEmail,
@@ -100,17 +101,21 @@ import {
   createActivationCode,
   getDesktopLicenseCandidate,
   getLicenseServerUrl,
+  getTrialLicenseCodeHash,
   hashActivationCode,
   normalizeActivationCode,
   normalizeLicenseText,
   normalizeMachineHash,
   previewActivationCode,
   refreshDesktopLicenseStateFromRemoteCenter,
+  requestTrialLicenseViaRemoteCenter,
+  requestTrialLicenseWithCenter,
   resolveDesktopLicenseState,
   syncLegacyConfiguredCodes,
   syncLocalLicenseSnapshot,
   type DesktopLicenseState,
-  type LicenseActivationInput
+  type LicenseActivationInput,
+  type TrialLicenseInput
 } from "@/lib/license-service";
 import { splitNovelText } from "@/lib/chapters";
 import {
@@ -231,6 +236,7 @@ export type {
 } from "@/lib/project-types";
 export {
   activateLicenseWithCenter,
+  requestTrialLicenseWithCenter,
   verifyLicenseWithCenter
 } from "@/lib/license-service";
 
@@ -479,6 +485,36 @@ export async function restoreSubscriptionSession() {
   const user = candidate.user;
 
   if (!user) {
+    const hasKnownDesktopAuthorization = store.users.some((item) =>
+      Boolean(item.licenseCustomerId || item.licenseCodeHash || item.licenseExpiresAt)
+    );
+
+    if (!hasKnownDesktopAuthorization) {
+      try {
+        const trialUser = await activateSubscriptionTrial({
+          machineHash: getDesktopMachineHash(),
+          clientName: "客户端首次启动自动体验"
+        });
+        return { user: trialUser };
+      } catch (error) {
+        const rawMessage = error instanceof Error ? error.message : "";
+        const message = rawMessage.includes("请先登录") ||
+          rawMessage.includes("返回 401") ||
+          rawMessage.includes("返回 403")
+          ? "自动开通体验失败：授权中心暂未开放自动体验接口，请输入正式授权码或稍后重试"
+          : rawMessage || "自动开通体验失败";
+        return {
+          user: null,
+          reason: message.includes("到期") || message.includes("过期")
+            ? ("expired" as const)
+            : message.includes("禁用")
+              ? ("disabled" as const)
+              : ("missing" as const),
+          message
+        };
+      }
+    }
+
     return { user: null, reason: "missing" as const };
   }
 
@@ -489,9 +525,16 @@ export async function restoreSubscriptionSession() {
   }
 
   if (licenseState.status !== "active") {
+    const reason = licenseState.status === "expired"
+      ? ("expired" as const)
+      : licenseState.status === "disabled"
+        ? ("disabled" as const)
+        : ("missing" as const);
+
     return {
       user: null,
-      reason: licenseState.status === "expired" ? ("expired" as const) : ("disabled" as const)
+      reason,
+      message: licenseState.message
     };
   }
 
@@ -511,6 +554,92 @@ export async function restoreSubscriptionSession() {
   await setSessionCookie(token);
   clearDesktopActivationStatusCache();
   return { user: toAuthUser(user) };
+}
+
+export async function activateSubscriptionTrial(input: TrialLicenseInput) {
+  if (!isDesktopRuntime() || !isSubscriptionBillingMode()) {
+    throw new Error("当前环境不支持自动体验授权");
+  }
+
+  const machineHash = normalizeMachineHash(input.machineHash);
+
+  if (!machineHash) {
+    throw new Error("缺少本机安装标识，请刷新后重试");
+  }
+
+  let license = await requestTrialLicenseViaRemoteCenter({
+    machineHash,
+    clientName: normalizeLicenseText(input.clientName)
+  });
+
+  if (!license) {
+    const hint = getLicenseServerUrl() ? "请检查网络后重试" : "请检查打包配置是否写入授权中心地址";
+    throw new Error(`客户端未连接授权中心，${hint}`);
+  }
+
+  const store = await readStore();
+  const timestamp = now();
+  const codeHash = getTrialLicenseCodeHash(machineHash);
+  syncLocalLicenseSnapshot(store, { license, codeHash, machineHash });
+
+  let user = store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId);
+
+  if (!user) {
+    const { salt, hash } = hashPassword(randomUUID());
+    user = {
+      id: randomUUID(),
+      email: activationEmail(license.customerId),
+      name: license.customerName || "24 小时体验用户",
+      passwordSalt: salt,
+      passwordHash: hash,
+      role: "user",
+      plan: "trial",
+      creditsBalance: 0,
+      licenseCustomerId: license.customerId,
+      licenseCodeHash: codeHash,
+      licenseCodePurpose: "desktop",
+      licenseMachineHash: machineHash,
+      licenseActivatedAt: license.activatedAt || timestamp,
+      licenseExpiresAt: license.expiresAt || undefined,
+      onboardingCompletedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.users.push(user);
+  } else {
+    user.licenseCustomerId = user.licenseCustomerId || license.customerId;
+    user.licenseCodeHash = user.licenseCodeHash || codeHash;
+    user.licenseCodePurpose = "desktop";
+    user.licenseMachineHash = user.licenseMachineHash || machineHash;
+    user.licenseActivatedAt = user.licenseActivatedAt || license.activatedAt || timestamp;
+    user.licenseExpiresAt = license.expiresAt || undefined;
+    user.licenseSignedOutAt = undefined;
+    user.plan = user.plan === "creator" || user.plan === "studio" ? user.plan : "trial";
+    if (license.customerName) {
+      user.name = license.customerName;
+    }
+    user.updatedAt = timestamp;
+  }
+
+  if (store.projects.every((item) => !item.ownerUserId)) {
+    claimLegacyWorkspace(store, user.id);
+  }
+
+  const token = randomUUID();
+  store.sessions = store.sessions.filter((item) => item.userId !== user.id || item.expiresAt > timestamp);
+  store.sessions.push({
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  });
+
+  await writeStore(store);
+  await setSessionCookie(token);
+  clearDesktopActivationStatusCache();
+  return toAuthUser(user);
 }
 
 export async function activateSubscriptionLicense(

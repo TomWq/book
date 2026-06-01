@@ -105,6 +105,16 @@ function logReasonName(reason: string) {
       return "已有绑定设备";
     case "machine_reset":
       return "设备已重置";
+    case "trial_started":
+      return "自动体验开通";
+    case "trial_verified":
+      return "自动体验校验";
+    case "trial_expired":
+      return "自动体验到期";
+    case "trial_disabled":
+      return "自动体验禁用";
+    case "trial_machine_mismatch":
+      return "体验设备不匹配";
     default:
       return reason || "未知原因";
   }

@@ -15,8 +15,8 @@ function formatTime(value?: string) {
   return value ? new Date(value).toLocaleString("zh-CN") : "未激活";
 }
 
-function formatDate(value?: string) {
-  return value ? new Date(value).toLocaleDateString("zh-CN") : "未设置";
+function formatDateTime(value?: string) {
+  return value ? new Date(value).toLocaleString("zh-CN") : "未设置";
 }
 
 function compactMachine(value?: string) {
@@ -28,7 +28,11 @@ function compactMachine(value?: string) {
   return text.length > 18 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
 }
 
-function licenseStatusLabel(status: string) {
+function licenseStatusLabel(status: string, isTrial?: boolean) {
+  if (status === "active" && isTrial) {
+    return "体验正常";
+  }
+
   if (status === "active") {
     return "授权正常";
   }
@@ -60,7 +64,7 @@ function licenseStatusClass(status: string) {
   return "warning";
 }
 
-function remainingLabel(expiresAt?: string) {
+function remainingLabel(expiresAt?: string, isTrial?: boolean) {
   if (!expiresAt) {
     return "永久授权";
   }
@@ -70,8 +74,30 @@ function remainingLabel(expiresAt?: string) {
     return "已到期";
   }
 
+  if (isTrial) {
+    return `剩余 ${formatDuration(remainingMs)}`;
+  }
+
   const days = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
   return days > 1 ? `剩余约 ${days} 天` : "24 小时内到期";
+}
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) {
+    return `${days} 天 ${String(hours).padStart(2, "0")} 时 ${String(minutes).padStart(2, "0")} 分`;
+  }
+
+  if (hours > 0) {
+    return `${hours} 时 ${String(minutes).padStart(2, "0")} 分 ${String(seconds).padStart(2, "0")} 秒`;
+  }
+
+  return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
 }
 
 export default async function AccountSettingsPage() {
@@ -93,8 +119,8 @@ export default async function AccountSettingsPage() {
             <div className="account-balance-card">
               <span className="muted">授权状态</span>
               <div className="license-status-line">
-                <strong>{licenseStatusLabel(license.status)}</strong>
-                <span className={`pill ${licenseStatusClass(license.status)}`}>{remainingLabel(license.expiresAt)}</span>
+                <strong>{licenseStatusLabel(license.status, license.isTrial)}</strong>
+                <span className={`pill ${licenseStatusClass(license.status)}`}>{remainingLabel(license.expiresAt, license.isTrial)}</span>
               </div>
               <p>
                 {license.customerId
@@ -111,7 +137,7 @@ export default async function AccountSettingsPage() {
                 <span>最近校验</span>
                 <strong>{formatTime(license.lastVerifiedAt)}</strong>
                 <span>到期时间</span>
-                <strong>{license.expiresAt ? formatDate(license.expiresAt) : "永久授权"}</strong>
+                <strong>{license.expiresAt ? formatDateTime(license.expiresAt) : "永久授权"}</strong>
               </div>
               {license.message ? <p className="license-status-note">{license.message}</p> : null}
               {license.customerId ? <LicenseSessionActions /> : null}

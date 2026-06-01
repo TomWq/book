@@ -1,12 +1,14 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
 const defaultAssistantName = "墨澜";
 const maxPenNameLength = 20;
 const maxAssistantNameLength = 5;
 
 export function PenNameOnboarding({ initialPenName }: { initialPenName?: string }) {
+  const router = useRouter();
   const [open, setOpen] = useState(!initialPenName);
   const [penName, setPenName] = useState("");
   const [assistantName, setAssistantName] = useState(defaultAssistantName);
@@ -50,7 +52,7 @@ export function PenNameOnboarding({ initialPenName }: { initialPenName?: string 
       }
 
       setOpen(false);
-      window.location.reload();
+      router.refresh();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "保存笔名失败");
     } finally {

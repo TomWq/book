@@ -31,7 +31,7 @@ export function LicenseSessionActions() {
       }
 
       startTransition(() => {
-        router.replace("/activate?mode=replace&next=/projects");
+        router.replace("/activate?mode=replace&next=/");
         router.refresh();
       });
     } catch {

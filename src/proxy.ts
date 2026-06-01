@@ -60,12 +60,28 @@ export async function proxy(request: NextRequest) {
   }
 
   if (isDesktopRuntime()) {
+    if (pathname === "/activate") {
+      const mode = request.nextUrl.searchParams.get("mode");
+      const error = request.nextUrl.searchParams.get("error");
+
+      if (!error && mode !== "replace" && mode !== "web") {
+        const nextPath = request.nextUrl.searchParams.get("next") || "/";
+        const safeNextPath = nextPath.startsWith("/") ? nextPath : "/";
+        const url = request.nextUrl.clone();
+        url.pathname = "/api/license/restore";
+        url.search = "";
+        url.searchParams.set("next", safeNextPath);
+        return NextResponse.redirect(url);
+      }
+    }
+
     const isLicenseExemptPath =
       pathname === "/activate" ||
       pathname === "/download" ||
       pathname === "/downloads" ||
       pathname === "/manual" ||
       pathname === "/api/license/activate" ||
+      pathname === "/api/license/trial" ||
       pathname === "/api/license/web-login" ||
       pathname === "/api/license/restore" ||
       pathname === "/api/license/status" ||
@@ -121,6 +137,7 @@ export async function proxy(request: NextRequest) {
     "/api/download",
     "/api/jobs/worker",
     "/api/license/activate",
+    "/api/license/trial",
     "/api/license/web-login",
     "/api/license/restore",
     "/api/license/verify"

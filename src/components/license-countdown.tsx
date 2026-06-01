@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 
 type LicenseStatusResponse = {
   currentUser?: { id: string } | null;
@@ -42,9 +41,12 @@ export function LicenseCountdown({
   expiresAt: string;
   className?: string;
 }) {
-  const router = useRouter();
   const expiryMs = useMemo(() => Date.parse(expiresAt), [expiresAt]);
   const [label, setLabel] = useState("计算中...");
+
+  function redirectToActivate(message: string) {
+    window.location.replace(buildActivateUrl(message));
+  }
 
   useEffect(() => {
     if (!Number.isFinite(expiryMs)) {
@@ -68,8 +70,8 @@ export function LicenseCountdown({
         }
 
         if (!status.currentUser || status.licenseStatus === "expired" || status.licenseStatus === "disabled" || status.expired) {
-          const message = status.message || "体验已到期，请重新激活";
-          router.replace(buildActivateUrl(message));
+          const message = status.message || "体验时间已到期。如需继续使用，请联系管理员获取正式授权码。";
+          redirectToActivate(message);
           return;
         }
 
@@ -87,7 +89,7 @@ export function LicenseCountdown({
     const update = () => {
       const remaining = expiryMs - (Date.now() + serverOffsetMs);
       if (remaining <= 0) {
-        router.replace(buildActivateUrl("体验已到期，请重新激活"));
+        redirectToActivate("体验时间已到期。如需继续使用，请联系管理员获取正式授权码。");
         return;
       }
 
@@ -107,7 +109,7 @@ export function LicenseCountdown({
       window.clearInterval(timer);
       window.clearInterval(refreshTimer);
     };
-  }, [expiryMs, router]);
+  }, [expiryMs]);
 
   if (!Number.isFinite(expiryMs)) {
     return null;

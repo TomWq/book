@@ -36,24 +36,28 @@ export default async function ActivatePage({
   const params = await searchParams;
   const forceWebEntry = params.mode === "web";
   const desktopRuntime = isDesktopRuntime() && !forceWebEntry;
-  const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
+  const nextPath = params.next?.startsWith("/") ? params.next : "/";
   const replaceExisting = desktopRuntime && params.mode === "replace";
   const rawError = params.error ?? "";
   const normalizedError = normalizeActivationError(rawError);
   const status = desktopRuntime ? await getSubscriptionActivationStatus() : null;
   const currentUser = desktopRuntime ? status?.currentUser : await getCurrentUser();
 
-  if (!replaceExisting && currentUser) {
+  if (!replaceExisting && !rawError && currentUser) {
     redirect(nextPath);
   }
 
-  if (desktopRuntime && !replaceExisting && status?.activated) {
+  if (desktopRuntime && !replaceExisting && !rawError && status?.activated) {
+    redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
+  }
+
+  if (desktopRuntime && !replaceExisting && !rawError) {
     redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
   }
 
   if (rawError && !normalizedError) {
     const cleanUrl = new URL("/activate", "http://localhost");
-    if (nextPath !== "/projects") {
+    if (nextPath !== "/") {
       cleanUrl.searchParams.set("next", nextPath);
     }
 
@@ -92,7 +96,7 @@ export default async function ActivatePage({
                 {replaceExisting
                   ? "输入新的授权码，本机作品和设置会继续保留。"
                   : desktopRuntime
-                    ? "输入交付给你的一次性桌面授权码，验证后进入写作工作台。"
+                    ? "首次启动会自动开通体验；体验到期后，输入正式桌面授权码继续使用。"
                     : "输入交付给你的网页特邀授权码，验证后进入网页工作台。"}
               </p>
             </div>

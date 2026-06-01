@@ -16,7 +16,7 @@ export default async function RegisterPage({
 
   const user = await getCurrentUser();
   const params = await searchParams;
-  const nextPath = params.next?.startsWith("/") ? params.next : "/projects";
+  const nextPath = params.next?.startsWith("/") ? params.next : "/";
 
   return (
     <section className="auth-page">
