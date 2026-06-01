@@ -883,6 +883,69 @@ function pickBackupAiSettings(payload: Record<string, unknown>, user: StoredUser
     settings[0];
 }
 
+const backupCountKeys = [
+  "projects",
+  "sourceTexts",
+  "chapters",
+  "chapterAnalyses",
+  "storyAnalyses",
+  "templates",
+  "inspirations",
+  "outlines",
+  "writingBibles",
+  "characterProfiles",
+  "foreshadowings",
+  "plotStates",
+  "longFormPlans",
+  "customRelationGraphs",
+  "writingTaskCards",
+  "chapterDrafts",
+  "chapterLedgers",
+  "reviewReports",
+  "editReports",
+  "assistantThreads",
+  "assistantMessages",
+  "aiJobs"
+] as const;
+
+function backupPayloadCounts(payload: Record<string, unknown>) {
+  return Object.fromEntries(
+    backupCountKeys.map((key) => [key, Array.isArray(payload[key]) ? payload[key].length : 0])
+  ) as Record<(typeof backupCountKeys)[number], number>;
+}
+
+function projectScopedBackupCount<T extends { projectId?: string }>(
+  payload: Record<string, unknown>,
+  key: string,
+  projectIds: Set<string>
+) {
+  return arrayFromBackup<T>(payload, key).filter((item) => item.projectId && projectIds.has(item.projectId)).length;
+}
+
+function restoreBackupWarnings(payload: Record<string, unknown>, counts: Record<string, number>) {
+  const warnings: string[] = [];
+  const watchedSections = [
+    ["plotStates", "主线状态"],
+    ["characterProfiles", "人物档案"],
+    ["foreshadowings", "伏笔表"],
+    ["customRelationGraphs", "自定义图谱"],
+    ["chapterLedgers", "章节台账"]
+  ] as const;
+
+  watchedSections.forEach(([key, label]) => {
+    if (!Array.isArray(payload[key])) {
+      warnings.push(`备份文件缺少${label}数据段，可能是旧版本导出的文件。`);
+      return;
+    }
+
+    if ((counts[key] ?? 0) === 0) {
+      warnings.push(`备份文件中没有${label}记录。`);
+    }
+  });
+
+  return warnings;
+}
+
 function removeUserWorkspaceData(store: AppStore, userId: string) {
   const ownedProjectIds = getOwnedProjectIds(store, userId);
   const ownedTemplateIds = store.templates
@@ -1035,15 +1098,29 @@ export async function restoreCurrentUserDataFromBackup(payload: unknown) {
 
   await writeStore(store);
 
+  const restoredCounts = {
+    projects: projects.length,
+    templates: templates.length,
+    chapters: projectScopedBackupCount<StoredChapter>(data, "chapters", importedProjectIds),
+    drafts: projectScopedBackupCount<StoredChapterDraft>(data, "chapterDrafts", importedProjectIds),
+    writingBibles: projectScopedBackupCount<StoredWritingBible>(data, "writingBibles", importedProjectIds),
+    characterProfiles: projectScopedBackupCount<StoredCharacterProfile>(data, "characterProfiles", importedProjectIds),
+    foreshadowings: projectScopedBackupCount<StoredForeshadowing>(data, "foreshadowings", importedProjectIds),
+    plotStates: projectScopedBackupCount<StoredPlotState>(data, "plotStates", importedProjectIds),
+    longFormPlans: projectScopedBackupCount<StoredLongFormPlan>(data, "longFormPlans", importedProjectIds),
+    customRelationGraphs: projectScopedBackupCount<StoredCustomRelationGraph>(data, "customRelationGraphs", importedProjectIds),
+    writingTaskCards: projectScopedBackupCount<StoredWritingTaskCard>(data, "writingTaskCards", importedProjectIds),
+    chapterLedgers: projectScopedBackupCount<StoredChapterLedger>(data, "chapterLedgers", importedProjectIds),
+    reviewReports: projectScopedBackupCount<StoredReviewReport>(data, "reviewReports", importedProjectIds),
+    editReports: projectScopedBackupCount<StoredEditReport>(data, "editReports", importedProjectIds)
+  };
+
   return {
     restoredAt: now(),
     backupPath,
-    counts: {
-      projects: projects.length,
-      templates: templates.length,
-      chapters: arrayFromBackup<StoredChapter>(data, "chapters").length,
-      drafts: arrayFromBackup<StoredChapterDraft>(data, "chapterDrafts").length
-    }
+    counts: restoredCounts,
+    backupCounts: backupPayloadCounts(data),
+    warnings: restoreBackupWarnings(data, restoredCounts)
   };
 }
 
@@ -2253,8 +2330,10 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
   );
   const assistantThreadIds = new Set(assistantThreads.map((thread) => thread.id));
 
-  return {
+  const payload = {
     exportedAt: now(),
+    backupVersion: 2,
+    backupScope: "account-workspace",
     user: toAuthUser(user),
     plan: user.plan ?? "trial",
     onboardingCompletedAt: user.onboardingCompletedAt ?? null,
@@ -2285,6 +2364,11 @@ function buildExportPayload(store: AppStore, user: StoredUser) {
     creditTransactions: store.creditTransactions.filter((item) => item.userId === user.id),
     creditsBalance: getUserCreditBalance(user),
     aiSettings: getPrimaryAiSettings(store, user.id)
+  };
+
+  return {
+    ...payload,
+    counts: backupPayloadCounts(payload)
   };
 }
 
@@ -9461,6 +9545,19 @@ export async function applyEditedTextToDraft(input: {
     (item) => item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber
   ).length;
   const timestamp = now();
+  const resetReviewedDraftCount = store.chapterDrafts.reduce((count, item) => {
+    if (
+      item.projectId === input.projectId &&
+      item.chapterNumber >= draft.chapterNumber &&
+      item.status === "reviewed"
+    ) {
+      item.status = "draft";
+      item.updatedAt = timestamp;
+      return count + 1;
+    }
+
+    return count;
+  }, 0);
 
   store.chapterLedgers = store.chapterLedgers.filter(
     (item) => !(item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber)
@@ -9481,7 +9578,8 @@ export async function applyEditedTextToDraft(input: {
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
     deletedLedgerCount,
-    deletedReviewCount
+    deletedReviewCount,
+    resetReviewedDraftCount
   };
 }
 

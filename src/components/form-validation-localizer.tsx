@@ -24,8 +24,8 @@ function fieldLabel(field: ValidatableField) {
     return "此项";
   }
 
-  if (/激活码|license/i.test(raw)) {
-    return "激活码";
+  if (/授权码|激活码|license/i.test(raw)) {
+    return "授权码";
   }
 
   return raw.replace(/[：:*]*(必填|required)?$/i, "").slice(0, 16) || "此项";

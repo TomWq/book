@@ -66,6 +66,7 @@ export async function proxy(request: NextRequest) {
       pathname === "/downloads" ||
       pathname === "/manual" ||
       pathname === "/api/license/activate" ||
+      pathname === "/api/license/web-login" ||
       pathname === "/api/license/restore" ||
       pathname === "/api/license/status" ||
       pathname === "/api/license/verify" ||
@@ -92,7 +93,7 @@ export async function proxy(request: NextRequest) {
     if (pathname.startsWith("/api")) {
       return NextResponse.json(
         {
-          error: "请先输入激活码"
+          error: "请先完成授权"
         },
         { status: 401 }
       );

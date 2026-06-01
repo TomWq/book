@@ -12,7 +12,16 @@ type RestoreResult = {
     templates?: number;
     chapters?: number;
     drafts?: number;
+    writingBibles?: number;
+    characterProfiles?: number;
+    foreshadowings?: number;
+    plotStates?: number;
+    longFormPlans?: number;
+    customRelationGraphs?: number;
+    writingTaskCards?: number;
+    chapterLedgers?: number;
   };
+  warnings?: string[];
 };
 
 export function AccountRestoreActions() {
@@ -50,9 +59,19 @@ export function AccountRestoreActions() {
       }
 
       const counts = body?.counts;
-      const nextMessage = `已恢复 ${counts?.projects ?? 0} 个项目、${counts?.chapters ?? 0} 个章节、${counts?.drafts ?? 0} 篇正文。`;
+      const nextMessage = [
+        `已恢复 ${counts?.projects ?? 0} 个项目、${counts?.drafts ?? 0} 篇正文`,
+        `主线 ${counts?.plotStates ?? 0}`,
+        `人物 ${counts?.characterProfiles ?? 0}`,
+        `伏笔 ${counts?.foreshadowings ?? 0}`,
+        `图谱 ${counts?.customRelationGraphs ?? 0}`
+      ].join("，") + "。";
       setMessage(nextMessage);
-      showToast({ type: "success", title: "恢复完成", message: nextMessage });
+      showToast({
+        type: body?.warnings?.length ? "info" : "success",
+        title: "恢复完成",
+        message: body?.warnings?.length ? `${nextMessage}${body.warnings[0]}` : nextMessage
+      });
       startTransition(() => {
         router.refresh();
       });
