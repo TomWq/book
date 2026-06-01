@@ -29,6 +29,7 @@ type TaskCardContext = {
   longFormPlan?: StoredLongFormPlan | null;
   lastLedger: StoredChapterLedger | null;
   latestDraft: StoredChapterDraft | null;
+  latestDraftActualEnding?: string;
   characters: StoredCharacterProfile[];
   chapterCharacterConstraints?: string[];
   foreshadowings: StoredForeshadowing[];
@@ -1126,6 +1127,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
             lastLedger: context.lastLedger,
             latestDraft: context.latestDraft,
+            latestDraftActualEnding: context.latestDraftActualEnding ?? "",
             characters: context.characters,
             chapterCharacterConstraints: context.chapterCharacterConstraints ?? [],
             foreshadowings: context.foreshadowings,
@@ -1138,6 +1140,8 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             migrationRules: [
               "必须先从拆书结果抽象出结构功能，再迁移到当前新书变量。",
               "任务卡里的本章目标、承接、主线推进、爽点和章末钩子都必须服务当前 projectName、projectDescription、bible、plotState。",
+              "latestDraftActualEnding 是上一章真实正文落点；continuity 必须优先承接这个落点。lastLedger.cliffhanger 和旧任务卡 endingHook 只能辅助，不能覆盖真实正文。",
+              "如果 latestDraftActualEnding 与 lastLedger.cliffhanger、旧任务卡钩子或主线状态不一致，以 latestDraftActualEnding 为准；缺失事件只能写成后续待发生，不能写成已经发生。",
               "如果 projectDescription 不为空，它是本书核心承诺参考，任务卡不要明显违背简介里的主角身份、初始危机、金手指机制和核心卖点。",
               ...premiseAnchorRules,
               ...mechanismIntegrityRules,
@@ -1145,6 +1149,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "任务卡的 chapterGoal 必须写清本章如何推进核心承诺锚点；mainPlotProgress 必须写清这章推进的是主线还是支线，以及支线如何回到主线。",
               "任务卡的 pleasurePoint 必须写清：本章收益是什么、收益来源是什么、触发条件是什么、是否符合关键机制、是否存在越级风险；如果只是铺垫章，可以明确写“小收益/线索/误会加深”，不要强行突破。",
               "最近章节台账只提供连续性，不等于自动变成新主线；如果上一章钩子开启了支线，本章必须说明它如何回扣核心承诺，或如何在本章/下章收束。",
+              "任务卡 endingHook 是本章将要写出的真实章末落点；不要安排正文篇幅无法兑现的钩子，避免下一章承接一个正文里没有发生过的事件。",
               "章节功能可以轮换：允许日常经营、关系铺垫、信息差误会、资源小收益、机制试错、低强度压制，不要每章都强行新敌人、新地图、大战斗或大境界突破。",
               "前10章应优先稳住题材卖点、主角日常循环、关键机制反馈和第一阶段压力；除非大纲明确要求，不要过早开启大型副本或连续升级地图。",
               "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
@@ -1223,6 +1228,7 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
                 ...buildNarrativeDictionRules(context),
                 ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
+                "previousDraftTail 是上一章实际正文尾段；如果它与 taskCard.continuity、taskCard.endingHook 或 lastLedger 冲突，必须以 previousDraftTail 为准。",
                 "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
                 "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
                 "允许章节功能轮换：不是每章都必须大战、打脸或升级；可以写机制试错、日常经营、关系铺垫、低强度压力和小收益，但必须服务核心承诺。",
@@ -1361,9 +1367,10 @@ export async function* streamChapterDraftTextWithAi(
               "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
               ...buildNarrativeDictionRules(context),
               ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
+              "previousDraftTail 是上一章实际正文尾段；如果它与 taskCard.continuity、taskCard.endingHook 或 lastLedger 冲突，必须以 previousDraftTail 为准。",
               "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
               "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
-              "先承接上一章钩子，再推进本章目标。",
+              "先承接上一章真实正文落点，再推进本章目标。",
               "允许章节功能轮换：不是每章都必须大战、打脸或升级；可以写机制试错、日常经营、关系铺垫、低强度压力和小收益，但必须服务核心承诺。",
               "必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得把故事写成另一个频道或另一个题材。",
               "爽点必须有压制和释放，不要空泛总结。",

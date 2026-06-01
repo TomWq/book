@@ -4059,6 +4059,10 @@ function getPreviousDraftTail(store: AppStore, projectId: string, chapterNumber:
   return text.length > 1400 ? text.slice(-1400) : text;
 }
 
+function actualDraftEnding(content: string) {
+  return endingDraftExcerpt(content) || splitDraftSentences(content).at(-1) || "";
+}
+
 function buildLedgerFromDraft(
   draft: StoredChapterDraft,
   taskCard: StoredWritingTaskCard | undefined
@@ -4089,7 +4093,7 @@ function buildLedgerFromDraft(
     ["线索", "账本", "令牌", "名单", "暗纹", "真相", "伏笔", "秘密", "父亲", "幕后", "规则", "地图", "势力"],
     8
   );
-  const endingSentence = sentences.at(-1) ?? taskCard?.endingHook ?? "新的高层冲突出现";
+  const endingSentence = actualDraftEnding(draft.content) || taskCard?.endingHook || "新的高层冲突出现";
 
   return {
     events,
@@ -4100,7 +4104,7 @@ function buildLedgerFromDraft(
     ).slice(0, 6),
     newClues: cleanStateEntries([...(taskCard?.foreshadowingTasks ?? []), ...clueLines], 8),
     payoff: compactStateText(resourceLines[0] || taskCard?.pleasurePoint || "完成一次情绪回报"),
-    cliffhanger: compactStateText(taskCard?.endingHook || endingSentence, 110),
+    cliffhanger: compactStateText(endingSentence, 110),
     stateChanges: cleanStateEntries([
       taskCard?.mainPlotProgress ?? "",
       ...resourceLines,
@@ -4216,7 +4220,7 @@ function mergeAiLedgerFields(
     ).slice(0, 8),
     newClues: cleanStateEntries(aiUpdate.newClues.length > 0 ? aiUpdate.newClues : fallback.newClues, 10),
     payoff: compactStateText(aiUpdate.payoff || fallback.payoff, 110),
-    cliffhanger: compactStateText(aiUpdate.cliffhanger || fallback.cliffhanger, 130),
+    cliffhanger: compactStateText(fallback.cliffhanger || aiUpdate.cliffhanger, 130),
     stateChanges: cleanStateEntries([
       ...(aiUpdate.stateChanges.length > 0 ? aiUpdate.stateChanges : fallback.stateChanges),
       ...aiUpdate.relationshipChanges,
@@ -7919,6 +7923,7 @@ export async function generateWritingTaskCard(
       : nextChapterNumber;
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, targetChapterNumber);
   const lastDraft = getLatestChapterDraftBefore(store, projectId, targetChapterNumber);
+  const lastDraftActualEnding = lastDraft ? actualDraftEnding(lastDraft.content) : "";
 
   const contextForeshadowings = foreshadowingsForChapterContext(store, projectId, targetChapterNumber);
   const plotStateContext = plotStateForChapterContext(
@@ -7983,8 +7988,10 @@ export async function generateWritingTaskCard(
     ),
     continuity: withCharacterTaskRequirement(
       input?.continuity?.trim() ||
-        (lastLedger
-          ? `承接上一章钩子：${lastLedger.cliffhanger}`
+        (lastDraftActualEnding
+          ? `承接第 ${lastDraft?.chapterNumber} 章实际正文结尾：${compactStateText(lastDraftActualEnding, 140)}`
+          : lastLedger
+          ? `承接上一章台账钩子：${lastLedger.cliffhanger}`
           : targetChapterNumber === 1
             ? project.description.trim()
               ? `开启第一章：参考作品简介的开局设定：${project.description.trim()}`
@@ -8049,6 +8056,7 @@ export async function generateWritingTaskCard(
         longFormPlan,
         lastLedger,
         latestDraft: lastDraft,
+        latestDraftActualEnding: lastDraftActualEnding ? compactStateText(lastDraftActualEnding, 220) : "",
         characters: allCharacters,
         chapterCharacterConstraints,
         foreshadowings: contextForeshadowings,
@@ -9538,38 +9546,17 @@ export async function applyEditedTextToDraft(input: {
     throw new Error("二稿内容太短，不能替换章节正文");
   }
 
-  const deletedLedgerCount = store.chapterLedgers.filter(
-    (item) => item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber
+  const preservedLedgerCount = store.chapterLedgers.filter(
+    (item) => item.projectId === input.projectId && item.draftId === draft.id
   ).length;
-  const deletedReviewCount = store.reviewReports.filter(
-    (item) => item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber
-  ).length;
+  const deletedReviewCount = store.reviewReports.filter((item) => item.draftId === draft.id).length;
   const timestamp = now();
-  const resetReviewedDraftCount = store.chapterDrafts.reduce((count, item) => {
-    if (
-      item.projectId === input.projectId &&
-      item.chapterNumber >= draft.chapterNumber &&
-      item.status === "reviewed"
-    ) {
-      item.status = "draft";
-      item.updatedAt = timestamp;
-      return count + 1;
-    }
 
-    return count;
-  }, 0);
-
-  store.chapterLedgers = store.chapterLedgers.filter(
-    (item) => !(item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber)
-  );
-  store.reviewReports = store.reviewReports.filter(
-    (item) => !(item.projectId === input.projectId && item.chapterNumber >= draft.chapterNumber)
-  );
+  store.reviewReports = store.reviewReports.filter((item) => item.draftId !== draft.id);
 
   draft.content = revisedText;
   draft.status = "draft";
   draft.updatedAt = timestamp;
-  resetWritingMemoryAfterChapterDelete(store, project, draft.chapterNumber);
   project.updatedAt = timestamp;
 
   await writeStore(store);
@@ -9577,9 +9564,9 @@ export async function applyEditedTextToDraft(input: {
   return {
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
-    deletedLedgerCount,
+    preservedLedgerCount,
     deletedReviewCount,
-    resetReviewedDraftCount
+    stateUpdated: false
   };
 }
 

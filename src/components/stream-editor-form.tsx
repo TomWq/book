@@ -160,7 +160,7 @@ export function ApplySecondDraftButton({
     const confirmed = await confirm({
       title: "替换章节初稿",
       message: "确定用这版二稿替换当前章节初稿吗？",
-      detail: "替换后，本章原有台账和审稿结果会失效，需要重新生成。",
+      detail: "替换后会保留章节台账和长期状态，只清空本章旧审稿。",
       confirmLabel: "确认替换",
       tone: "danger"
     });
@@ -210,7 +210,7 @@ export function ApplySecondDraftButton({
       >
         {state.status === "running" ? "正在替换..." : "替换当前章节初稿"}
       </button>
-      {state.status === "done" ? <span className="pill success">已替换章节正文</span> : null}
+      {state.status === "done" ? <span className="pill success">已替换章节正文，台账已保留</span> : null}
       {state.status === "error" ? <span className="pill danger">{state.error}</span> : null}
     </div>
   );

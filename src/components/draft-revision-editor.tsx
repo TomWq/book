@@ -551,7 +551,7 @@ export function DraftRevisionEditor({
         );
       }
 
-      setState({ status: "saved", message: "正文已替换，请重新生成台账和审稿。" });
+      setState({ status: "saved", message: "正文已替换，章节台账和长期状态已保留，请重新审稿。" });
       router.refresh();
     } catch (error) {
       setState({
@@ -664,7 +664,7 @@ export function DraftRevisionEditor({
         {state.status === "saving" ? (
           <ActionLoadingOverlay
             title="正在保存替换正文"
-            description="正在更新章节正文，并清理旧台账和旧审稿结果。"
+            description="正在更新章节正文，保留章节台账和长期状态，只清理本章旧审稿。"
           />
         ) : null}
         <button
