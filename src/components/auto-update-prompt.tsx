@@ -390,7 +390,7 @@ export function AutoUpdatePrompt() {
 
         <div className="update-prompt-main">
           <div className="update-prompt-title-block">
-            <h2 id="update-prompt-title">AI 网文写作助手 v{result.latestVersion}</h2>
+            <h2 id="update-prompt-title">墨澜 · AI 网文写作助手 v{result.latestVersion}</h2>
             <p>
               当前版本 v{result.currentVersion}，建议更新到最新版以获得更好的体验。
               {result.required ? " 这个版本属于必须更新。" : ""}

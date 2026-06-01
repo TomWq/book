@@ -4,8 +4,8 @@ import path from "node:path";
 const rootDir = process.cwd();
 const sourcePath = path.join(rootDir, "USER_MANUAL.md");
 const outputDir = path.join(rootDir, "public", "manual");
-const htmlPath = path.join(outputDir, "AI网文写作助手使用手册.html");
-const pdfPath = path.join(outputDir, "AI网文写作助手使用手册.pdf");
+const htmlPath = path.join(outputDir, "墨澜 · AI 网文写作助手使用手册.html");
+const pdfPath = path.join(outputDir, "墨澜 · AI 网文写作助手使用手册.pdf");
 
 const markdown = readFileSync(sourcePath, "utf8");
 
@@ -135,7 +135,7 @@ function renderHtmlDocument() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI 网文写作助手使用手册</title>
+  <title>墨澜 · AI 网文写作助手使用手册</title>
   <style>
     :root {
       color-scheme: light;
@@ -365,7 +365,7 @@ function renderHtmlDocument() {
   <div class="shell">
     <section class="hero">
       <span>用户手册</span>
-      <h1>AI 网文写作助手使用手册</h1>
+      <h1>墨澜 · AI 网文写作助手使用手册</h1>
       <p>从激活、AI 配置，到创作新书、拆书模板、审稿修改、备份恢复，一份给真实用户照着走的完整说明。</p>
     </section>
     <div class="layout">
@@ -377,7 +377,7 @@ function renderHtmlDocument() {
         ${body}
       </main>
     </div>
-    <div class="footer">© 2026 AI 网文写作助手 · 本地优先，保护创作隐私</div>
+    <div class="footer">© 2026 墨澜 · AI 网文写作助手 · 本地优先，保护创作隐私</div>
   </div>
 </body>
 </html>`;
@@ -433,7 +433,7 @@ function buildPdfFromHtml() {
 }
 
 function buildPdfFromText() {
-  const plainTextPath = path.join(outputDir, "AI网文写作助手使用手册.txt");
+  const plainTextPath = path.join(outputDir, "墨澜 · AI 网文写作助手使用手册.txt");
   writeFileSync(plainTextPath, plainTextForPdf(), "utf8");
   const pdf = spawnSync("cupsfilter", [plainTextPath], {
     encoding: null,

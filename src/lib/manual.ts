@@ -57,7 +57,7 @@ function readLocalManual() {
 
 function isUsableManual(value: string) {
   const trimmed = value.trim();
-  return trimmed.length > 100 && trimmed.includes("AI 网文写作助手使用手册");
+  return trimmed.length > 100 && trimmed.includes("墨澜 · AI 网文写作助手使用手册");
 }
 
 async function fetchText(url: string) {

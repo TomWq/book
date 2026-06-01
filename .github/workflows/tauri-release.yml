@@ -187,5 +187,5 @@ jobs:
 
           gh release create "$TAG" "${RELEASE_ASSETS[@]}" \
             --draft \
-            --title "AI 网文写作助手 v${VERSION}" \
+            --title "墨澜 · AI 网文写作助手 v${VERSION}" \
             --notes "自动构建的桌面端安装包，请在 Assets 中下载对应系统版本。"

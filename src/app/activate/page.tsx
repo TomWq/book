@@ -72,7 +72,7 @@ export default async function ActivatePage({
         <header className="auth-immersive-nav">
           <Link href="/activate" className="auth-immersive-brand">
             <AppIconMark className="auth-brand-icon" />
-            <strong>AI 网文写作助手</strong>
+            <strong>墨澜 · AI 网文写作助手</strong>
           </Link>
           <nav>
             <span>{desktopRuntime ? "授权激活" : "网页授权"}</span>

@@ -1,9 +1,9 @@
 {
   "name": "ai-novel-workbench",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "面向网文作者的爆款拆解、模板迁移和长篇创作工作台",
-  "author": "AI 网文写作助手",
+  "author": "墨澜 · AI 网文写作助手",
   "scripts": {
     "dev": "next dev",
     "dev:public": "APP_RUNTIME=cloud NEXT_PUBLIC_APP_RUNTIME=cloud next dev",

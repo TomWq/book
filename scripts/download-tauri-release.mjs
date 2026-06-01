@@ -17,25 +17,25 @@ const force = args.has("--force") || args.has("--clobber");
 const assets = [
   {
     patterns: [`AI-Novel-Workbench-Setup-${version}-x64.exe`, `*Setup-${version}-x64.exe`, "*x64-setup.exe"],
-    output: `AI网文写作助手-Setup-${version}-x64.exe`
+    output: `墨澜 · AI 网文写作助手-Setup-${version}-x64.exe`
   },
   {
     patterns: [`AI-Novel-Workbench-Setup-${version}-x64.exe.sig`, `*Setup-${version}-x64.exe.sig`, "*x64-setup.exe.sig"],
-    output: `AI网文写作助手-Setup-${version}-x64.exe.sig`,
+    output: `墨澜 · AI 网文写作助手-Setup-${version}-x64.exe.sig`,
     optional: true
   },
   {
     patterns: [`AI-Novel-Workbench-${version}-arm64-mac.dmg`, `*${version}-arm64-mac.dmg`, "*aarch64.dmg"],
-    output: `AI网文写作助手-${version}-arm64-mac.dmg`
+    output: `墨澜 · AI 网文写作助手-${version}-arm64-mac.dmg`
   },
   {
     patterns: [`AI-Novel-Workbench-${version}-arm64-mac.app.tar.gz`, `*${version}-arm64-mac.app.tar.gz`, "*aarch64.app.tar.gz"],
-    output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz`,
+    output: `墨澜 · AI 网文写作助手-${version}-arm64-mac.app.tar.gz`,
     optional: true
   },
   {
     patterns: [`AI-Novel-Workbench-${version}-arm64-mac.app.tar.gz.sig`, `*${version}-arm64-mac.app.tar.gz.sig`, "*aarch64.app.tar.gz.sig"],
-    output: `AI网文写作助手-${version}-arm64-mac.app.tar.gz.sig`,
+    output: `墨澜 · AI 网文写作助手-${version}-arm64-mac.app.tar.gz.sig`,
     optional: true
   }
 ];

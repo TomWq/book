@@ -11,8 +11,8 @@ import {
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "下载中心 - AI 网文写作助手",
-  description: "下载 AI 网文写作助手 Windows 和 Apple 芯片 macOS 客户端。"
+  title: "下载中心 - 墨澜 · AI 网文写作助手",
+  description: "下载 墨澜 · AI 网文写作助手 Windows 和 Apple 芯片 macOS 客户端。"
 };
 
 type DownloadOption = {
@@ -53,7 +53,7 @@ function formatDate(value: string) {
 export default function DownloadPage() {
   const manifest = getLocalUpdateManifest();
   const manualHtmlUrl = "/manual";
-  const manualPdfUrl = "/manual/AI网文写作助手使用手册.pdf";
+  const manualPdfUrl = "/manual/墨澜 · AI 网文写作助手使用手册.pdf";
   const options: DownloadOption[] = [
     {
       key: "win32X64",
@@ -205,7 +205,7 @@ export default function DownloadPage() {
                     <li>如果系统提示无法验证开发者，请打开“系统设置”里的“隐私与安全性”，允许后再打开。</li>
                     <li>如果提示应用已损坏，可以在终端执行下面命令后重新打开。</li>
                   </ol>
-                  <code>xattr -dr com.apple.quarantine "/Applications/AI 网文写作助手.app"</code>
+                  <code>xattr -dr com.apple.quarantine "/Applications/墨澜 · AI 网文写作助手.app"</code>
                 </div>
               </details>
               <details className="download-note">

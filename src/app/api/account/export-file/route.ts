@@ -57,7 +57,7 @@ export async function POST() {
 
   const payload = await exportCurrentUserData();
   const exportDir = await resolveExportDirectory();
-  const filename = `AI网文写作助手-备份-${timestampForFilename()}.json`;
+  const filename = `墨澜 · AI 网文写作助手-备份-${timestampForFilename()}.json`;
   const filePath = path.join(exportDir, filename);
 
   await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");

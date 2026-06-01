@@ -152,7 +152,7 @@ function getEnvUpdateManifest(): AppUpdateManifest {
   const fallbackVersion = getCurrentAppVersion();
 
   return {
-    productName: "AI 网文写作助手",
+    productName: "墨澜 · AI 网文写作助手",
     version: cleanVersion(process.env.APP_LATEST_VERSION) || fallbackVersion,
     notes: normalizeNotes(process.env.APP_LATEST_RELEASE_NOTES) || "当前暂无新版说明。",
     announcement: normalizeNotes(process.env.APP_RELEASE_ANNOUNCEMENT),

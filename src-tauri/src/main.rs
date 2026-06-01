@@ -28,7 +28,7 @@ use tauri::{
 };
 use url::Url;
 
-const APP_NAME: &str = "AI 网文写作助手";
+const APP_NAME: &str = "墨澜 · AI 网文写作助手";
 const DEFAULT_PORT: u16 = 3131;
 const DEFAULT_LICENSE_SERVER_URL: &str = "http://62.234.205.107";
 const DEFAULT_LICENSE_SERVER_TIMEOUT_MS: &str = "30000";

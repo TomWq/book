@@ -237,15 +237,15 @@ async function main() {
   const files = {
     win32X64: {
       label: "Windows x64",
-      fileName: `AI网文写作助手-Setup-${artifactVersion}-x64.exe`,
-      updaterFileName: `AI网文写作助手-Setup-${artifactVersion}-x64.exe`,
+      fileName: `墨澜 · AI 网文写作助手-Setup-${artifactVersion}-x64.exe`,
+      updaterFileName: `墨澜 · AI 网文写作助手-Setup-${artifactVersion}-x64.exe`,
       platform: "win32",
       arch: "x64"
     },
     darwinArm64: {
       label: "macOS Apple 芯片",
-      fileName: `AI网文写作助手-${artifactVersion}-arm64-mac.dmg`,
-      updaterFileName: `AI网文写作助手-${artifactVersion}-arm64-mac.app.tar.gz`,
+      fileName: `墨澜 · AI 网文写作助手-${artifactVersion}-arm64-mac.dmg`,
+      updaterFileName: `墨澜 · AI 网文写作助手-${artifactVersion}-arm64-mac.app.tar.gz`,
       platform: "darwin",
       arch: "arm64"
     }
@@ -257,7 +257,7 @@ async function main() {
     })
   );
   const manifest = {
-    productName: "AI 网文写作助手",
+    productName: "墨澜 · AI 网文写作助手",
     version: manifestVersion,
     notes: releaseNotes.notes,
     announcement: releaseNotes.announcement,

@@ -24,7 +24,7 @@ export default async function LoginPage({
         <header className="auth-immersive-nav">
           <Link href="/" className="auth-immersive-brand">
             <AppIconMark className="auth-brand-icon" />
-            <strong>AI 网文写作助手</strong>
+            <strong>墨澜 · AI 网文写作助手</strong>
             {/* <em>作者专区</em> */}
           </Link>
           <nav>
@@ -63,7 +63,7 @@ export default async function LoginPage({
           <AuthForm mode="login" nextPath={nextPath} initialError={params.error} showSwitch={false} />
         </div>
 
-        <footer className="auth-immersive-footer">© 2026 AI 网文写作助手</footer>
+        <footer className="auth-immersive-footer">© 2026 墨澜 · AI 网文写作助手</footer>
       </div>
     </section>
   );

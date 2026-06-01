@@ -62,7 +62,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
             <Link href="/" className="brand-link">
               <AppIconMark />
               <div>
-                <div className="brand-title">AI 网文写作助手</div>
+                <div className="brand-title">墨澜 · AI 网文写作助手</div>
                 <div className="brand-subtitle">智能创作 · 章节生成 · 一致性审稿</div>
               </div>
             </Link>
@@ -90,7 +90,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
             <Link href={brandHref} className="brand-link workspace-brand">
               <AppIconMark />
               <div>
-                <div className="brand-title">AI 网文写作助手</div>
+                <div className="brand-title">墨澜 · AI 网文写作助手</div>
                 <div className="brand-subtitle">
                   {isAdminMode ? "授权中心 · 客户与版本管理" : "智能创作 · 章节生成 · 一致性审稿"}
                 </div>

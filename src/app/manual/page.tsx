@@ -4,7 +4,7 @@ import { Panel } from "@/components/panel";
 import { loadManualContent } from "@/lib/manual";
 
 export const metadata = {
-  title: "使用手册 - AI 网文写作助手"
+  title: "使用手册 - 墨澜 · AI 网文写作助手"
 };
 
 export const dynamic = "force-dynamic";

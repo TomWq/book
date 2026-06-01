@@ -8,7 +8,7 @@ import { FormValidationLocalizer } from "@/components/form-validation-localizer"
 import { isDesktopRuntime } from "@/lib/app-runtime";
 
 export const metadata: Metadata = {
-  title: "AI 网文写作助手",
+  title: "墨澜 · AI 网文写作助手",
   description: "拆书、模板迁移、长篇创作状态管理的 Web 工作台"
 };
 
