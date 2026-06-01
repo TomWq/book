@@ -98,9 +98,9 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const dialog = options ? (
-    <div className="modal-backdrop" role="presentation" onMouseDown={() => resolve(false)}>
+    <div className="modal-backdrop app-confirm-backdrop" role="presentation" onMouseDown={() => resolve(false)}>
       <div
-        className={`confirm-dialog ${options.tone === "danger" ? "danger-dialog" : ""}`}
+        className={`confirm-dialog app-confirm-dialog ${options.tone === "danger" ? "danger-dialog" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -113,7 +113,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
             <h2 id={titleId}>{options.title}</h2>
           </div>
           <button className="icon-button" type="button" aria-label="关闭" onClick={() => resolve(false)}>
-            x
+            ×
           </button>
         </div>
 

@@ -72,7 +72,7 @@
 :root[data-theme="dark"] .writing-directory-card,
 :root[data-theme="dark"] .project-summary-item {
   border-color: var(--line);
-  background: var(--bg-elevated);
+  background: var(--surface-panel-soft);
 }
 
 :root[data-theme="dark"] .list-item:hover,
@@ -2505,27 +2505,30 @@ form[aria-busy="true"] button[type="submit"] {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 120;
   display: grid;
   place-items: center;
-  padding: 20px;
-  background: rgba(18, 26, 44, 0.42);
+  padding: 24px;
+  background: rgba(18, 26, 44, 0.56);
+  backdrop-filter: blur(6px);
 }
 
-.confirm-dialog {
-  width: min(520px, 100%);
+.confirm-dialog,
+.app-confirm-dialog {
+  width: min(640px, calc(100vw - 32px));
   display: grid;
-  gap: 16px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  box-shadow: 0 22px 60px rgba(18, 26, 44, 0.22);
-  padding: 18px;
+  gap: 18px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  box-shadow: 0 26px 72px rgba(18, 26, 44, 0.28);
+  padding: 22px 22px 20px;
 }
 
-.confirm-dialog.danger-dialog {
-  border-color: rgba(219, 77, 77, 0.22);
-  box-shadow: 0 24px 70px rgba(219, 77, 77, 0.16), 0 22px 60px rgba(18, 26, 44, 0.18);
+.confirm-dialog.danger-dialog,
+.app-confirm-dialog.danger-dialog {
+  border-color: rgba(219, 77, 77, 0.28);
+  box-shadow: 0 28px 80px rgba(219, 77, 77, 0.18), 0 26px 72px rgba(18, 26, 44, 0.22);
 }
 
 .confirm-dialog-head,
@@ -2538,22 +2541,39 @@ form[aria-busy="true"] button[type="submit"] {
 
 .confirm-dialog-head h2 {
   margin: 10px 0 0;
-  font-size: 22px;
+  font-size: 24px;
+  line-height: 1.25;
 }
 
 .confirm-dialog-body {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .confirm-dialog-body p {
   margin: 0;
-  color: var(--muted);
-  line-height: 1.7;
+  color: var(--text);
+  line-height: 1.8;
+  font-size: 15px;
+}
+
+.confirm-dialog-body .list-item {
+  background: #f7f9fc;
+}
+
+.confirm-dialog.danger-dialog .confirm-dialog-body .list-item,
+.app-confirm-dialog.danger-dialog .confirm-dialog-body .list-item {
+  border-color: rgba(219, 77, 77, 0.18);
+  background: rgba(219, 77, 77, 0.06);
 }
 
 .confirm-dialog-actions {
   justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirm-dialog-actions .button {
+  min-width: 96px;
 }
 
 .compact-list {
@@ -12886,16 +12906,38 @@ body.update-prompt-open .floating-ai-launcher {
 }
 
 :root[data-theme="dark"] .modal-backdrop {
-  background: rgba(8, 12, 18, 0.58);
+  background: rgba(8, 12, 18, 0.7);
 }
 
-:root[data-theme="dark"] .confirm-dialog {
-  box-shadow: var(--shadow);
+:root[data-theme="dark"] .confirm-dialog,
+:root[data-theme="dark"] .app-confirm-dialog {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, #232b36 0%, #1d2430 100%);
+  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.36);
 }
 
-:root[data-theme="dark"] .confirm-dialog.danger-dialog {
+:root[data-theme="dark"] .confirm-dialog.danger-dialog,
+:root[data-theme="dark"] .app-confirm-dialog.danger-dialog {
   border-color: rgba(255, 113, 113, 0.24);
-  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.34);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+}
+
+:root[data-theme="dark"] .confirm-dialog-body p {
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .confirm-dialog-body .list-item {
+  background: #27303a;
+}
+
+:root[data-theme="dark"] .app-confirm-dialog .confirm-dialog-body .list-item {
+  background: #27303a;
+}
+
+:root[data-theme="dark"] .confirm-dialog.danger-dialog .confirm-dialog-body .list-item,
+:root[data-theme="dark"] .app-confirm-dialog.danger-dialog .confirm-dialog-body .list-item {
+  border-color: rgba(255, 113, 113, 0.2);
+  background: rgba(255, 113, 113, 0.08);
 }
 
 :root[data-theme="dark"] .update-prompt-backdrop {
