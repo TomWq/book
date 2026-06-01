@@ -4,6 +4,7 @@ import { type ReactNode, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/lib/client-toast";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 
 type Method = "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -264,6 +265,7 @@ export function ApiButton({
   pendingDescription?: string;
 }) {
   const { mutate, error, isPending } = useApiMutation();
+  const { confirm } = useConfirmDialog();
 
   return (
     <>
@@ -271,12 +273,18 @@ export function ApiButton({
         className={className}
         type="button"
         disabled={disabled || isPending}
-        onClick={() => {
-          if (confirmMessage && !window.confirm(confirmMessage)) {
+        onClick={async () => {
+          if (confirmMessage && !(await confirm({
+            title: label,
+            message: confirmMessage,
+            confirmLabel: "确认",
+            cancelLabel: "取消",
+            tone: className?.includes("danger") ? "danger" : "default"
+          }))) {
             return;
           }
 
-          mutate({
+          void mutate({
             endpoint,
             method,
             body,

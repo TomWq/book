@@ -2523,6 +2523,11 @@ form[aria-busy="true"] button[type="submit"] {
   padding: 18px;
 }
 
+.confirm-dialog.danger-dialog {
+  border-color: rgba(219, 77, 77, 0.22);
+  box-shadow: 0 24px 70px rgba(219, 77, 77, 0.16), 0 22px 60px rgba(18, 26, 44, 0.18);
+}
+
 .confirm-dialog-head,
 .confirm-dialog-actions {
   display: flex;
@@ -12886,6 +12891,11 @@ body.update-prompt-open .floating-ai-launcher {
 
 :root[data-theme="dark"] .confirm-dialog {
   box-shadow: var(--shadow);
+}
+
+:root[data-theme="dark"] .confirm-dialog.danger-dialog {
+  border-color: rgba(255, 113, 113, 0.24);
+  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.34);
 }
 
 :root[data-theme="dark"] .update-prompt-backdrop {

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 
 type ComparisonBlock = {
   id: string;
@@ -149,15 +150,20 @@ export function ApplySecondDraftButton({
   onApplied?: () => void;
 }) {
   const router = useRouter();
+  const { confirm } = useConfirmDialog();
   const [state, setState] = useState<{
     status: "idle" | "running" | "done" | "error";
     error?: string;
   }>({ status: "idle" });
 
   async function applyToDraft() {
-    const confirmed = window.confirm(
-      "确定用这版二稿替换当前章节初稿吗？替换后，本章原有台账和审稿结果会失效，需要重新生成。"
-    );
+    const confirmed = await confirm({
+      title: "替换章节初稿",
+      message: "确定用这版二稿替换当前章节初稿吗？",
+      detail: "替换后，本章原有台账和审稿结果会失效，需要重新生成。",
+      confirmLabel: "确认替换",
+      tone: "danger"
+    });
 
     if (!confirmed) {
       return;

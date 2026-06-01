@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 import { openExternalUrl } from "@/lib/client-open-external";
 
 type AiProfile = {
@@ -81,6 +82,7 @@ function applyProfiles({
 
 export function AiProfileManager({ profiles }: { profiles: AiProfile[] }) {
   const router = useRouter();
+  const { confirm } = useConfirmDialog();
   const [isPending, startTransition] = useTransition();
   const [profileList, setProfileList] = useState(profiles);
   const initialProfile = profileList.find((profile) => profile.active) ?? profileList[0] ?? blankProfile();
@@ -179,7 +181,12 @@ export function AiProfileManager({ profiles }: { profiles: AiProfile[] }) {
   }
 
   async function deleteProfile(profileId: string) {
-    if (!window.confirm("确定删除这个 AI 配置吗？")) {
+    if (!(await confirm({
+      title: "删除 AI 配置",
+      message: "确定删除这个 AI 配置吗？",
+      confirmLabel: "确认删除",
+      tone: "danger"
+    }))) {
       return;
     }
 

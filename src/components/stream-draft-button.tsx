@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ActionLoadingOverlay } from "@/components/api-form";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 import { DraftExportActions } from "@/components/draft-export-actions";
 
 type StreamState =
@@ -18,19 +19,34 @@ const streamDraftFinalMarker = "[[AI_NOVEL_WORKBENCH:STREAM_DRAFT_FINAL]]";
 export function StreamDraftButton({
   projectId,
   taskCardId,
+  draftId,
   projectName,
   chapterNumber,
-  title
+  title,
+  mode = "create",
+  initialContent = ""
 }: {
   projectId: string;
   taskCardId: string;
+  draftId?: string;
   projectName?: string;
   chapterNumber?: number;
   title?: string;
+  mode?: "create" | "regenerate";
+  initialContent?: string;
 }) {
   const router = useRouter();
+  const { confirm } = useConfirmDialog();
   const [state, setState] = useState<StreamState>({ status: "idle", content: "" });
-  const [targetWordCount, setTargetWordCount] = useState(1500);
+  const [targetWordCount, setTargetWordCount] = useState(() => {
+    const initialCount = initialContent.replace(/\s/g, "").length;
+
+    if (mode === "regenerate" && initialCount > 0) {
+      return Math.min(3000, Math.max(800, Math.round(initialCount / 100) * 100));
+    }
+
+    return 1500;
+  });
   const [oneShotState, setOneShotState] = useState<{
     status: "idle" | "running" | "done" | "error";
     error?: string;
@@ -41,8 +57,11 @@ export function StreamDraftButton({
   const liveCharacterCount = state.content.replace(/\s/g, "").length;
   const isSavingStreamDraft = state.status === "running" && state.phase === "saving";
   const runningButtonLabel = isSavingStreamDraft ? "正在保存草稿..." : "正在流式生成...";
+  const isRegenerating = mode === "regenerate";
   const runningStatusText = isSavingStreamDraft
-    ? "正文已生成，正在保存草稿并更新章节台账，请稍候。"
+    ? isRegenerating
+      ? "新正文已生成，正在替换当前正文并保留章节台账，请稍候。"
+      : "正文已生成，正在保存草稿并更新章节台账，请稍候。"
     : "正在生成正文，实时内容会持续出现在下方。";
   const normalizedPreviewTarget = normalizedTargetWordCount();
   const targetRangeText = `${Math.floor(normalizedPreviewTarget * 0.7)}-${Math.ceil(normalizedPreviewTarget * 1.25)}`;
@@ -94,7 +113,7 @@ export function StreamDraftButton({
     };
   }, [isPreviewOpen]);
 
-function normalizedTargetWordCount() {
+  function normalizedTargetWordCount() {
     const parsed = Number(targetWordCount);
 
     if (!Number.isFinite(parsed)) {
@@ -150,6 +169,24 @@ function normalizedTargetWordCount() {
   }
 
   async function generateDraft() {
+    if (isRegenerating && !draftId) {
+      setState({ status: "error", content: "", error: "缺少章节正文，无法重写" });
+      return;
+    }
+
+    if (
+      isRegenerating &&
+      !(await confirm({
+        title: "流式重写正文",
+        message: "确定清空当前正文并流式重写吗？",
+        detail: "保存成功后会替换原正文，章节台账会保留，旧审稿会清空。",
+        confirmLabel: "开始重写",
+        tone: "danger"
+      }))
+    ) {
+      return;
+    }
+
     const normalizedTarget = normalizedTargetWordCount();
     setTargetWordCount(normalizedTarget);
     setState({ status: "running", phase: "generating", content: "" });
@@ -162,8 +199,9 @@ function normalizedTargetWordCount() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          action: "generate_draft",
+          action: isRegenerating ? "regenerate_draft_content" : "generate_draft",
           taskCardId,
+          draftId,
           targetWordCount: normalizedTarget
         })
       });
@@ -207,6 +245,10 @@ function normalizedTargetWordCount() {
   }
 
   async function generateDraftOnce() {
+    if (isRegenerating) {
+      return;
+    }
+
     const normalizedTarget = normalizedTargetWordCount();
     setTargetWordCount(normalizedTarget);
     setOneShotState({ status: "running" });
@@ -243,8 +285,8 @@ function normalizedTargetWordCount() {
     <div className="list">
       {isSavingStreamDraft ? (
         <ActionLoadingOverlay
-          title="正在保存章节草稿"
-          description="正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"
+          title={isRegenerating ? "正在保存重写正文" : "正在保存章节草稿"}
+          description={isRegenerating ? "新正文已经生成，正在替换当前正文并保留章节台账，请不要刷新页面。" : "正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"}
         />
       ) : null}
       <div className="field">
@@ -272,16 +314,18 @@ function normalizedTargetWordCount() {
           onClick={generateDraft}
           disabled={isRunning || isOneShotRunning}
         >
-          {isRunning ? runningButtonLabel : "流式生成正文草稿"}
+          {isRunning ? runningButtonLabel : isRegenerating ? "流式重写正文" : "流式生成正文草稿"}
         </button>
-        <button
-          className="button"
-          type="button"
-          onClick={generateDraftOnce}
-          disabled={isRunning || isOneShotRunning}
-        >
-          {isOneShotRunning ? "正在生成..." : "一次性生成正文草稿"}
-        </button>
+        {isRegenerating ? null : (
+          <button
+            className="button"
+            type="button"
+            onClick={generateDraftOnce}
+            disabled={isRunning || isOneShotRunning}
+          >
+            {isOneShotRunning ? "正在生成..." : "一次性生成正文草稿"}
+          </button>
+        )}
       </div>
       {oneShotState.status === "done" ? (
         <div className="pill success">正文草稿已生成并保存</div>
@@ -293,7 +337,13 @@ function normalizedTargetWordCount() {
         <div className="field stream-draft-field">
           <div className="field-label-row">
             <div className="field-label">
-              {state.status === "done" ? "流式生成完成，已保存草稿" : isSavingStreamDraft ? "正文已生成，正在保存" : "实时正文"}
+              {state.status === "done"
+                ? isRegenerating
+                  ? "流式重写完成，已替换正文"
+                  : "流式生成完成，已保存草稿"
+                : isSavingStreamDraft
+                  ? "正文已生成，正在保存"
+                  : "实时正文"}
             </div>
             <div className="hero-actions">
               <span className="field-hint">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
@@ -315,7 +365,11 @@ function normalizedTargetWordCount() {
             </div>
           </div>
           {state.status === "running" ? <div className="pill form-status">{runningStatusText}</div> : null}
-          {state.status === "done" ? <div className="pill success">草稿已保存，台账已更新，可以继续审稿。</div> : null}
+          {state.status === "done" ? (
+            <div className="pill success">
+              {isRegenerating ? "正文已重写，台账已保留，请重新审稿。" : "草稿已保存，台账已更新，可以继续审稿。"}
+            </div>
+          ) : null}
           <textarea className="stream-draft-textarea" value={state.content} readOnly />
           {state.status === "error" ? <div className="pill danger">{state.error}</div> : null}
         </div>

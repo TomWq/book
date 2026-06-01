@@ -2,6 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 import { showToast } from "@/lib/client-toast";
 
 type RestoreResult = {
@@ -16,6 +17,7 @@ type RestoreResult = {
 
 export function AccountRestoreActions() {
   const router = useRouter();
+  const { confirm } = useConfirmDialog();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isPending, startTransition] = useTransition();
   const [isUploading, setIsUploading] = useState(false);
@@ -74,15 +76,24 @@ export function AccountRestoreActions() {
         className="visually-hidden"
         type="file"
         accept="application/json,.json"
-        onChange={(event) => {
+        onChange={async (event) => {
+          const input = event.currentTarget;
           const file = event.currentTarget.files?.[0];
 
           if (!file) {
             return;
           }
 
-          if (!window.confirm("恢复会替换当前账号的项目、模板、草稿和 AI 设置。系统会先自动备份当前数据，确认继续吗？")) {
-            event.currentTarget.value = "";
+          const confirmed = await confirm({
+            title: "恢复账号数据",
+            message: "恢复会替换当前账号的项目、模板、草稿和 AI 设置。",
+            detail: "系统会先自动备份当前数据，确认后再继续恢复。",
+            confirmLabel: "确认恢复",
+            tone: "danger"
+          });
+
+          if (!confirmed) {
+            input.value = "";
             return;
           }
 

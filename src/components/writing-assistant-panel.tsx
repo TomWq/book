@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 import { MoLanMascot } from "@/components/molan-mascot";
 
 type ChatMessage = {
@@ -212,6 +213,7 @@ export function WritingAssistantPanel({
   assistantName?: string;
   variant?: "drawer" | "workbench";
 }) {
+  const { confirm } = useConfirmDialog();
   const [input, setInput] = useState("");
   const authorDisplayName = useMemo(() => cleanAuthorName(authorName), [authorName]);
   const assistantDisplayName = useMemo(() => cleanAssistantName(assistantName), [assistantName]);
@@ -475,7 +477,16 @@ export function WritingAssistantPanel({
   }
 
   async function deleteThread() {
-    if (!activeThread || !window.confirm("确定删除这条 AI 对话历史吗？")) {
+    if (!activeThread) {
+      return;
+    }
+
+    if (!(await confirm({
+      title: "删除对话历史",
+      message: "确定删除这条 AI 对话历史吗？",
+      confirmLabel: "确认删除",
+      tone: "danger"
+    }))) {
       return;
     }
 

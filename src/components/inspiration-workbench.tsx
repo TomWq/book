@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ActionLoadingOverlay } from "@/components/api-form";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 import { CustomSelect, type SelectOption } from "@/components/custom-select";
 import type {
   InspirationAiOutput,
@@ -250,6 +251,7 @@ export function InspirationWorkbench({
   projects: StoredProject[];
   initialProjectId?: string;
 }) {
+  const { confirm } = useConfirmDialog();
   const [inspirations, setInspirations] = useState(initialInspirations);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<InspirationType | "">("");
@@ -607,7 +609,12 @@ export function InspirationWorkbench({
       return;
     }
 
-    if (!window.confirm(`确定删除灵感「${selected.title}」吗？`)) {
+    if (!(await confirm({
+      title: "删除灵感",
+      message: `确定删除灵感「${selected.title}」吗？`,
+      confirmLabel: "确认删除",
+      tone: "danger"
+    }))) {
       return;
     }
 

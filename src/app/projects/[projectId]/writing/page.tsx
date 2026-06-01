@@ -465,6 +465,22 @@ export default async function ProjectWritingPage({
                   initialContent={activeDraft.content}
                   reviewIssues={activeReview?.issues ?? []}
                 />
+                <div className="task-block">
+                  <div className="task-title">保留台账重写正文</div>
+                  <div className="muted">
+                    点击后会清空下方实时正文区域并重新流式生成；保存成功后替换当前正文，任务卡和章节台账保留，旧审稿会清空。
+                  </div>
+                  <StreamDraftButton
+                    projectId={projectId}
+                    taskCardId={activeDraft.taskCardId}
+                    draftId={activeDraft.id}
+                    projectName={writingState.project.name}
+                    chapterNumber={activeDraft.chapterNumber}
+                    title={activeDraft.title}
+                    mode="regenerate"
+                    initialContent={activeDraft.content}
+                  />
+                </div>
                 <div className="hero-actions">
                   <Link className="button primary" href={`/projects/${projectId}/writing/${activeDraft.id}`}>
                     全屏阅读
@@ -489,15 +505,6 @@ export default async function ProjectWritingPage({
                     label={activeReview ? "重新审稿并合并建议" : "一致性审稿"}
                     pendingTitle={activeReview ? "正在重新审稿" : "正在一致性审稿"}
                     pendingDescription="正在检查设定、人物状态、章末钩子和 AI 味表达。"
-                  />
-                  <ApiButton
-                    endpoint={`/api/projects/${projectId}/writing`}
-                    body={{ action: "regenerate_draft_content", draftId: activeDraft.id }}
-                    label="只重写正文"
-                    confirmMessage="确定只重写当前正文吗？会替换正文内容，保留任务卡和章节台账；旧审稿会清空，需要重新审稿。"
-                    pendingTitle={`正在重写第 ${activeDraft.chapterNumber} 章正文`}
-                    pendingDescription="正在按原任务卡重新生成正文，不删除章节台账和长期状态。"
-                    successMessage="正文已重写，台账已保留"
                   />
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
@@ -623,18 +630,6 @@ export default async function ProjectWritingPage({
                           chapterNumber={chapter.draft.chapterNumber}
                           title={chapter.draft.title}
                           compact
-                        />
-                      ) : null}
-                      {chapter.draft ? (
-                        <ApiButton
-                          endpoint={`/api/projects/${projectId}/writing`}
-                          body={{ action: "regenerate_draft_content", draftId: chapter.draft.id }}
-                          label="只重写正文"
-                          className="button small-button"
-                          confirmMessage={`确定只重写第 ${chapter.chapterNumber} 章正文吗？会替换正文内容，保留任务卡和章节台账；旧审稿会清空，需要重新审稿。`}
-                          pendingTitle={`正在重写第 ${chapter.chapterNumber} 章正文`}
-                          pendingDescription="正在按原任务卡重新生成正文，不删除章节台账和长期状态。"
-                          successMessage="正文已重写，台账已保留"
                         />
                       ) : null}
                       <ApiButton

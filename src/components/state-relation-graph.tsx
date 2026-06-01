@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirmDialog } from "@/components/confirm-dialog-provider";
 import {
   Background,
   BackgroundVariant,
@@ -198,6 +199,7 @@ export function StateRelationGraph({
   edges
 }: StateRelationGraphProps) {
   const router = useRouter();
+  const { confirm } = useConfirmDialog();
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [selectedNode, setSelectedNode] = useState<StateFlowNodeData | null>(null);
@@ -322,13 +324,18 @@ export function StateRelationGraph({
     });
   }
 
-  function handleDeleteNode() {
+  async function handleDeleteNode() {
     if (!selectedNode?.source) {
       setGraphActionError("这个节点是汇总或历史记录，暂不支持直接删除。");
       return;
     }
 
-    if (!window.confirm(`确定删除或清空「${selectedNode.title}」吗？`)) {
+    if (!(await confirm({
+      title: "删除或清空节点",
+      message: `确定删除或清空「${selectedNode.title}」吗？`,
+      confirmLabel: "确认删除",
+      tone: "danger"
+    }))) {
       return;
     }
 
@@ -356,12 +363,17 @@ export function StateRelationGraph({
     });
   }
 
-  function handleDeleteEdge(edgeId: string) {
+  async function handleDeleteEdge(edgeId: string) {
     if (!customGraphId) {
       return;
     }
 
-    if (!window.confirm("确定删除这条关系线吗？")) {
+    if (!(await confirm({
+      title: "删除关系线",
+      message: "确定删除这条关系线吗？",
+      confirmLabel: "确认删除",
+      tone: "danger"
+    }))) {
       return;
     }
 
