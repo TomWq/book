@@ -26,7 +26,7 @@ export async function PUT(request: Request) {
       baseUrl: String(body.baseUrl ?? ""),
       apiKey: String(body.apiKey ?? ""),
       model: String(body.model ?? ""),
-      timeoutMs: Number(body.timeoutMs ?? 90000),
+      timeoutMs: Number(body.timeoutMs ?? 300000),
       dailyLimit: Number(body.dailyLimit ?? 3),
       clearApiKey: body.clearApiKey === true || body.clearApiKey === "true"
     });

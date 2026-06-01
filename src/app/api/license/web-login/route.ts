@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { activateWebLicenseSession } from "@/lib/projects";
+import { shouldUseSecureCookie } from "@/lib/auth-session";
 import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
@@ -39,8 +40,7 @@ export async function POST(request: Request) {
         sameSite: "lax",
         path: "/",
         maxAge: 400 * 24 * 60 * 60,
-        secure: process.env.AUTH_COOKIE_SECURE?.trim().toLowerCase() === "true" ||
-          (process.env.AUTH_COOKIE_SECURE == null && process.env.NODE_ENV === "production")
+        secure: await shouldUseSecureCookie()
       });
     }
 

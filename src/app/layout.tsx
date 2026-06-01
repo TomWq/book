@@ -4,6 +4,7 @@ import "./globals.css";
 import { ConfirmDialogProvider } from "@/components/confirm-dialog-provider";
 import { AppShell } from "@/components/app-shell";
 import { AppToaster } from "@/components/app-toaster";
+import { CoverImageGenerationCenter } from "@/components/cover-image-generation-center";
 import { FormValidationLocalizer } from "@/components/form-validation-localizer";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 
@@ -35,6 +36,7 @@ export default function RootLayout({
         <ConfirmDialogProvider>
           <AppShell>{children}</AppShell>
         </ConfirmDialogProvider>
+        <CoverImageGenerationCenter />
         <AppToaster />
       </body>
     </html>

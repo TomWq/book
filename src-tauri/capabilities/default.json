@@ -16,6 +16,7 @@
     "opener:default",
     "dialog:default",
     "fs:allow-mkdir",
+    "fs:allow-write-file",
     "fs:allow-write-text-file",
     {
       "identifier": "fs:scope",

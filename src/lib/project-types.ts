@@ -23,6 +23,7 @@ export type StoredProject = {
   id: string;
   ownerUserId?: string;
   name: string;
+  authorName?: string;
   type: "analysis" | "writing";
   description: string;
   genre: string;

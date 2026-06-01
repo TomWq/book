@@ -1,7 +1,7 @@
 {
   "name": "ai-novel-workbench",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "面向网文作者的爆款拆解、模板迁移和长篇创作工作台",
   "author": "墨澜 · AI 网文写作助手",
   "scripts": {
@@ -15,7 +15,7 @@
     "icons:generate": "node scripts/generate-desktop-icons.mjs",
     "tauri:prepare": "node scripts/tauri-prepare.mjs",
     "tauri:dev": "npm run build && npm run tauri:prepare && tauri dev",
-    "tauri:dev:trial": "LICENSE_SERVER_URL=http://127.0.0.1:3101 npm run tauri:dev",
+    "tauri:dev:trial": "LICENSE_SERVER_URL=http://10.189.154.93:3000 npm run tauri:dev",
     "tauri:build": "node scripts/tauri-build.mjs",
     "tauri:build:mac:arm64": "node scripts/tauri-build.mjs --mac --arm64",
     "tauri:build:win:x64": "node scripts/tauri-build.mjs --win --x64",

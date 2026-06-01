@@ -32,7 +32,7 @@ export function CoverImageSettingsForm({ settings }: { settings: PublicCoverImag
   const [isPending, startTransition] = useTransition();
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl || "https://newapi.602774041.xyz/v1");
   const [model, setModel] = useState(settings.model || "gpt-image-2");
-  const [timeoutMs, setTimeoutMs] = useState(settings.timeoutMs || 90000);
+  const [timeoutMs, setTimeoutMs] = useState(settings.timeoutMs || 300000);
   const [dailyLimit, setDailyLimit] = useState(settings.dailyLimit || 3);
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<Status>({ type: "idle", message: "" });
@@ -97,8 +97,9 @@ export function CoverImageSettingsForm({ settings }: { settings: PublicCoverImag
             min="10000"
             step="1000"
             value={timeoutMs}
-            onChange={(event) => setTimeoutMs(Number(event.target.value) || 90000)}
+            onChange={(event) => setTimeoutMs(Number(event.target.value) || 300000)}
           />
+          <div className="field-hint">调试阶段建议 300000 ms，稳定后再调低。</div>
         </div>
       </div>
       <div className="field">

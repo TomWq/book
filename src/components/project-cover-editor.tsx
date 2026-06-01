@@ -182,7 +182,15 @@ export function ProjectCoverEditor({
     <div className="project-cover-editor">
       <div className={`book-cover ${hasRenderableCover ? "has-custom-cover" : ""}`}>
         {hasRenderableCover ? (
-          <img className="book-cover-image" src={effectiveCoverUrl} alt={`${title} 封面`} />
+          <img
+            className="book-cover-image"
+            src={effectiveCoverUrl}
+            alt={`${title} 封面`}
+            onError={() => {
+              setError("封面图片加载失败，请重新生成或重新上传");
+              setPreviewUrl(storedCoverUrl && storedCoverUrl !== effectiveCoverUrl ? storedCoverUrl : "");
+            }}
+          />
         ) : (
           <>
             <div className="book-cover-title">{title}</div>
@@ -255,7 +263,7 @@ export function ProjectCoverEditor({
                     <span className="taxonomy-card-icon alt" aria-hidden="true">AI</span>
                     <span>
                       <strong>AI 生成</strong>
-                      <small>按当前 Key 的后台次数限制，生成成功后自动替换当前封面。</small>
+                      <small>每日免费3 次，生成后可预览、下载或选择使用。</small>
                     </span>
                   </button>
                 </div>

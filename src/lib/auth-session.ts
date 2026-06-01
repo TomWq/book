@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import type { AppStore } from "@/lib/project-types";
 
 const SESSION_COOKIE = "nw_session";
@@ -40,18 +40,46 @@ export function sessionExpiresAt() {
   return new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
+async function isLocalHttpRequest() {
+  const headerStore = await headers().catch(() => null);
+  const proto = headerStore?.get("x-forwarded-proto") ?? "";
+  const host = (headerStore?.get("host") ?? "").split(":")[0].toLowerCase();
+
+  return proto !== "https" && (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
+}
+
+export async function shouldUseSecureCookie() {
+  const configured = process.env.AUTH_COOKIE_SECURE?.trim().toLowerCase();
+
+  if (configured === "true") {
+    return true;
+  }
+
+  if (configured === "false") {
+    return false;
+  }
+
+  if (await isLocalHttpRequest()) {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "production";
+}
+
 export async function setSessionCookie(token: string) {
   const store = await getCookieStore();
-  const cookieSecure =
-    process.env.AUTH_COOKIE_SECURE?.trim().toLowerCase() === "true" ||
-    (process.env.AUTH_COOKIE_SECURE == null && process.env.NODE_ENV === "production");
 
   store?.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
-    secure: cookieSecure
+    secure: await shouldUseSecureCookie()
   });
 }
 

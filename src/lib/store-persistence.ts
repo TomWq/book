@@ -95,6 +95,7 @@ function ensureSqliteSchema() {
       "id" TEXT NOT NULL PRIMARY KEY,
       "ownerUserId" TEXT,
       "name" TEXT NOT NULL,
+      "authorName" TEXT,
       "type" TEXT NOT NULL,
       "description" TEXT NOT NULL,
       "genre" TEXT NOT NULL,
@@ -585,6 +586,7 @@ function ensureSqliteSchema() {
 
   [
     'ALTER TABLE "Project" ADD COLUMN "ownerUserId" TEXT',
+    'ALTER TABLE "Project" ADD COLUMN "authorName" TEXT',
     'ALTER TABLE "Project" ADD COLUMN "coverImageUrl" TEXT',
     'ALTER TABLE "Template" ADD COLUMN "ownerUserId" TEXT',
     'ALTER TABLE "Inspiration" ADD COLUMN "ownerUserId" TEXT',
@@ -833,9 +835,9 @@ function syncCoreTables(store: unknown) {
 
     const insertProject = db.prepare(`
       INSERT INTO "Project" (
-        "id", "ownerUserId", "name", "type", "description", "genre", "coverImageUrl", "status", "createdAt", "updatedAt"
+        "id", "ownerUserId", "name", "authorName", "type", "description", "genre", "coverImageUrl", "status", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @ownerUserId, @name, @type, @description, @genre, @coverImageUrl, @status, @createdAt, @updatedAt
+        @id, @ownerUserId, @name, @authorName, @type, @description, @genre, @coverImageUrl, @status, @createdAt, @updatedAt
       )
     `);
 
@@ -844,6 +846,7 @@ function syncCoreTables(store: unknown) {
         id: text(project.id),
         ownerUserId: nullableText(project.ownerUserId),
         name: text(project.name),
+        authorName: nullableText(project.authorName),
         type: text(project.type),
         description: text(project.description),
         genre: text(project.genre),
@@ -1805,6 +1808,7 @@ function readCoreStoreFromDb<T>(fallback: T) {
         id: text(item.id),
         ownerUserId: maybeString(item.ownerUserId),
         name: text(item.name),
+        authorName: maybeString(item.authorName),
         type: text(item.type),
         description: text(item.description),
         genre: text(item.genre),

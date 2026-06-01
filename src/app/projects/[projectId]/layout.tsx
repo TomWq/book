@@ -87,7 +87,7 @@ export default async function ProjectLayout({
                 projectId={project.id}
                 title={project.name}
                 coverImageUrl={project.coverImageUrl}
-                subtitle="创作项目"
+                subtitle={project.authorName || "作者"}
               />
               <div className="project-shell-copy">
                 <div className="project-shell-title-row">

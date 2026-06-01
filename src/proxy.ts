@@ -86,6 +86,7 @@ export async function proxy(request: NextRequest) {
       pathname === "/api/license/restore" ||
       pathname === "/api/license/status" ||
       pathname === "/api/license/verify" ||
+      pathname === "/api/license/cover-image" ||
       pathname === "/api/manual" ||
       pathname === "/api/app/update/manifest" ||
       pathname === "/api/app/update/check" ||
@@ -140,7 +141,8 @@ export async function proxy(request: NextRequest) {
     "/api/license/trial",
     "/api/license/web-login",
     "/api/license/restore",
-    "/api/license/verify"
+    "/api/license/verify",
+    "/api/license/cover-image"
   ]);
   const isAuthApi = pathname.startsWith("/api/auth");
 
@@ -162,6 +164,10 @@ export async function proxy(request: NextRequest) {
 
   if (pathname === "/login" || pathname === "/register") {
     return NextResponse.redirect(new URL("/activate", request.url));
+  }
+
+  if (pathname === "/admin" || (pathname === "/activate" && request.nextUrl.searchParams.get("next") === "/admin")) {
+    return NextResponse.redirect(new URL(adminLoginPath, request.url));
   }
 
   if (publicPaths.has(pathname) || pathname.startsWith("/api/download/") || pathname.startsWith("/api/app/tauri-update/")) {

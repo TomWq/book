@@ -64,6 +64,7 @@ export async function POST(request: Request) {
 
   const project = await createProject({
     name,
+    authorName: String(body.authorName ?? ""),
     type: readProjectType(body.type),
     genre: String(body.genre ?? ""),
     description: String(body.description ?? ""),

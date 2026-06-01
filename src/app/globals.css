@@ -11115,9 +11115,11 @@ body.update-prompt-open .floating-ai-launcher {
 }
 
 .ai-cover-dialog {
-  width: min(760px, calc(100dvw - 48px));
+  position: relative;
+  width: min(960px, calc(100dvw - 48px));
   height: auto;
   max-height: calc(100dvh - 48px);
+  overflow: hidden;
 }
 
 .ai-cover-dialog-body {
@@ -11128,16 +11130,217 @@ body.update-prompt-open .floating-ai-launcher {
   padding: 22px 24px;
 }
 
-.ai-cover-style-grid {
+.ai-cover-prompt-library {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.ai-cover-prompt-head {
+  display: grid;
   gap: 10px;
 }
 
-.ai-cover-style-grid .assist-suggestion {
-  min-height: 58px;
-  white-space: normal;
-  line-height: 1.45;
+.ai-cover-prompt-head span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-cover-prompt-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-cover-prompt-tabs button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ai-cover-prompt-tabs button:hover,
+.ai-cover-prompt-tabs button.active {
+  border-color: rgba(31, 94, 255, 0.34);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ai-cover-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.ai-cover-prompt-card {
+  min-height: 86px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 12px 13px;
+  border: 1px solid rgba(217, 225, 238, 0.9);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--text);
+  text-align: left;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.ai-cover-prompt-card strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.ai-cover-prompt-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-cover-prompt-card:hover,
+.ai-cover-prompt-card.active {
+  border-color: rgba(31, 94, 255, 0.42);
+  box-shadow: 0 10px 24px rgba(31, 94, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.ai-cover-prompt-card.active {
+  background: linear-gradient(180deg, #f5f8ff, #ffffff);
+}
+
+:root[data-theme="dark"] .ai-cover-prompt-library {
+  border-color: var(--line);
+  background: var(--surface-panel-soft);
+}
+
+:root[data-theme="dark"] .ai-cover-prompt-tabs button,
+:root[data-theme="dark"] .ai-cover-prompt-card {
+  border-color: var(--line);
+  background: var(--bg-elevated);
+}
+
+:root[data-theme="dark"] .ai-cover-prompt-tabs button:hover,
+:root[data-theme="dark"] .ai-cover-prompt-tabs button.active,
+:root[data-theme="dark"] .ai-cover-prompt-card:hover,
+:root[data-theme="dark"] .ai-cover-prompt-card.active {
+  border-color: rgba(77, 190, 208, 0.42);
+  background: rgba(77, 190, 208, 0.1);
+}
+
+.ai-cover-loading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(248, 250, 252, 0.76);
+  backdrop-filter: blur(2px);
+}
+
+.ai-cover-loading-card {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(320px, 100%);
+  padding: 22px;
+  border: 1px solid rgba(211, 219, 232, 0.92);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  text-align: center;
+  box-shadow: 0 22px 48px rgba(28, 42, 72, 0.18);
+}
+
+.ai-cover-loading-card strong {
+  font-size: 17px;
+}
+
+.ai-cover-loading-card span:last-child {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-cover-loading-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(37, 99, 235, 0.18);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: ai-cover-spin 0.86s linear infinite;
+}
+
+.ai-cover-floating-panel {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 160;
+  width: min(360px, calc(100dvw - 32px));
+  pointer-events: none;
+}
+
+.ai-cover-floating-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(211, 219, 232, 0.92);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  box-shadow: 0 24px 70px rgba(18, 26, 44, 0.22);
+  pointer-events: auto;
+}
+
+.ai-cover-floating-card > span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-cover-floating-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-cover-floating-head strong {
+  font-size: 15px;
+}
+
+.ai-cover-floating-preview {
+  width: 100%;
+  max-height: min(56dvh, 520px);
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-cover-floating-actions {
+  justify-content: flex-end;
+}
+
+.ai-cover-floating-actions .button {
+  min-height: 36px;
+}
+
+@keyframes ai-cover-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .cover-method-dialog {

@@ -67,7 +67,8 @@ export function AuthForm({
     <>
       {error ? <div className="pill danger auth-alert">{error}</div> : null}
 
-      <form className="auth-form" onSubmit={handleSubmit} aria-busy={isPending}>
+      <form className="auth-form" method="post" action={`/api/auth/${mode}`} onSubmit={handleSubmit} aria-busy={isPending}>
+        <input type="hidden" name="next" value={nextPath} />
         {!isLogin ? (
           <label className="auth-field">
             <span>用户名</span>

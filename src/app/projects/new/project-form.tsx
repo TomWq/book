@@ -277,6 +277,7 @@ export function ProjectForm() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isAiCoverDialogOpen, setIsAiCoverDialogOpen] = useState(false);
+  const [coverPreviewError, setCoverPreviewError] = useState("");
   const [activeTagSection, setActiveTagSection] = useState<TagSectionKey>("mainCategories");
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [protagonistSuggestions, setProtagonistSuggestions] = useState<CharacterNameSuggestion[]>([]);
@@ -319,6 +320,7 @@ export function ProjectForm() {
         setTitleConcept(draft.titleConcept);
         setAuthorName(draft.authorName);
         setCoverImageUrl(draft.coverImageUrl);
+        setCoverPreviewError("");
         setTitleNamingStyle(draft.titleNamingStyle);
         setTagTaxonomyStyle(draft.tagTaxonomyStyle);
         setDescriptionWritingStyle(draft.descriptionWritingStyle);
@@ -489,10 +491,12 @@ export function ProjectForm() {
     }
 
     setCoverImageUrl(await fileToDataUrl(file));
+    setCoverPreviewError("");
   }
 
   function clearCoverImage() {
     setCoverImageUrl("");
+    setCoverPreviewError("");
   }
 
   useEffect(() => {
@@ -715,6 +719,7 @@ export function ProjectForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: asText(formData.get("name")),
+          authorName: asText(formData.get("authorName")),
           type: "writing",
           genre,
           description: asText(formData.get("description")),
@@ -758,7 +763,12 @@ export function ProjectForm() {
       <aside className="book-create-preview">
         <div className={`book-cover ${coverImageUrl ? "has-custom-cover" : ""}`}>
           {coverImageUrl ? (
-            <img className="book-cover-image" src={coverImageUrl} alt="自定义封面预览" />
+            <img
+              className="book-cover-image"
+              src={coverImageUrl}
+              alt="自定义封面预览"
+              onError={() => setCoverPreviewError("封面图片加载失败，请重新生成或重新上传")}
+            />
           ) : (
             <>
               <div className="book-cover-title">{coverTitle}</div>
@@ -784,6 +794,7 @@ export function ProjectForm() {
           <strong>封面会同步保存</strong>
           <span>上传后会写入项目封面；未上传时会用书名和作者名生成临时封面。</span>
         </div>
+        {coverPreviewError ? <div className="field-hint project-cover-error">{coverPreviewError}</div> : null}
         <div className="tag-row">
           {selectedTagText ? <span className="chip">{selectedTagText}</span> : <span className="chip">未选择标签</span>}
         </div>
@@ -794,7 +805,10 @@ export function ProjectForm() {
         title={name}
         authorName={authorName}
         onClose={() => setIsAiCoverDialogOpen(false)}
-        onGenerated={(nextCoverImageUrl) => setCoverImageUrl(nextCoverImageUrl)}
+        onGenerated={(nextCoverImageUrl) => {
+          setCoverImageUrl(nextCoverImageUrl);
+          setCoverPreviewError("");
+        }}
       />
 
       <div className="book-create-main">
