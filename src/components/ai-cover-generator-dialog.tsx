@@ -204,6 +204,13 @@ export function AiCoverGeneratorDialog({
   const remaining = quota?.remaining ?? 0;
   const isGenerating = false;
   const canGenerate = configured && remaining > 0 && bookTitle.trim().length > 0 && !isGenerating;
+  const statusMessage = error
+    ? error
+    : isLoadingStatus
+      ? "正在读取今日剩余次数..."
+      : configured
+        ? `今日还可免费生成 ${remaining}/${quota?.limit ?? 3} 次。`
+        : "后台还没有配置封面生图 Key，请管理员先到授权后台填写。";
   const quotaHint = isLoadingStatus
     ? "正在读取今日剩余次数..."
     : remaining > 0
@@ -310,13 +317,8 @@ export function AiCoverGeneratorDialog({
           </section>
 
           <div className="quote-box warning-box">
-            {isLoadingStatus
-              ? "正在读取今日剩余次数..."
-              : configured
-                ? `今日还可免费生成 ${remaining}/${quota?.limit ?? 3} 次。`
-                : "后台还没有配置封面生图 Key，请管理员先到授权后台填写。"}
+            {statusMessage}
           </div>
-          {error ? <div className="field-hint project-cover-error">{error}</div> : null}
         </div>
 
         <div className="tag-dialog-foot">

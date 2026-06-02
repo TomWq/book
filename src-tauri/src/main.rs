@@ -36,6 +36,10 @@ const DEFAULT_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIH
 const MENU_OPEN_LOGS: &str = "open_logs_dir";
 const SPLASH_WINDOW: &str = "splash";
 const MAIN_WINDOW: &str = "main";
+const WINDOW_WIDTH: f64 = 1180.0;
+const WINDOW_HEIGHT: f64 = 780.0;
+const WINDOW_MIN_WIDTH: f64 = 1000.0;
+const WINDOW_MIN_HEIGHT: f64 = 680.0;
 const MAIN_WINDOW_ENTER_SCRIPT: &str = r#"
 (() => {
   if (window.__tauriWindowEnterInstalled) return;
@@ -55,16 +59,12 @@ const MAIN_WINDOW_ENTER_SCRIPT: &str = r#"
 
     html.app-window-entering body {
       opacity: 0;
-      transform: scale(0.998);
       transform-origin: center;
-      transition:
-        opacity 540ms linear,
-        transform 540ms linear;
+      transition: opacity 540ms linear;
     }
 
     html.app-window-entering.app-window-ready body {
       opacity: 1;
-      transform: none;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -496,10 +496,10 @@ fn show_startup_failure(window: &WebviewWindow, message: &str) {
 
 fn transition_to_main_window(main_window: WebviewWindow, splash: WebviewWindow) {
     let _ = splash.eval("document.body.classList.add('is-leaving');");
-    thread::sleep(Duration::from_millis(260));
+    thread::sleep(Duration::from_millis(140));
 
+    let _ = splash.hide();
     let _ = main_window.show();
-    let _ = main_window.center();
     let _ = main_window.eval(
         r#"
         requestAnimationFrame(() => {
@@ -519,9 +519,8 @@ fn transition_to_main_window(main_window: WebviewWindow, splash: WebviewWindow) 
         "#,
     );
 
-    thread::sleep(Duration::from_millis(620));
+    thread::sleep(Duration::from_millis(460));
     let _ = main_window.set_focus();
-    let _ = splash.hide();
 }
 
 fn setup_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
@@ -595,6 +594,14 @@ fn open_logs_dir(app: &AppHandle) {
     }
 }
 
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn create_main_window(
     app: &AppHandle,
     splash: WebviewWindow,
@@ -606,11 +613,10 @@ fn create_main_window(
     let splash_for_load = splash.clone();
     WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::External(parsed))
         .title(APP_NAME)
-        .inner_size(1280.0, 860.0)
-        .min_inner_size(1180.0, 760.0)
+        .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .min_inner_size(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         .center()
         .resizable(true)
-        .maximized(true)
         .visible(false)
         .initialization_script(MAIN_WINDOW_ENTER_SCRIPT)
         .on_page_load(move |main_window, payload| {
@@ -656,7 +662,7 @@ fn main() {
             let splash =
                 WebviewWindowBuilder::new(app, SPLASH_WINDOW, WebviewUrl::App("index.html".into()))
                     .title(APP_NAME)
-                    .inner_size(1280.0, 860.0)
+                    .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
                     .center()
                     .resizable(false)
                     .build()?;
@@ -705,14 +711,32 @@ fn main() {
         tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
             kill_server_process(&server_process);
         }
+        tauri::RunEvent::Reopen { .. } => {
+            show_main_window(handle);
+        }
         tauri::RunEvent::WindowEvent { label, event, .. } => {
-            if label == MAIN_WINDOW
-                && matches!(
-                    event,
-                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
-                )
-            {
-                kill_server_process(&server_process);
+            if label == MAIN_WINDOW {
+                match event {
+                    tauri::WindowEvent::CloseRequested { ref api, .. } => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            api.prevent_close();
+                            if let Some(window) = handle.get_webview_window(MAIN_WINDOW) {
+                                let _ = window.hide();
+                            }
+                        }
+
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            kill_server_process(&server_process);
+                            handle.exit(0);
+                        }
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        kill_server_process(&server_process);
+                    }
+                    _ => {}
+                }
             }
 
             if label == SPLASH_WINDOW

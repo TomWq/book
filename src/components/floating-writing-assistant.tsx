@@ -15,7 +15,8 @@ function getProjectId(pathname: string) {
 const introDismissedKey = "writing-assistant:intro-dismissed";
 const routeTipDismissedPrefix = "writing-assistant:route-tip-dismissed:";
 const launcherPositionKey = "writing-assistant:launcher-position";
-const launcherSize = 92;
+const launcherWidth = 86;
+const launcherHeight = 96;
 const launcherMargin = 12;
 const defaultAssistantName = "墨澜";
 
@@ -23,6 +24,18 @@ type LauncherPosition = {
   x: number;
   y: number;
 };
+
+type LauncherAnchor = {
+  right: number;
+  bottom: number;
+};
+
+type LauncherDimensions = {
+  width: number;
+  height: number;
+};
+
+type StoredLauncherPosition = LauncherPosition & Partial<LauncherAnchor>;
 
 type DragState = {
   pointerId: number;
@@ -39,19 +52,63 @@ type MoLanTip = {
   message: string;
 };
 
-function clampLauncherPosition(position: LauncherPosition) {
+function getViewportSize() {
+  if (typeof window === "undefined") {
+    return { width: 0, height: 0 };
+  }
+
+  const viewport = window.visualViewport;
+
+  return {
+    width: Math.max(window.innerWidth, document.documentElement.clientWidth, viewport?.width ?? 0),
+    height: Math.max(window.innerHeight, document.documentElement.clientHeight, viewport?.height ?? 0)
+  };
+}
+
+function getLauncherDimensions(element?: HTMLElement | null): LauncherDimensions {
+  const rect = element?.getBoundingClientRect();
+
+  return {
+    width: rect?.width && Number.isFinite(rect.width) ? rect.width : launcherWidth,
+    height: rect?.height && Number.isFinite(rect.height) ? rect.height : launcherHeight
+  };
+}
+
+function clampLauncherPosition(position: LauncherPosition, dimensions: LauncherDimensions = getLauncherDimensions()) {
   if (typeof window === "undefined") {
     return position;
   }
 
-  const viewport = window.visualViewport;
-  const width = Math.max(window.innerWidth, document.documentElement.clientWidth, viewport?.width ?? 0);
-  const height = Math.max(window.innerHeight, document.documentElement.clientHeight, viewport?.height ?? 0);
+  const { width, height } = getViewportSize();
+  const maxX = Math.max(launcherMargin, width - dimensions.width - launcherMargin);
+  const maxY = Math.max(launcherMargin, height - dimensions.height - launcherMargin);
 
   return {
-    x: Math.min(Math.max(position.x, launcherMargin), width - launcherSize - launcherMargin),
-    y: Math.min(Math.max(position.y, launcherMargin), height - launcherSize - launcherMargin)
+    x: Math.min(Math.max(position.x, launcherMargin), maxX),
+    y: Math.min(Math.max(position.y, launcherMargin), maxY)
   };
+}
+
+function getLauncherAnchor(position: LauncherPosition, dimensions: LauncherDimensions): LauncherAnchor {
+  const { width, height } = getViewportSize();
+
+  return {
+    right: width - position.x - dimensions.width,
+    bottom: height - position.y - dimensions.height
+  };
+}
+
+function getPositionFromAnchor(anchor: LauncherAnchor, dimensions: LauncherDimensions): LauncherPosition {
+  const { width, height } = getViewportSize();
+
+  return {
+    x: width - dimensions.width - anchor.right,
+    y: height - dimensions.height - anchor.bottom
+  };
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 type PointerLike = {
@@ -324,6 +381,8 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
   const [open, setOpen] = useState(false);
   const [visibleTip, setVisibleTip] = useState<MoLanTip | null>(null);
   const [launcherPosition, setLauncherPosition] = useState<LauncherPosition | null>(null);
+  const launcherRef = useRef<HTMLDivElement | null>(null);
+  const launcherAnchorRef = useRef<LauncherAnchor | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const suppressClickRef = useRef(false);
   const autoHideTipRef = useRef<number | null>(null);
@@ -340,10 +399,20 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
   useEffect(() => {
     try {
       const rawPosition = window.localStorage.getItem(launcherPositionKey);
-      const parsed = rawPosition ? JSON.parse(rawPosition) as LauncherPosition : null;
+      const parsed = rawPosition ? JSON.parse(rawPosition) as StoredLauncherPosition : null;
 
-      if (parsed && Number.isFinite(parsed.x) && Number.isFinite(parsed.y)) {
-        setLauncherPosition(clampLauncherPosition(parsed));
+      if (parsed && isFiniteNumber(parsed.x) && isFiniteNumber(parsed.y)) {
+        const dimensions = getLauncherDimensions(launcherRef.current);
+        const anchor = isFiniteNumber(parsed.right) && isFiniteNumber(parsed.bottom)
+          ? { right: parsed.right, bottom: parsed.bottom }
+          : null;
+        const nextPosition = clampLauncherPosition(
+          anchor ? getPositionFromAnchor(anchor, dimensions) : parsed,
+          dimensions
+        );
+
+        launcherAnchorRef.current = getLauncherAnchor(nextPosition, dimensions);
+        setLauncherPosition(nextPosition);
       }
     } catch {
       window.localStorage.removeItem(launcherPositionKey);
@@ -393,7 +462,18 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
 
   useEffect(() => {
     function handleResize() {
-      setLauncherPosition((current) => current ? clampLauncherPosition(current) : current);
+      setLauncherPosition((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const dimensions = getLauncherDimensions(launcherRef.current);
+        const anchor = launcherAnchorRef.current ?? getLauncherAnchor(current, dimensions);
+        const nextPosition = clampLauncherPosition(getPositionFromAnchor(anchor, dimensions), dimensions);
+        launcherAnchorRef.current = getLauncherAnchor(nextPosition, dimensions);
+
+        return nextPosition;
+      });
     }
 
     window.addEventListener("resize", handleResize);
@@ -467,10 +547,14 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
 
     drag.moved = true;
     suppressClickRef.current = true;
-    setLauncherPosition(clampLauncherPosition({
+    const dimensions = getLauncherDimensions(launcherRef.current);
+    const nextPosition = clampLauncherPosition({
       x: drag.originX + deltaX,
       y: drag.originY + deltaY
-    }));
+    }, dimensions);
+
+    launcherAnchorRef.current = getLauncherAnchor(nextPosition, dimensions);
+    setLauncherPosition(nextPosition);
   }
 
   function endDrag(pointerId: number, releaseTarget?: EventTarget | null) {
@@ -497,7 +581,10 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     dismissTip();
     setLauncherPosition((current) => {
       if (current) {
-        window.localStorage.setItem(launcherPositionKey, JSON.stringify(current));
+        const dimensions = getLauncherDimensions(launcherRef.current);
+        const anchor = launcherAnchorRef.current ?? getLauncherAnchor(current, dimensions);
+
+        window.localStorage.setItem(launcherPositionKey, JSON.stringify({ ...current, ...anchor }));
       }
 
       return current;
@@ -572,7 +659,7 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
   return (
     <>
       {!open ? (
-        <div className="floating-ai-launcher" style={launcherStyle}>
+        <div className="floating-ai-launcher" style={launcherStyle} ref={launcherRef}>
           {visibleTip ? (
             <div className="floating-ai-greeting" role="status" data-side={tipSide}>
               <button type="button" aria-label={`关闭${assistantDisplayName}提示`} onClick={dismissTip}>

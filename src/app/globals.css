@@ -18925,3 +18925,400 @@ body.desktop-runtime .inspiration-toolbar select {
   font-size: 13px;
   line-height: 1.7;
 }
+
+@media (max-width: 860px) {
+  .app-shell-public:has(.commercial-home),
+  .app-shell-public:has(.download-center-page) {
+    padding: 0;
+  }
+
+  .commercial-home,
+  .download-immersive {
+    width: min(720px, calc(100% - 28px));
+    max-width: 100%;
+  }
+
+  .commercial-home {
+    gap: 30px;
+    padding: 18px 0 30px;
+  }
+
+  .commercial-hero {
+    min-height: auto;
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 20px 0 12px;
+  }
+
+  .commercial-hero-copy {
+    gap: 18px;
+  }
+
+  .commercial-hero h1 {
+    max-width: 15ch;
+    font-size: 34px;
+    line-height: 1.18;
+  }
+
+  .commercial-hero-copy > p {
+    max-width: 100%;
+    font-size: 16px;
+    line-height: 1.78;
+  }
+
+  .commercial-product-visual {
+    min-height: 360px;
+    align-items: start;
+    overflow: hidden;
+  }
+
+  .commercial-device {
+    width: 100%;
+    max-width: 100%;
+    transform: none;
+    box-shadow:
+      0 18px 42px rgba(19, 26, 38, 0.12),
+      0 1px 0 rgba(255, 255, 255, 0.72);
+  }
+
+  .commercial-floating-shot {
+    width: min(260px, 45%);
+  }
+
+  .commercial-floating-shot-writing {
+    right: 8px;
+    top: 18px;
+  }
+
+  .commercial-floating-shot-ideas {
+    left: 8px;
+    bottom: 18px;
+  }
+
+  .commercial-pillar-grid,
+  .commercial-trust-list,
+  .download-layout,
+  .download-grid,
+  .download-notes {
+    grid-template-columns: 1fr;
+  }
+
+  .commercial-pillar {
+    padding: 20px 0;
+    border-right: 0;
+    border-bottom: 1px solid rgba(19, 26, 38, 0.08);
+  }
+
+  .commercial-pillar:last-child {
+    border-bottom: 0;
+  }
+
+  .commercial-flow-track {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .commercial-flow-track ol {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 0;
+  }
+
+  .commercial-flow-track ol::before {
+    left: 14px;
+    right: auto;
+    top: 12px;
+    bottom: 12px;
+    width: 1px;
+    height: auto;
+  }
+
+  .commercial-flow-track li {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+    padding: 0;
+  }
+
+  .commercial-flow-track li::before {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .commercial-section {
+    padding: 32px 0;
+  }
+
+  .commercial-section-head {
+    max-width: 100%;
+    text-align: left;
+    justify-items: start;
+  }
+
+  .commercial-section h2,
+  .commercial-trust-panel h2 {
+    max-width: 18ch;
+    font-size: 26px;
+    line-height: 1.26;
+  }
+
+  .commercial-trust-panel {
+    padding: 26px 0;
+  }
+
+  .commercial-trust-list div {
+    padding: 0 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(19, 26, 38, 0.08);
+  }
+
+  .commercial-trust-list div:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .download-immersive {
+    gap: 28px;
+    min-height: 100vh;
+    padding: 18px 0 28px;
+  }
+
+  .download-nav {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .download-layout {
+    gap: 30px;
+    padding: 8px 0 34px;
+  }
+
+  .download-hero {
+    gap: 22px;
+  }
+
+  .download-hero-copy {
+    max-width: 100%;
+  }
+
+  .download-hero h1 {
+    max-width: 15ch;
+    font-size: 34px;
+    line-height: 1.18;
+  }
+
+  .download-hero p,
+  .download-panel p {
+    max-width: 100%;
+    font-size: 16px;
+    line-height: 1.78;
+  }
+
+  .download-panel {
+    min-width: 0;
+    gap: 18px;
+  }
+
+  .download-panel-head {
+    align-items: start;
+    padding-bottom: 16px;
+  }
+
+  .download-grid {
+    gap: 12px;
+  }
+
+  .download-card,
+  .download-platform-card {
+    min-height: 0;
+    padding: 20px;
+  }
+
+  .download-notes {
+    gap: 0;
+    padding-top: 22px;
+  }
+
+  .download-note,
+  .download-note:nth-child(2),
+  .download-note:last-child {
+    padding: 16px 0;
+    border-right: 0;
+    border-bottom: 1px solid rgba(19, 26, 38, 0.08);
+  }
+
+  .download-note:first-child {
+    padding-top: 0;
+  }
+
+  .download-note:last-child {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .commercial-home,
+  .download-immersive {
+    width: min(420px, calc(100% - 22px));
+    max-width: 100%;
+  }
+
+  .commercial-home {
+    gap: 24px;
+    padding-top: 14px;
+  }
+
+  .commercial-hero {
+    gap: 22px;
+  }
+
+  .commercial-kicker,
+  .download-kicker {
+    font-size: 12px;
+  }
+
+  .commercial-hero h1,
+  .download-hero h1 {
+    max-width: 14ch;
+    font-size: 29px;
+  }
+
+  .commercial-hero-copy > p,
+  .commercial-section-head p,
+  .commercial-trust-panel > p,
+  .download-hero p,
+  .download-panel p {
+    font-size: 15px;
+    line-height: 1.76;
+  }
+
+  .commercial-actions,
+  .download-manual-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .commercial-actions .button,
+  .download-manual-actions .download-card-button {
+    width: 100%;
+  }
+
+  .commercial-hero-metrics {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .commercial-hero-metrics span {
+    min-height: 0;
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+  }
+
+  .commercial-hero-metrics strong {
+    margin-bottom: 0;
+  }
+
+  .commercial-product-visual {
+    min-height: 250px;
+    max-height: 270px;
+  }
+
+  .commercial-device-bar {
+    height: 26px;
+  }
+
+  .commercial-floating-shot {
+    display: none;
+  }
+
+  .commercial-section {
+    padding: 28px 0;
+  }
+
+  .commercial-section h2,
+  .commercial-trust-panel h2 {
+    max-width: none;
+    font-size: 23px;
+  }
+
+  .commercial-pillar {
+    padding: 18px 0;
+  }
+
+  .commercial-flow-track {
+    padding: 22px 0;
+  }
+
+  .commercial-footer,
+  .download-footer {
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  .download-immersive {
+    gap: 24px;
+    padding-top: 14px;
+  }
+
+  .download-brand span {
+    display: none;
+  }
+
+  .download-nav-link {
+    white-space: nowrap;
+  }
+
+  .download-layout {
+    gap: 26px;
+    padding-bottom: 28px;
+  }
+
+  .download-hero-meta {
+    gap: 8px;
+  }
+
+  .download-panel-head h2 {
+    font-size: 24px;
+  }
+
+  .download-card,
+  .download-platform-card {
+    padding: 18px;
+  }
+
+  .download-platform-main {
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .download-os-icon.windows,
+  .download-os-icon.mac {
+    width: 42px;
+    height: 42px;
+  }
+
+  .download-os-icon.mac {
+    font-size: 23px;
+  }
+
+  .download-card h2 span {
+    font-size: 21px;
+  }
+
+  .download-card-button,
+  .download-platform-card .download-card-button {
+    width: 100%;
+  }
+
+  .download-help-row {
+    grid-template-columns: minmax(0, 1fr) 16px;
+  }
+
+  .download-note-detail {
+    padding-right: 0;
+  }
+}
