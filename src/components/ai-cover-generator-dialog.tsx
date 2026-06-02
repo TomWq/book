@@ -266,7 +266,7 @@ export function AiCoverGeneratorDialog({
           </div>
 
           <div className="field">
-            <div className="field-label">画面风格描述</div>
+            <div className="field-label">画面风格描述（选填，不写 AI 也会根据小说标题自动推断）</div>
             <textarea
               value={stylePrompt}
               onChange={(event) => setStylePrompt(event.target.value)}

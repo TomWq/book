@@ -30,7 +30,7 @@ use url::Url;
 
 const APP_NAME: &str = "墨澜 · AI 网文写作助手";
 const DEFAULT_PORT: u16 = 3131;
-const DEFAULT_LICENSE_SERVER_URL: &str = "http://62.234.205.107";
+const DEFAULT_LICENSE_SERVER_URL: &str = "https://www.wqxinxin.cn";
 const DEFAULT_LICENSE_SERVER_TIMEOUT_MS: &str = "30000";
 const DEFAULT_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3M0I3RkZFQkM5NzVGNApSV1QwZGNuci83ZHpDdnJrYlJtdUloV1p5SERoSGZiVHJPdUc5MXJXNUtrTk9MU1dzZzZRM2dCKwo=";
 const MENU_OPEN_LOGS: &str = "open_logs_dir";
@@ -607,7 +607,7 @@ fn create_main_window(
     WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::External(parsed))
         .title(APP_NAME)
         .inner_size(1280.0, 860.0)
-        .min_inner_size(1040.0, 720.0)
+        .min_inner_size(1180.0, 760.0)
         .center()
         .resizable(true)
         .maximized(true)

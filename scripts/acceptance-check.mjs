@@ -122,7 +122,7 @@ assertIncludes("src/lib/store-persistence.ts", [
   "getPersistenceStatus"
 ]);
 assertIncludes("src/proxy.ts", ["/download", "/downloads", "/api/jobs/worker", "/api/app/update/manifest", "/api/app/tauri-update/"]);
-assertIncludes("src-tauri/tauri.conf.json", ["createUpdaterArtifacts", "dangerousInsecureTransportProtocol"]);
+assertIncludes("src-tauri/tauri.conf.json", ["createUpdaterArtifacts", "https://book-1253439621.cos.ap-beijing.myqcloud.com/tauri-update.json"]);
 assertIncludes("src-tauri/capabilities/default.json", ["updater:default", "process:default", "opener:default"]);
 
 console.log("验收守门检查通过：拆书、模板、大纲、创作、状态、二稿、后台 Worker 和 SQLite 关键契约均存在。");

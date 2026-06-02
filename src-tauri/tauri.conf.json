@@ -17,7 +17,6 @@
   },
   "plugins": {
     "updater": {
-      "dangerousInsecureTransportProtocol": true,
       "endpoints": [
         "https://book-1253439621.cos.ap-beijing.myqcloud.com/tauri-update.json"
       ],

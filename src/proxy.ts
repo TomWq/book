@@ -53,6 +53,8 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/downloads/") ||
     pathname.startsWith("/onboarding/") ||
     pathname.startsWith("/update/") ||
+    pathname === "/icon.png" ||
+    pathname === "/apple-icon.png" ||
     pathname === "/favicon.ico";
 
   if (isAsset) {
@@ -189,5 +191,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png).*)"]
 };

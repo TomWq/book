@@ -16,6 +16,7 @@ const releasePackageDir = path.join(rootDir, "release", "packages", `v${artifact
 const args = new Set(process.argv.slice(2));
 const localOnly = args.has("--local-only");
 const manifestOnly = args.has("--manifest-only");
+const defaultPublicBaseUrl = "https://www.wqxinxin.cn";
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -83,7 +84,7 @@ function normalizeBaseUrl(config) {
     return "/downloads";
   }
 
-  const base = configured || `http://${config.host}/downloads`;
+  const base = configured || `${defaultPublicBaseUrl}/downloads`;
   return base.replace(/\/+$/, "");
 }
 
@@ -93,7 +94,7 @@ function normalizeDownloadPageUrl(config) {
     return configured.replace(/\/+$/, "");
   }
 
-  return `http://${config.host}/download`;
+  return `${defaultPublicBaseUrl}/download`;
 }
 
 function sha256(filePath) {

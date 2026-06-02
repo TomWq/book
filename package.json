@@ -5,7 +5,7 @@
   "description": "面向网文作者的爆款拆解、模板迁移和长篇创作工作台",
   "author": "墨澜 · AI 网文写作助手",
   "scripts": {
-    "dev": "next dev",
+    "dev": "APP_RUNTIME=cloud NEXT_PUBLIC_APP_RUNTIME=cloud next dev",
     "dev:public": "APP_RUNTIME=cloud NEXT_PUBLIC_APP_RUNTIME=cloud next dev",
     "dev:desktop": "APP_RUNTIME=desktop NEXT_PUBLIC_APP_RUNTIME=desktop next dev",
     "dev:trial-center": "APP_RUNTIME=cloud NEXT_PUBLIC_APP_RUNTIME=cloud DESKTOP_TRIAL_DURATION_MINUTES=2 DATABASE_URL=file:./data/trial-center.db APP_STORE_PATH=./data/trial-center.json next dev -p 3101",

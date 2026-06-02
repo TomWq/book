@@ -19,6 +19,7 @@ function ProjectRow({ project }: { project: ProjectWithCounts }) {
       {project.type === "writing" ? (
         <ProjectCover
           title={project.name}
+          authorName={project.authorName}
           coverImageUrl={project.coverImageUrl}
           fallbackLabel="书"
           size="sm"

@@ -21,6 +21,7 @@ const navItems: SideNavItem[] = [
 ];
 
 const standaloneAuthPaths = new Set(["/activate", "/login", "/register", "/download", "/downloads"]);
+const publicContentPaths = new Set(["/", "/manual", "/legal"]);
 const defaultAssistantName = "墨澜";
 
 function displayAssistantName(value?: string) {
@@ -30,13 +31,14 @@ function displayAssistantName(value?: string) {
 export async function AppShell({ children }: { children: ReactNode }) {
   const pathname = (await headers()).get("x-nw-pathname") ?? "";
   const adminLoginPath = getAdminLoginPath();
+  const desktopRuntime = isDesktopRuntime();
+  const isPublicLanding = pathname === "/" && !desktopRuntime;
 
   if (standaloneAuthPaths.has(pathname)) {
     return <>{children}</>;
   }
 
   const { user, isAdmin } = await getCurrentUserAccess();
-  const desktopRuntime = isDesktopRuntime();
   const desktopClient = desktopRuntime && user?.licenseCodePurpose !== "web";
 
   if (!user && desktopRuntime) {
@@ -44,19 +46,26 @@ export async function AppShell({ children }: { children: ReactNode }) {
     redirect(`/activate${next}`);
   }
 
+  if (!user && !desktopRuntime && !publicContentPaths.has(pathname)) {
+    const next = pathname && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
+    redirect(`/activate${next}`);
+  }
+
   const isAdminMode = isAdmin && !desktopClient;
   const assistantName = displayAssistantName(user?.assistantName);
-  const aiSetup = user && !isAdminMode
+  const aiSetup = user && !isAdminMode && !isPublicLanding
     ? await getCurrentUserAiSetupStatus()
     : { configured: true };
+  const workspaceHomeHref = desktopRuntime ? "/" : "/workspace";
+  const shellNavItems = navItems.map((item) => item.href === "/" ? { ...item, href: workspaceHomeHref } : item);
   const visibleNavItems = isAdminMode
     ? [{ href: "/admin", label: "管理后台" }]
-    : navItems.map((item) => item.href === "/assistant" ? { ...item, label: assistantName } : item);
-  const brandHref = isAdminMode ? "/admin" : "/";
+    : shellNavItems.map((item) => item.href === "/assistant" ? { ...item, label: assistantName } : item);
+  const brandHref = isAdminMode ? "/admin" : workspaceHomeHref;
 
   return (
-    <div className={`app-shell ${user ? "app-shell-auth" : "app-shell-public"}`}>
-      {!user ? (
+    <div className={`app-shell ${user && !isPublicLanding ? "app-shell-auth" : "app-shell-public"}`}>
+      {!user || isPublicLanding ? (
         <header className="topbar public-topbar">
           <div className="brand-block">
             <Link href="/" className="brand-link">
@@ -70,7 +79,11 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
           <div className="topbar-meta">
             <span className="row" style={{ alignItems: "center" }}>
-              {desktopRuntime ? (
+              {user ? (
+                <a href={isAdminMode ? "/admin" : "/workspace"} className="button primary">
+                  进入工作台
+                </a>
+              ) : desktopRuntime ? (
                 <Link href="/activate" className="button primary">
                   输入激活码
                 </Link>
@@ -85,7 +98,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
       ) : null}
 
       <div className="workspace-frame">
-        {user ? (
+        {user && !isPublicLanding ? (
           <header className="workspace-topbar">
             <Link href={brandHref} className="brand-link workspace-brand">
               <AppIconMark />
@@ -113,7 +126,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
           </header>
         ) : null}
 
-        {user && !isAdminMode && !aiSetup.configured ? (
+        {user && !isAdminMode && !isPublicLanding && !aiSetup.configured ? (
           <div className="setup-alert">
             <div>
               <strong>请先配置 AI 模型</strong>
@@ -128,9 +141,9 @@ export async function AppShell({ children }: { children: ReactNode }) {
         <main className="app-main">{children}</main>
       </div>
 
-      {user && !isAdminMode ? <FloatingWritingAssistant authorName={user.penName || user.name} assistantName={assistantName} /> : null}
-      {user && !isAdminMode ? <PenNameOnboarding initialPenName={user.penName} /> : null}
-      {user && !isAdminMode && desktopClient ? <AutoUpdatePrompt /> : null}
+      {user && !isAdminMode && !isPublicLanding ? <FloatingWritingAssistant authorName={user.penName || user.name} assistantName={assistantName} /> : null}
+      {user && !isAdminMode && !isPublicLanding ? <PenNameOnboarding initialPenName={user.penName} /> : null}
+      {user && !isAdminMode && !isPublicLanding && desktopClient ? <AutoUpdatePrompt /> : null}
     </div>
   );
 }

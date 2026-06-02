@@ -162,7 +162,7 @@ DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run 
 打开下载页：
 
 ```text
-http://62.234.205.107/download
+https://www.wqxinxin.cn/download
 ```
 
 检查：
@@ -176,7 +176,7 @@ http://62.234.205.107/download
 再检查更新清单：
 
 ```text
-http://62.234.205.107/api/app/update/manifest
+https://www.wqxinxin.cn/api/app/update/manifest
 ```
 
 正常情况下，接口里应该是 `/api/download/*` 中转地址，不应该直接暴露 COS 原始地址。
@@ -184,9 +184,9 @@ http://62.234.205.107/api/app/update/manifest
 再检查 Tauri 应用内更新接口。下面三个地址至少应该有一个返回新版 JSON，旧版本号按当前客户端版本填写：
 
 ```text
-http://62.234.205.107/api/app/tauri-update/darwin/aarch64/1.0.0
-http://62.234.205.107/api/app/tauri-update/darwin/x86_64/1.0.0
-http://62.234.205.107/api/app/tauri-update/windows/x86_64/1.0.0
+https://www.wqxinxin.cn/api/app/tauri-update/darwin/aarch64/1.0.0
+https://www.wqxinxin.cn/api/app/tauri-update/darwin/x86_64/1.0.0
+https://www.wqxinxin.cn/api/app/tauri-update/windows/x86_64/1.0.0
 ```
 
 如果返回 `204`，通常表示没有新版本，或者 manifest 里缺少 updater 包 / `.sig`。
@@ -228,6 +228,4 @@ DOWNLOAD_BASE_URL="https://book-1253439621.cos.ap-beijing.myqcloud.com" npm run 
 
 ## 11. 当前注意事项
 
-当前 updater endpoint 仍使用 `http://62.234.205.107`。为了现在能测试，Tauri 配置里临时开启了 `dangerousInsecureTransportProtocol`。
-
-等域名备案和 HTTPS 都完成后，需要改成 HTTPS 更新接口，并关闭这个临时开关。
+当前线上授权中心已使用 `https://www.wqxinxin.cn`，Tauri 更新接口也应保持 HTTPS 地址。

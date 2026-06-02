@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 type ProjectCoverProps = {
   title: string;
+  authorName?: string;
   coverImageUrl?: string;
   fallbackLabel?: string;
   size?: "sm" | "lg";
@@ -12,6 +13,7 @@ type ProjectCoverProps = {
 
 export function ProjectCover({
   title,
+  authorName,
   coverImageUrl,
   fallbackLabel,
   size = "sm",
@@ -19,8 +21,7 @@ export function ProjectCover({
 }: ProjectCoverProps) {
   const [imageError, setImageError] = useState(false);
   const fallbackText = title.trim() || fallbackLabel?.trim() || "未命名作品";
-  const compactFallbackText = fallbackText.length > 10 ? `${fallbackText.slice(0, 10)}…` : fallbackText;
-  const smallFallbackText = fallbackText.length > 6 ? `${fallbackText.slice(0, 6)}…` : fallbackText;
+  const fallbackAuthor = authorName?.trim() || "作者";
   const src = String(coverImageUrl ?? "").trim();
   const isRenderableSrc =
     src.startsWith("data:") || src.startsWith("http://") || src.startsWith("https://") || src.startsWith("/");
@@ -43,8 +44,9 @@ export function ProjectCover({
           onError={() => setImageError(true)}
         />
       ) : (
-        <div className="project-cover-fallback" aria-hidden="true">
-          <strong>{size === "lg" ? compactFallbackText : smallFallbackText}</strong>
+        <div className="book-cover project-cover-fallback" aria-hidden="true">
+          <div className="book-cover-title">{fallbackText}</div>
+          <div className="book-cover-author">{fallbackAuthor}</div>
         </div>
       )}
     </div>
