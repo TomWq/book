@@ -711,6 +711,7 @@ fn main() {
         tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
             kill_server_process(&server_process);
         }
+        #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
             show_main_window(handle);
         }
