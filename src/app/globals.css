@@ -5439,6 +5439,31 @@ form[aria-busy="true"] button[type="submit"] {
   padding: 34px 16px;
 }
 
+.app-shell-public:has(.route-loading-stage) {
+  min-height: 100vh;
+  padding: 0;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(55, 118, 255, 0.08), transparent 32%),
+    linear-gradient(180deg, #ffffff 0%, #f7faff 48%, #ffffff 100%);
+}
+
+.app-shell-public:has(.route-loading-stage) .public-topbar {
+  display: none;
+}
+
+.app-shell-public:has(.route-loading-stage) .workspace-frame,
+.app-shell-public:has(.route-loading-stage) .app-main {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+.app-shell-public .route-loading-stage {
+  min-height: 100vh;
+}
+
 .action-loading-overlay {
   position: fixed;
   inset: 0;

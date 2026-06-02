@@ -415,7 +415,7 @@ async function main() {
   await run(binCommand("tauri"), tauriArgs, {
     env: {
       PATH: toolPath,
-      TAURI_UPDATER_PUBLIC_KEY: process.env.TAURI_UPDATER_PUBLIC_KEY || "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMzOTk0REZFNDg4REZCQTAKUldTZys0MUkvazJaTStUSkgrMC9FOEg4TjVJOEE5OWFINW9BTTBZT0lXN1hMS0hGZzZveXQyR0oK%",
+      TAURI_UPDATER_PUBLIC_KEY: process.env.TAURI_UPDATER_PUBLIC_KEY || "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3M0I3RkZFQkM5NzVGNApSV1QwZGNuci83ZHpDdnJrYlJtdUloV1p5SERoSGZiVHJPdUc5MXJXNUtrTk9MU1dzZzZRM2dCKwo=",
       ...(hasSigningKey ? {} : { TAURI_BUNDLER_NO_SIGN: "1" })
     }
   });

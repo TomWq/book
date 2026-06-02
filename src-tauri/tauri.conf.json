@@ -20,7 +20,7 @@
       "endpoints": [
         "https://book-1253439621.cos.ap-beijing.myqcloud.com/tauri-update.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMzOTk0REZFNDg4REZCQTAKUldTZys0MUkvazJaTStUSkgrMC9FOEg4TjVJOEE5OWFINW9BTTBZT0lXN1hMS0hGZzZveXQyR0oK%"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3M0I3RkZFQkM5NzVGNApSV1QwZGNuci83ZHpDdnJrYlJtdUloV1p5SERoSGZiVHJPdUc5MXJXNUtrTk9MU1dzZzZRM2dCKwo="
     }
   },
   "bundle": {
