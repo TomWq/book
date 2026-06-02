@@ -67,10 +67,10 @@ export default async function ActivatePage({
   const initialError = normalizedError || status?.message || "";
 
   return (
-    <section className="auth-page license-auth-page">
+    <section className={`auth-page license-auth-page ${forceWebEntry ? "web-auth-page" : ""}`}>
       <div className="auth-immersive">
         <header className="auth-immersive-nav">
-          <Link href="/activate" className="auth-immersive-brand">
+          <Link href={forceWebEntry ? "/" : "/activate"} className="auth-immersive-brand">
             <AppIconMark className="auth-brand-icon" />
             <strong>墨澜 · AI 网文写作助手</strong>
           </Link>
@@ -79,14 +79,29 @@ export default async function ActivatePage({
           </nav>
         </header>
 
-        <div className="auth-slogan">
-          <div className="auth-calligraphy">灯下起长卷<br />笔端生云烟<br />胸中藏万象<br />落笔自成篇</div>
-          <div className="auth-slogan-side">
-            <strong>Good stories</strong>
-            <span>structure first</span>
-            <span>write longer</span>
+        {forceWebEntry ? (
+          <div className="auth-slogan web-auth-copy">
+            <span className="auth-kicker">特邀用户入口</span>
+            <h1>用授权码进入网页工作台。</h1>
+            <p>
+              网页端只开放给收到邀请的用户。验证通过后，可以进入工作台查看项目、模板和创作资料。
+            </p>
+            <div className="web-auth-points" aria-label="网页授权说明">
+              <span>网页特邀授权码</span>
+              <span>不替代桌面端授权</span>
+              <span>验证后进入工作台</span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="auth-slogan">
+            <div className="auth-calligraphy">灯下起长卷<br />笔端生云烟<br />胸中藏万象<br />落笔自成篇</div>
+            <div className="auth-slogan-side">
+              <strong>Good stories</strong>
+              <span>structure first</span>
+              <span>write longer</span>
+            </div>
+          </div>
+        )}
 
         <div className="auth-card license-card">
           <div className="auth-card-head">

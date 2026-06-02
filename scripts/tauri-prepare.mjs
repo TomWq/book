@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -10,6 +10,8 @@ const sourceStaticDir = path.join(root, ".next", "static");
 const targetStaticDir = path.join(standaloneDir, ".next", "static");
 const sourcePublicDir = path.join(root, "public");
 const targetPublicDir = path.join(standaloneDir, "public");
+const standaloneDataDir = path.join(standaloneDir, "data");
+const betterSqliteDir = path.join(nodeModulesDir, "better-sqlite3");
 const forcedRuntimePackages = ["better-sqlite3", "bindings", "file-uri-to-path"];
 
 function run(command, args, options = {}) {
@@ -132,11 +134,101 @@ function syncPublicAssets() {
   console.log("[tauri-prepare] 已同步 public 资源到 .next/standalone/public");
 }
 
+function formatBytes(bytes) {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function directorySize(dir) {
+  if (!existsSync(dir)) {
+    return 0;
+  }
+
+  const stat = statSync(dir);
+
+  if (stat.isFile()) {
+    return stat.size;
+  }
+
+  if (!stat.isDirectory()) {
+    return 0;
+  }
+
+  return readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
+    return total + directorySize(path.join(dir, entry.name));
+  }, 0);
+}
+
+function removeMacMetadata(dir) {
+  if (!existsSync(dir)) {
+    return 0;
+  }
+
+  let removed = 0;
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.name === ".DS_Store" || entry.name.startsWith("._")) {
+      rmSync(fullPath, { recursive: true, force: true });
+      removed += 1;
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      removed += removeMacMetadata(fullPath);
+    }
+  }
+
+  return removed;
+}
+
+function cleanStandaloneReleaseResources() {
+  const removedDataSize = directorySize(standaloneDataDir);
+  rmSync(standaloneDataDir, { recursive: true, force: true });
+
+  const removableRuntimeArtifacts = [
+    path.join(betterSqliteDir, "deps"),
+    path.join(betterSqliteDir, "src"),
+    path.join(betterSqliteDir, "binding.gyp"),
+    path.join(betterSqliteDir, "README.md")
+  ];
+  let removedRuntimeSize = 0;
+
+  for (const artifact of removableRuntimeArtifacts) {
+    removedRuntimeSize += directorySize(artifact);
+    rmSync(artifact, { recursive: true, force: true });
+  }
+
+  const removedMetadataCount = removeMacMetadata(standaloneDir);
+
+  if (removedDataSize > 0) {
+    console.log(`[tauri-prepare] 已移除发行包本地数据目录：${formatBytes(removedDataSize)}`);
+  }
+
+  if (removedMetadataCount > 0) {
+    console.log(`[tauri-prepare] 已移除 macOS 元数据文件：${removedMetadataCount} 个`);
+  }
+
+  if (removedRuntimeSize > 0) {
+    console.log(`[tauri-prepare] 已移除运行时包构建残留：${formatBytes(removedRuntimeSize)}`);
+  }
+}
+
 async function main() {
   await run("next", ["build"]);
   syncStaticAssets();
   syncPublicAssets();
   syncNativeRuntimePackages();
+  cleanStandaloneReleaseResources();
 
   const aliases = findBetterSqliteAliases();
 

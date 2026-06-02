@@ -389,51 +389,57 @@ export default async function HomePage() {
   const userHasAccess = Boolean(user);
   const productPillars = [
       {
-        label: "长篇创作中枢",
-        title: "每一章都先有任务卡，再写正文",
-        description: "创作圣经、人物档案、伏笔、主线状态和最近台账一起进入上下文，控制章节目标和承接关系。",
-        points: ["章节任务卡", "流式正文", "章节台账", "一致性审稿"]
+        label: "构思成型",
+        title: "把想法整理成可写项目",
+        description: "从题材、主角、卖点到世界规则，先搭出作品骨架，再决定第一章怎么落笔。",
+        points: ["书名方向", "核心卖点", "人物功能", "世界规则"],
+        image: "/landing/writing.webp",
+        href: "/download"
       },
       {
-        label: "拆书与模板资产",
-        title: "把样本拆成可迁移的商业结构",
-        description: "导入文本后自动分章，逐章提取冲突、压制、爽点、收益和钩子，再沉淀为模板。",
-        points: ["自动分章", "章节拆解", "整书分析", "模板迁移"]
+        label: "样本研究",
+        title: "看懂一本书为何留人",
+        description: "把样本文本拆成开局、冲突、情绪补偿、章末钩子和升级节奏，而不是只给一段摘要。",
+        points: ["文本分章", "冲突拆解", "节奏分析", "结构模板"],
+        image: "/landing/templates.webp",
+        href: "/templates"
       },
       {
-        label: "灵感与二稿系统",
-        title: "零散想法不丢，AI 味可以改",
-        description: "灵感中心承接桥段、设定、人物和台词；二稿编辑负责检查模板腔、平均句和表达力度。",
-        points: ["灵感检索", "AI 润色", "结构化转化", "二稿对照"]
+        label: "状态校准",
+        title: "写完一章，更新世界状态",
+        description: "新增人物、线索、伏笔和关系变化会进入台账，下一次生成时不必从零解释前文。",
+        points: ["章节台账", "伏笔状态", "人物已知", "审稿建议"],
+        image: "/landing/inspirations.webp",
+        href: "/inspirations"
       }
     ];
 
   const creationFlow = [
-      "作品身份与读者标签",
-      "创作圣经与状态页",
-      "生成章节任务卡",
-      "正文草稿与目录管理",
-      "台账沉淀与一致性审稿"
+      "确定作品气质和读者期待",
+      "整理主角、规则和叙事边界",
+      "生成本章目标与承接任务",
+      "写出草稿并做表达二稿",
+      "沉淀台账、线索和人物状态"
     ];
   const analysisFlow = [
-      "导入样本文本",
-      "自动分章与手动调整",
-      "逐章结构化拆解",
-      "整书节奏与公式分析",
-      "保存模板并迁移新题材"
+      "导入想研究的样本文本",
+      "按章节切开叙事推进",
+      "标出压制、反击和读者钩子",
+      "整理可学习的节奏模式",
+      "迁移成新的题材方案"
     ];
   const trustItems = [
       {
-        title: "作品数据默认在本机",
-        text: "草稿、设定、人物档案、伏笔、章节台账、AI 对话历史默认保存在你的电脑里。"
+        title: "作品资料不乱飞",
+        text: "草稿、设定、人物档案、伏笔和章节台账优先留在你的本地客户端。"
       },
       {
-        title: "AI 服务由你自己配置",
-        text: "支持 OpenAI-compatible 接口，DeepSeek、OpenAI、通义、Moonshot、Ollama 等都可按配置接入。"
+        title: "模型选择权在你手里",
+        text: "支持 OpenAI-compatible 接口，可按预算和习惯接入不同 AI 服务。"
       },
       {
-        title: "客户端优先，网页入口辅助",
-        text: "桌面端用于长期创作和本地隐私保护；网页入口只面向特邀用户和授权场景。"
+        title: "不是洗稿工具",
+        text: "产品强调结构学习、项目管理和原创迁移，不鼓励复刻原作桥段。"
       }
     ];
 
@@ -441,10 +447,10 @@ export default async function HomePage() {
       <div className="public-home commercial-home">
         <section className="commercial-hero">
           <div className="commercial-hero-copy">
-            <span className="commercial-kicker">桌面端 AI 网文创作工作台</span>
-            <h1>拆爆款，管长篇，把灵感稳定写成连载。</h1>
+            <span className="commercial-kicker">墨澜 · AI网文写作助手</span>
+            <h1>让一本小说，从灵感开始有章法地长出来。</h1>
             <p>
-              墨澜把拆书分析、模板迁移、灵感整理、章节任务卡、正文生成、章节台账和一致性审稿放进同一个本地客户端。它不是单次聊天写作，而是陪作者持续管理一本长篇。
+              先管住设定、人物和章节目标，再让 AI 参与生成。墨澜帮你把一本长篇写作项目持续接下去。
             </p>
             <div className="commercial-actions">
               {userHasAccess ? (
@@ -453,66 +459,53 @@ export default async function HomePage() {
                 </a>
               ) : (
                 <Link href="/download" className="button primary">
-                  下载客户端
+                  下载桌面端
                 </Link>
               )}
-              <Link href="/activate?mode=web" className="button">
-                特邀用户入口
-              </Link>
-              <Link href="/manual" className="button commercial-text-button" target="_blank">
-                查看使用手册
-              </Link>
             </div>
             <div className="commercial-hero-metrics" aria-label="产品能力概览">
-              <span><strong>本地保存</strong>作品、草稿、设定与台账</span>
-              <span><strong>双工作流</strong>创作项目与拆书项目</span>
-              <span><strong>长篇记忆</strong>人物、伏笔、主线状态</span>
+              <span><strong>搭</strong>先把作品骨架、人物和规则搭清楚</span>
+              <span><strong>写</strong>每章都有目标、承接和章末余味</span>
+              <span><strong>审</strong>写完后检查跑偏、露馅和 AI 味</span>
             </div>
           </div>
 
           <div className="commercial-product-visual" aria-label="墨澜产品能力预览">
-            <img src="/mascot/molan.png" alt="墨澜 AI 网文写作助手" className="commercial-mascot" />
-            <div className="commercial-demo-panel">
-              <div className="commercial-demo-head">
-                <span>创作工作台</span>
-                <strong>《长夜问丹》 第 18 章</strong>
+            <div className="commercial-device">
+              <div className="commercial-device-bar" aria-hidden="true">
+                <span />
+                <span />
+                <span />
               </div>
-              <div className="commercial-demo-columns">
-                <div className="commercial-demo-column accent-blue">
-                  <small>任务卡</small>
-                  <strong>夜探药铺，发现账本异常</strong>
-                  <span>承接上一章钩子 / 推进黑市线索</span>
-                </div>
-                <div className="commercial-demo-column accent-green">
-                  <small>章节台账</small>
-                  <strong>新增秦掌柜与赤纹丹线索</strong>
-                  <span>人物状态、伏笔、资源同步记录</span>
-                </div>
-              </div>
-              <div className="commercial-review-row">
-                <span>一致性审稿</span>
-                <p>检查人物已知信息、金手指限制、伏笔提前泄露和 AI 味表达。</p>
-              </div>
+              <img src="/landing/homepage.webp" alt="墨澜客户端首页截图" />
+            </div>
+            <div className="commercial-floating-shot commercial-floating-shot-writing">
+              <img src="/landing/writing.webp" alt="新书创作工作台截图" />
+              <span>新书创作</span>
+            </div>
+            <div className="commercial-floating-shot commercial-floating-shot-ideas">
+              <img src="/landing/inspirations.webp" alt="灵感中心截图" />
+              <span>灵感中心</span>
             </div>
           </div>
         </section>
 
         <section className="commercial-section commercial-pillars">
           <div className="commercial-section-head">
-            <span className="commercial-kicker">核心能力</span>
-            <h2>现在的墨澜，是一个完整客户端，不只是早期网页入口。</h2>
-            <p>首页优先呈现已经成型的产品能力：长期创作、拆书资产、灵感与二稿，而授权和网页入口退到辅助位置。</p>
+            <span className="commercial-section-overline">核心能力</span>
+            <h2>写作不是一次输出，而是一串需要被照看的决定。</h2>
+            <p>墨澜把构思、样本研究、章节推进和状态校准放在一起，让作品资料能持续服务下一章。</p>
           </div>
           <div className="commercial-pillar-grid">
-            {productPillars.map((pillar) => (
+            {productPillars.map((pillar, index) => (
               <article key={pillar.label} className="commercial-pillar">
-                <span>{pillar.label}</span>
-                <h3>{pillar.title}</h3>
-                <p>{pillar.description}</p>
-                <div>
-                  {pillar.points.map((point) => (
-                    <small key={point}>{point}</small>
-                  ))}
+                <div className="commercial-pillar-copy">
+                  <p className="commercial-pillar-meta">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    {pillar.label}
+                  </p>
+                  <h3>{pillar.title}</h3>
+                  <p>{pillar.description}</p>
                 </div>
               </article>
             ))}
@@ -520,17 +513,19 @@ export default async function HomePage() {
         </section>
 
         <section className="commercial-section commercial-workflows">
-          <div className="commercial-flow-copy">
-            <span className="commercial-kicker">两条主线</span>
-            <h2>作者可以直接写，策划也可以先拆后写。</h2>
+          <div className="commercial-section-head commercial-flow-head">
+            <span className="commercial-kicker">工作方式</span>
+            <h2>先让项目站稳，再让 AI 动笔。</h2>
             <p>
-              创作线负责把一本新书稳定推进；拆书线负责把样本沉淀成模板。两条线最终都回到同一个项目状态系统。
+              墨澜不把写作变成一次聊天。它先整理方向、规则、章节目标和前文状态，再把这些约束交给生成与审稿流程。
             </p>
           </div>
           <div className="commercial-flow-board">
             <div className="commercial-flow-track">
-              <span>创作项目</span>
-              <h3>从新书方向到连续章节</h3>
+              <div className="commercial-flow-track-head">
+                <span>新书创作</span>
+                <h3>从作品雏形到章节推进</h3>
+              </div>
               <ol>
                 {creationFlow.map((step) => (
                   <li key={step}>{step}</li>
@@ -538,8 +533,10 @@ export default async function HomePage() {
               </ol>
             </div>
             <div className="commercial-flow-track">
-              <span>拆书项目</span>
-              <h3>从样本文本到可迁移模板</h3>
+              <div className="commercial-flow-track-head">
+                <span>样本研究</span>
+                <h3>从阅读经验到可用方法</h3>
+              </div>
               <ol>
                 {analysisFlow.map((step) => (
                   <li key={step}>{step}</li>
@@ -551,10 +548,10 @@ export default async function HomePage() {
 
         <section className="commercial-section commercial-trust">
           <div className="commercial-trust-panel">
-            <span className="commercial-kicker">为什么更适合长期写作</span>
-            <h2>隐私、本地数据和可控 AI，是客户端的商业化重点。</h2>
+            <span className="commercial-kicker">创作者边界</span>
+            <h2>AI 做助手，作者做判断。</h2>
             <p>
-              长篇作者最在意的不是“能不能生成一段”，而是作品资料是否安全、模型是否可控、写到几十章后是否还能接得住前文。
+              它负责拆解、提醒、记录和辅助生成；题材取舍、人物命运、表达判断和最终发布，仍然交给创作者自己。
             </p>
             <div className="commercial-trust-list">
               {trustItems.map((item) => (
@@ -565,26 +562,12 @@ export default async function HomePage() {
               ))}
             </div>
           </div>
-          <aside className="commercial-cta-panel">
-            <strong>{userHasAccess ? "已经登录，直接回到工作台。" : "准备开始使用墨澜？"}</strong>
-            <p>{userHasAccess
-              ? "门户页会一直保留在根路径。需要继续写作、拆书或管理项目时，从这里进入工作台首页。"
-              : "优先下载桌面客户端。安装后输入授权码，配置自己的 AI 服务，就可以创建作品、拆书、记录灵感和审稿。"}
-            </p>
-            {userHasAccess ? (
-              <a href="/workspace" className="button primary">
-                进入工作台首页
-              </a>
-            ) : (
-              <Link href="/download" className="button primary">
-                前往下载中心
-              </Link>
-            )}
-            <Link href="/activate?mode=web" className="button">
-              网页特邀入口
-            </Link>
-          </aside>
         </section>
+        <footer className="commercial-footer">
+          <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
+            备案号：京ICP备2026030971号-1
+          </a>
+        </footer>
       </div>
   );
 
