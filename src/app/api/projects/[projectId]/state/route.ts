@@ -287,6 +287,30 @@ export async function POST(
       return Response.json({ foreshadowing }, { status: 201 });
     }
 
+    if (action === "update_foreshadowing") {
+      const foreshadowing = await updateForeshadowing(
+        projectId,
+        String(body.foreshadowingId ?? ""),
+        {
+          name: String(body.name ?? ""),
+          plantedChapter: String(body.plantedChapter ?? ""),
+          relatedCharacters: list(body.relatedCharacters),
+          relatedLocation: String(body.relatedLocation ?? ""),
+          status: status(body.status),
+          expectedRevealChapter: String(body.expectedRevealChapter ?? ""),
+          revealMethod: String(body.revealMethod ?? ""),
+          hiddenInformation: String(body.hiddenInformation ?? "")
+        }
+      );
+
+      return Response.json({ foreshadowing });
+    }
+
+    if (action === "delete_foreshadowing") {
+      const result = await deleteForeshadowing(projectId, String(body.foreshadowingId ?? ""));
+      return Response.json({ result });
+    }
+
     if (action === "create_custom_graph") {
       const graph = await createCustomRelationGraph(projectId, {
         title: String(body.title ?? ""),

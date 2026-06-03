@@ -394,6 +394,9 @@ function ensureSqliteSchema() {
       "payoff" TEXT NOT NULL,
       "cliffhanger" TEXT NOT NULL,
       "stateChanges" JSON,
+      "closureStatus" TEXT NOT NULL DEFAULT 'pending',
+      "closureConfirmedAt" DATETIME,
+      "closureDecisions" JSON,
       "createdAt" DATETIME NOT NULL,
       "updatedAt" DATETIME NOT NULL,
       CONSTRAINT "ChapterLedger_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
@@ -634,7 +637,10 @@ function ensureSqliteSchema() {
     'ALTER TABLE "PlotState" ADD COLUMN "relationshipChanges" JSON',
     'ALTER TABLE "LongFormPlan" ADD COLUMN "post100Pacing" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "ChapterAnalysis" ADD COLUMN "entityRelations" JSON',
-    'ALTER TABLE "EditReport" ADD COLUMN "draftId" TEXT'
+    'ALTER TABLE "EditReport" ADD COLUMN "draftId" TEXT',
+    'ALTER TABLE "ChapterLedger" ADD COLUMN "closureStatus" TEXT NOT NULL DEFAULT \'pending\'',
+    'ALTER TABLE "ChapterLedger" ADD COLUMN "closureConfirmedAt" DATETIME',
+    'ALTER TABLE "ChapterLedger" ADD COLUMN "closureDecisions" JSON'
   ].forEach((statement) => {
     try {
       db.exec(statement);
@@ -1311,9 +1317,9 @@ function syncCoreTables(store: unknown) {
 
     const insertChapterLedger = db.prepare(`
       INSERT INTO "ChapterLedger" (
-        "id", "projectId", "draftId", "chapterNumber", "title", "events", "newCharacters", "newClues", "payoff", "cliffhanger", "stateChanges", "createdAt", "updatedAt"
+        "id", "projectId", "draftId", "chapterNumber", "title", "events", "newCharacters", "newClues", "payoff", "cliffhanger", "stateChanges", "closureStatus", "closureConfirmedAt", "closureDecisions", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @projectId, @draftId, @chapterNumber, @title, @events, @newCharacters, @newClues, @payoff, @cliffhanger, @stateChanges, @createdAt, @updatedAt
+        @id, @projectId, @draftId, @chapterNumber, @title, @events, @newCharacters, @newClues, @payoff, @cliffhanger, @stateChanges, @closureStatus, @closureConfirmedAt, @closureDecisions, @createdAt, @updatedAt
       )
     `);
 
@@ -1330,6 +1336,9 @@ function syncCoreTables(store: unknown) {
         payoff: text(item.payoff),
         cliffhanger: text(item.cliffhanger),
         stateChanges: jsonText(item.stateChanges),
+        closureStatus: text(item.closureStatus) === "confirmed" ? "confirmed" : "pending",
+        closureConfirmedAt: nullableText(item.closureConfirmedAt),
+        closureDecisions: jsonText(item.closureDecisions),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
       });
@@ -2080,6 +2089,9 @@ function readCoreStoreFromDb<T>(fallback: T) {
         payoff: text(item.payoff),
         cliffhanger: text(item.cliffhanger),
         stateChanges: parseJsonArray(item.stateChanges),
+        closureStatus: text(item.closureStatus) === "confirmed" ? "confirmed" : "pending",
+        closureConfirmedAt: item.closureConfirmedAt ? dateText(item.closureConfirmedAt) : undefined,
+        closureDecisions: parseJsonArray(item.closureDecisions),
         createdAt: dateText(item.createdAt),
         updatedAt: dateText(item.updatedAt)
       })),

@@ -533,6 +533,14 @@ export type StoredChapterLedger = {
   payoff: string;
   cliffhanger: string;
   stateChanges: string[];
+  closureStatus?: "pending" | "confirmed";
+  closureConfirmedAt?: string;
+  closureDecisions?: Array<{
+    targetType: "character" | "foreshadowing";
+    targetId: string;
+    decision: "accepted" | "ignored";
+    decidedAt: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 };

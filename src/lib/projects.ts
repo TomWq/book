@@ -3838,6 +3838,48 @@ function cleanStateEntries(values: string[], limit = 8, maxLength = 90) {
   ).slice(0, limit);
 }
 
+function splitLedgerSegments(value: string) {
+  return value
+    .split(/[；;]\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeLedgerComparisonText(value: string) {
+  return value
+    .replace(/\s+/g, "")
+    .replace(/[，,。！？!?；;：:“”"'‘’（）()【】\[\]《》<>—\-_/\\|、…]/g, "")
+    .trim();
+}
+
+function isLedgerFieldOverlap(value: string, sources: string[]) {
+  const text = normalizeLedgerComparisonText(value);
+
+  if (text.length < 10) {
+    return false;
+  }
+
+  return sources.some((source) => {
+    const sourceText = normalizeLedgerComparisonText(source);
+
+    if (sourceText.length < 10) {
+      return false;
+    }
+
+    return sourceText.includes(text) || text.includes(sourceText);
+  });
+}
+
+function cleanLedgerEntries(values: string[], limit = 8, maxLength = 90, overlapSources: string[] = []) {
+  return cleanStateEntries(
+    values
+      .flatMap(splitLedgerSegments)
+      .filter((item) => !isLedgerFieldOverlap(item, overlapSources)),
+    limit,
+    maxLength
+  );
+}
+
 function normalizeMapAndForceEntry(value: string) {
   const raw = value.trim();
 
@@ -4559,22 +4601,26 @@ function mergeAiLedgerFields(
   fallback: ReturnType<typeof buildLedgerFromDraft>,
   aiUpdate: ChapterStateUpdateResult
 ) {
+  const events = cleanLedgerEntries(aiUpdate.events.length > 0 ? aiUpdate.events : fallback.events, 8);
+  const newClues = cleanLedgerEntries(aiUpdate.newClues.length > 0 ? aiUpdate.newClues : fallback.newClues, 10);
+  const payoff = compactStateText(aiUpdate.payoff || fallback.payoff, 110);
+  const cliffhanger = compactStateText(fallback.cliffhanger || aiUpdate.cliffhanger, 130);
+
   return {
-    events: cleanStateEntries(aiUpdate.events.length > 0 ? aiUpdate.events : fallback.events, 8),
+    events,
     newCharacters: uniqueList(
       (aiUpdate.newCharacters.length > 0 ? aiUpdate.newCharacters : fallback.newCharacters)
         .filter((item) => isValidAutoCharacterName(item))
     ).slice(0, 8),
-    newClues: cleanStateEntries(aiUpdate.newClues.length > 0 ? aiUpdate.newClues : fallback.newClues, 10),
-    payoff: compactStateText(aiUpdate.payoff || fallback.payoff, 110),
-    cliffhanger: compactStateText(fallback.cliffhanger || aiUpdate.cliffhanger, 130),
-    stateChanges: cleanStateEntries([
-      ...(aiUpdate.stateChanges.length > 0 ? aiUpdate.stateChanges : fallback.stateChanges),
-      ...aiUpdate.relationshipChanges,
-      ...aiUpdate.mapAndForceUpdates,
-      ...aiUpdate.powerSystemUpdates,
-      ...aiUpdate.resourceUpdates
-    ], 14)
+    newClues,
+    payoff,
+    cliffhanger,
+    stateChanges: cleanLedgerEntries(
+      aiUpdate.stateChanges.length > 0 ? aiUpdate.stateChanges : fallback.stateChanges,
+      8,
+      110,
+      [...events, ...newClues, payoff, cliffhanger]
+    )
   };
 }
 
@@ -4637,18 +4683,28 @@ function createLedgerRecord(
   extracted: ChapterStateUpdateExtraction,
   timestamp: string
 ): StoredChapterLedger {
+  const events = cleanLedgerEntries(extracted.events, 8);
+  const newClues = cleanLedgerEntries(extracted.newClues, 10);
+  const payoff = compactStateText(extracted.payoff, 110);
+  const cliffhanger = compactStateText(extracted.cliffhanger, 130);
+
   return {
     id: randomUUID(),
     projectId,
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
     title: draft.title,
-    events: extracted.events,
+    events,
     newCharacters: extracted.newCharacters,
-    newClues: extracted.newClues,
-    payoff: extracted.payoff,
-    cliffhanger: extracted.cliffhanger,
-    stateChanges: extracted.stateChanges,
+    newClues,
+    payoff,
+    cliffhanger,
+    stateChanges: cleanLedgerEntries(extracted.stateChanges, 8, 110, [
+      ...events,
+      ...newClues,
+      payoff,
+      cliffhanger
+    ]),
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -10502,6 +10558,109 @@ export async function createChapterLedger(projectId: string, draftId?: string) {
   project.updatedAt = now();
   await writeStore(store);
   return stateUpdate.ledger;
+}
+
+export async function confirmChapterClosure(projectId: string, draftId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const draft = store.chapterDrafts.find((item) => item.id === draftId && item.projectId === projectId);
+
+  if (!draft) {
+    throw new Error("要确认的章节正文不存在");
+  }
+
+  const ledger = store.chapterLedgers.find((item) => item.draftId === draft.id && item.projectId === projectId);
+
+  if (!ledger) {
+    throw new Error("请先生成章节台账，再确认本章状态");
+  }
+
+  const taskCard = store.writingTaskCards.find((item) => item.id === draft.taskCardId && item.projectId === projectId);
+  const timestamp = now();
+
+  ledger.closureStatus = "confirmed";
+  ledger.closureConfirmedAt = timestamp;
+  ledger.updatedAt = timestamp;
+
+  if (taskCard) {
+    taskCard.status = "approved";
+    taskCard.updatedAt = timestamp;
+  }
+
+  project.updatedAt = timestamp;
+  await writeStore(store);
+
+  return { ledger };
+}
+
+export async function decideChapterClosureItem(
+  projectId: string,
+  input: {
+    draftId: string;
+    targetType: "character" | "foreshadowing";
+    targetId: string;
+    decision: "accepted" | "ignored";
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const draft = store.chapterDrafts.find((item) => item.id === input.draftId && item.projectId === projectId);
+
+  if (!draft) {
+    throw new Error("要收口的章节正文不存在");
+  }
+
+  const ledger = store.chapterLedgers.find((item) => item.draftId === draft.id && item.projectId === projectId);
+
+  if (!ledger) {
+    throw new Error("请先生成章节台账，再处理收口条目");
+  }
+
+  const timestamp = now();
+  ledger.closureStatus = "pending";
+  ledger.closureDecisions = [
+    ...(ledger.closureDecisions ?? []).filter(
+      (item) => !(item.targetType === input.targetType && item.targetId === input.targetId)
+    ),
+    {
+      targetType: input.targetType,
+      targetId: input.targetId,
+      decision: input.decision,
+      decidedAt: timestamp
+    }
+  ];
+  ledger.updatedAt = timestamp;
+
+  if (input.decision === "ignored") {
+    if (input.targetType === "character") {
+      const originalCount = store.characterProfiles.length;
+      store.characterProfiles = store.characterProfiles.filter(
+        (item) => !(item.id === input.targetId && item.projectId === projectId)
+      );
+
+      if (store.characterProfiles.length === originalCount) {
+        throw new Error("人物不存在或已被删除");
+      }
+    }
+
+    if (input.targetType === "foreshadowing") {
+      const originalCount = store.foreshadowings.length;
+      store.foreshadowings = store.foreshadowings.filter(
+        (item) => !(item.id === input.targetId && item.projectId === projectId)
+      );
+
+      if (store.foreshadowings.length === originalCount) {
+        throw new Error("伏笔不存在或已被删除");
+      }
+    }
+  }
+
+  project.updatedAt = timestamp;
+  await writeStore(store);
+
+  return { ledger };
 }
 
 export async function reviewChapterDraft(

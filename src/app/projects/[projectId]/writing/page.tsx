@@ -63,6 +63,73 @@ function splitReadableLines(value?: string | null) {
     .filter(Boolean);
 }
 
+type LedgerDisplayFields = {
+  events: string[];
+  newClues: string[];
+  payoff: string;
+  cliffhanger: string;
+  stateChanges: string[];
+};
+
+function splitLedgerDisplaySegments(value: string) {
+  return value
+    .split(/[；;]\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeLedgerDisplayText(value: string) {
+  return value
+    .replace(/\s+/g, "")
+    .replace(/[，,。！？!?；;：:“”"'‘’（）()【】\[\]《》<>—\-_/\\|、…]/g, "")
+    .trim();
+}
+
+function isRepeatedLedgerDisplayText(value: string, sources: string[]) {
+  const text = normalizeLedgerDisplayText(value);
+
+  if (text.length < 10) {
+    return false;
+  }
+
+  return sources.some((source) => {
+    const sourceText = normalizeLedgerDisplayText(source);
+
+    if (sourceText.length < 10) {
+      return false;
+    }
+
+    return sourceText.includes(text) || text.includes(sourceText);
+  });
+}
+
+function uniqueDisplayLines(values: string[], exclude: string[] = []) {
+  const result: string[] = [];
+
+  values.flatMap(splitLedgerDisplaySegments).forEach((value) => {
+    if (isRepeatedLedgerDisplayText(value, [...exclude, ...result])) {
+      return;
+    }
+
+    result.push(value);
+  });
+
+  return result;
+}
+
+function ledgerEventsForDisplay(ledger: LedgerDisplayFields) {
+  return uniqueDisplayLines(ledger.events);
+}
+
+function ledgerStateChangesForDisplay(ledger: LedgerDisplayFields, displayEvents: string[]) {
+  return uniqueDisplayLines(ledger.stateChanges, [
+    ...displayEvents,
+    ...ledger.newClues,
+    ledger.payoff,
+    ledger.cliffhanger
+  ]);
+}
+
 function removeStatusPrefix(value: string) {
   return value.replace(/^(作品简介|项目目标|一句话卖点|开局钩子|前100章节奏|爽点分布|核心主角|作品标签)：/, "").trim();
 }
@@ -96,6 +163,39 @@ function formatWanWords(value: number) {
   return `${Math.round(value / 10000)} 万字`;
 }
 
+function formatClosureTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function closureDecisionLabel(
+  decision?: "accepted" | "ignored"
+) {
+  if (decision === "accepted") {
+    return null;
+  }
+
+  if (decision === "ignored") {
+    return { text: "已移除", className: "pill danger" };
+  }
+
+  return null;
+}
+
 export default async function ProjectWritingPage({
   params
 }: {
@@ -113,7 +213,6 @@ export default async function ProjectWritingPage({
   }
 
   const latestTaskCard = writingState.taskCards[0];
-  const draftTaskCardIds = new Set(writingState.drafts.map((draft) => draft.taskCardId));
   const latestTaskCardDraft = latestTaskCard
     ? writingState.drafts.find((draft) => draft.taskCardId === latestTaskCard.id)
     : null;
@@ -139,27 +238,14 @@ export default async function ProjectWritingPage({
   const historicalReview = activeDraft
     ? writingState.reviews.find((review) => review.draftId !== activeDraft.id) ?? null
     : latestReview ?? null;
-  const chapterDirectoryAll = Array.from(
+  const chapterNumbers = Array.from(
     new Set([
       ...writingState.taskCards.map((card) => card.chapterNumber),
       ...writingState.drafts.map((draft) => draft.chapterNumber),
       ...writingState.ledgers.map((ledger) => ledger.chapterNumber),
       ...writingState.reviews.map((review) => review.chapterNumber)
     ])
-  )
-    .sort((a, b) => a - b)
-    .map((chapterNumber) => ({
-      chapterNumber,
-      taskCard: writingState.taskCards.find((card) => card.chapterNumber === chapterNumber),
-      draft: writingState.drafts.find((draft) => draft.chapterNumber === chapterNumber),
-      ledger: writingState.ledgers.find((ledger) => ledger.chapterNumber === chapterNumber),
-      review: writingState.reviews.find((review) => review.chapterNumber === chapterNumber)
-    }));
-  const chapterDirectory = chapterDirectoryAll.slice(-8);
-  const activeCharacters = writingState.characters.slice(0, 4);
-  const openForeshadowings = writingState.foreshadowings
-    .filter((item) => item.status !== "closed")
-    .slice(0, 4);
+  );
   const storyAnalysis = analysisState.storyAnalysis;
   const hasAnalysisContext = analysisState.chapterAnalyses.length > 0 || Boolean(storyAnalysis);
   const latestLongFormPlan = writingState.longFormPlans[0] ?? null;
@@ -183,13 +269,98 @@ export default async function ProjectWritingPage({
     `人物 ${writingState.characters.length}`,
     `伏笔 ${writingState.foreshadowings.length}`,
     `灵感 ${relatedInspirations.length}`,
-    `章节 ${chapterDirectoryAll.length}`,
+    `章节 ${chapterNumbers.length}`,
     latestLongFormPlan ? "已有长篇规划" : "缺少长篇规划",
     hasAnalysisContext ? `拆书 ${analysisState.chapterAnalyses.length}` : "未接入拆书"
+  ];
+  const activeChapterLabel = `第 ${activeDisplayChapterNumber} 章`;
+  const activeLedgerConfirmed = activeLedger?.closureStatus === "confirmed";
+  const closureConfirmedAt = formatClosureTime(activeLedger?.closureConfirmedAt);
+  const highRiskIssues = activeReview?.issues.filter((issue) => issue.severity === "high") ?? [];
+  const mediumRiskIssues = activeReview?.issues.filter((issue) => issue.severity === "medium") ?? [];
+  const activeLedgerEvents = activeLedger ? ledgerEventsForDisplay(activeLedger) : [];
+  const activeLedgerStateChanges = activeLedger
+    ? ledgerStateChangesForDisplay(activeLedger, activeLedgerEvents)
+    : [];
+  const closureDecisionByTarget = new Map(
+    (activeLedger?.closureDecisions ?? []).map((item) => [`${item.targetType}:${item.targetId}`, item.decision] as const)
+  );
+  const closureCharacters = activeDraft
+    ? writingState.characters
+        .filter((character) =>
+          character.lastAppearance.includes(activeChapterLabel) ||
+          character.currentState.includes(activeChapterLabel) ||
+          activeLedger?.newCharacters.some((name) => name === character.name)
+        )
+        .slice(0, 6)
+    : [];
+  const activeLedgerEvidence = activeLedger
+    ? [
+        ...activeLedger.events,
+        ...activeLedger.newClues,
+        ...activeLedger.stateChanges,
+        activeLedger.payoff,
+        activeLedger.cliffhanger
+      ]
+    : [];
+  const closureForeshadowings = activeLedger
+    ? writingState.foreshadowings
+        .filter((item) =>
+          item.plantedChapter.includes(activeChapterLabel) ||
+          activeLedgerEvidence.some((entry) => entry.includes(item.name) || item.hiddenInformation.includes(entry))
+        )
+        .slice(0, 6)
+    : [];
+  const closureConfirmMessage = highRiskIssues.length > 0
+    ? `当前审稿还有 ${highRiskIssues.length} 个高风险问题。确认后系统会把本章台账标记为作者已确认，后续任务卡会继续读取这些状态。确定继续确认吗？`
+    : !activeReview
+      ? "当前章节还没有一致性审稿。确认后系统会把本章台账标记为作者已确认，后续任务卡会继续读取这些状态。确定继续确认吗？"
+      : "确认后系统会把本章自动入库的事件、人物、伏笔和主线变化标记为作者已确认，后续任务卡会继续读取这些状态。";
+  const writingStageItems = [
+    {
+      href: "#writing-prep",
+      label: "准备",
+      detail: `第 ${taskCardChapterNumber} 章`,
+      className: "active"
+    },
+    {
+      href: "#task-card-form",
+      label: "任务卡",
+      detail: activeTaskCard ? "已生成" : "待生成",
+      className: activeTaskCard ? "done" : ""
+    },
+    {
+      href: "#writing-draft",
+      label: "正文",
+      detail: activeDraft ? "已保存" : "待正文",
+      className: activeDraft ? "done" : ""
+    },
+    {
+      href: "#writing-closure",
+      label: "收口",
+      detail: activeLedgerConfirmed ? "已确认" : activeLedger ? "待确认" : "缺台账",
+      className: activeLedgerConfirmed ? "done" : activeLedger ? "warning" : ""
+    },
+    {
+      href: "#writing-review",
+      label: "审稿",
+      detail: activeReview ? (highRiskIssues.length > 0 ? `${highRiskIssues.length} 高风险` : "已审") : "待审",
+      className: activeReview && highRiskIssues.length === 0 ? "done" : highRiskIssues.length > 0 ? "danger" : ""
+    }
   ];
 
   return (
     <div className="grid">
+      <nav className="writing-stage-nav" aria-label="创作阶段导航">
+        {writingStageItems.map((item) => (
+          <a key={item.href} href={item.href} className={`writing-stage-link ${item.className}`}>
+            <strong>{item.label}</strong>
+            <span>{item.detail}</span>
+          </a>
+        ))}
+      </nav>
+
+      <div id="writing-prep" className="scroll-anchor" />
       <Panel title="本章准备" description="只展示生成下一章任务卡前需要看的关键信息。">
         <div className="writing-prep-stack">
           <div className="writing-action-strip">
@@ -281,10 +452,10 @@ export default async function ProjectWritingPage({
         </div>
       </Panel>
 
-      <div className="writing-layout">
+      <div className="writing-layout writing-layout-full">
         <div className="writing-main">
+          <div id="task-card-form" className="scroll-anchor" />
           <Panel title="生成章节任务卡" description="所有字段都可留空，系统会优先读取当前作品设定；如果本项目有拆书分析，会把拆书结构作为参考。">
-            <div id="task-card-form" />
             <ApiForm
               className="forms writing-form"
               endpoint={`/api/projects/${projectId}/writing`}
@@ -295,56 +466,62 @@ export default async function ProjectWritingPage({
               pendingTitle={`正在生成第 ${taskCardChapterNumber} 章任务卡`}
               pendingDescription="正在读取创作圣经、人物状态、伏笔和主线进度。"
             >
-              <div className="quote-box">
-                当前准备生成第 {taskCardChapterNumber} 章任务卡。不确定怎么填时可以直接点生成；只在你想强制指定本章目标、爽点或章末钩子时再填写对应项。
+              <div className="writing-form-summary">
+                <strong>当前准备生成第 {taskCardChapterNumber} 章任务卡</strong>
+                <span>不确定怎么填可以直接生成；只在要强制指定本章目标、爽点或章末钩子时填写。</span>
               </div>
-              <div className="quote-box compact-note">
-                任务卡会自动校验“收益机制”：本章如果有能力、境界、金钱、资源、地位、权限、情报或关系收益，必须写清收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否越级。
-              </div>
-              <div className={latestLongFormPlan ? "quote-box compact-note" : "quote-box warning-box compact-note"}>
-                {latestLongFormPlan
-                  ? "已接入长篇规划：任务卡会参考总篇幅、前100章节奏、成长上限和收益频率。"
-                  : "建议先生成上方长篇规划；没有规划时会保守推进，但无法明确约束多少章小提升、多少章大提升。"}
-              </div>
-              <label className="option-row">
-                <input name="useAnalysisContext" type="checkbox" defaultChecked />
-                <span>
-                  <strong>参考拆书结构，不照搬内容</strong>
-                  <small>
-                    {hasAnalysisContext
-                      ? "默认只引用章节拆解、整书公式和爽点节奏的结构信号，生成当前新书自己的剧情任务。"
-                      : "当前暂无分析结果，勾选后也只会使用已有创作状态。"}
-                  </small>
-                </span>
-              </label>
-              {relatedInspirations.length ? (
-                <div className="writing-inspiration-picker">
-                  <div>
-                    <div className="field-label">相关灵感</div>
-                    <span>勾选后会作为本章任务卡输入，只取结构和创作意图。</span>
+              <details className="writing-context-details writing-form-assist">
+                <summary>生成参考、收益机制和灵感</summary>
+                <div className="writing-form-assist-body">
+                  <div className="quote-box compact-note">
+                    任务卡会自动校验“收益机制”：本章如果有能力、境界、金钱、资源、地位、权限、情报或关系收益，必须写清收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否越级。
                   </div>
-                  <div>
-                    {relatedInspirations.slice(0, 8).map((inspiration) => (
-                      <label key={inspiration.id} className="option-row compact-option-row">
-                        <input name="relatedInspirationIds" type="checkbox" value={inspiration.id} />
-                        <span>
-                          <strong>{inspiration.title}</strong>
-                          <small>{inspiration.content || "暂无正文"}</small>
-                        </span>
-                      </label>
-                    ))}
+                  <div className={latestLongFormPlan ? "quote-box compact-note" : "quote-box warning-box compact-note"}>
+                    {latestLongFormPlan
+                      ? "已接入长篇规划：任务卡会参考总篇幅、前100章节奏、成长上限和收益频率。"
+                      : "建议先生成上方长篇规划；没有规划时会保守推进，但无法明确约束多少章小提升、多少章大提升。"}
                   </div>
-                  <Link className="button small-button" href={`/inspirations?projectId=${projectId}`}>
-                    管理项目灵感
-                  </Link>
+                  <label className="option-row">
+                    <input name="useAnalysisContext" type="checkbox" defaultChecked />
+                    <span>
+                      <strong>参考拆书结构，不照搬内容</strong>
+                      <small>
+                        {hasAnalysisContext
+                          ? "默认只引用章节拆解、整书公式和爽点节奏的结构信号，生成当前新书自己的剧情任务。"
+                          : "当前暂无分析结果，勾选后也只会使用已有创作状态。"}
+                      </small>
+                    </span>
+                  </label>
+                  {relatedInspirations.length ? (
+                    <div className="writing-inspiration-picker">
+                      <div>
+                        <div className="field-label">相关灵感</div>
+                        <span>勾选后会作为本章任务卡输入，只取结构和创作意图。</span>
+                      </div>
+                      <div>
+                        {relatedInspirations.slice(0, 8).map((inspiration) => (
+                          <label key={inspiration.id} className="option-row compact-option-row">
+                            <input name="relatedInspirationIds" type="checkbox" value={inspiration.id} />
+                            <span>
+                              <strong>{inspiration.title}</strong>
+                              <small>{inspiration.content || "暂无正文"}</small>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <Link className="button small-button" href={`/inspirations?projectId=${projectId}`}>
+                        管理项目灵感
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="quote-box compact-note">
+                      这个项目还没有关联灵感。可以先去
+                      <Link href={`/inspirations?projectId=${projectId}`}> 灵感中心 </Link>
+                      记录素材，再回到这里喂给任务卡。
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="quote-box compact-note">
-                  这个项目还没有关联灵感。可以先去
-                  <Link href={`/inspirations?projectId=${projectId}`}> 灵感中心 </Link>
-                  记录素材，再回到这里喂给任务卡。
-                </div>
-              )}
+              </details>
               <div className="writing-form-grid">
                 <div className="field">
                   <div className="field-label">章节标题</div>
@@ -440,18 +617,12 @@ export default async function ProjectWritingPage({
             ) : (
               <div className="empty-state">
                 <strong>第 {taskCardChapterNumber} 章还没有任务卡</strong>
-                <span>
-                  {maxChapterNumber > 0
-                    ? "上一章已经生成正文后，就从这里继续生成下一章任务卡。生成后再写正文。"
-                    : "先在上面生成第一章任务卡。"}
-                </span>
-                <a className="button primary" href="#task-card-form">
-                  生成第 {taskCardChapterNumber} 章任务卡
-                </a>
+                <span>请在上方填写或留空表单，然后点击上方生成按钮。</span>
               </div>
             )}
           </Panel>
 
+          <div id="writing-draft" className="scroll-anchor" />
           <Panel title="正文草稿" description="正文支持流式生成，生成完成后会保存为草稿。">
             {activeDraft ? (
               <div className="editor-grid">
@@ -523,22 +694,330 @@ export default async function ProjectWritingPage({
             )}
           </Panel>
 
-          <Panel title="台账与审稿" description="每章写完后沉淀成长期记忆。">
-            <div className="list">
-              {activeLedger ? (
-                <div className="list-item">
-                  <strong>
-                    第 {activeLedger.chapterNumber} 章台账 · {activeLedger.title}
-                  </strong>
-                  <div className="muted">事件：{activeLedger.events.join("；")}</div>
-                  <div className="muted">收益：{activeLedger.payoff}</div>
-                  <div className="quote-box">{activeLedger.cliffhanger}</div>
+          <div id="writing-closure" className="scroll-anchor" />
+          <Panel title="章节收口" description="确认本章自动入库的长期记忆，再继续下一章。">
+            {activeDraft ? (
+              <div className="chapter-closure-stack">
+                <div className={activeLedgerConfirmed ? "chapter-closure-head confirmed" : "chapter-closure-head pending"}>
+                  <div>
+                    <div className="mini-label">收口状态</div>
+                    <strong>
+                      {activeLedgerConfirmed
+                        ? `${activeChapterLabel}状态已确认`
+                        : activeLedger
+                          ? `${activeChapterLabel}等待确认`
+                          : `${activeChapterLabel}缺少章节台账`}
+                    </strong>
+                    <span>
+                      {activeLedgerConfirmed && closureConfirmedAt
+                        ? `确认时间：${closureConfirmedAt}`
+                        : activeLedger
+                          ? "下方条目会随本章状态一起保留；只有不是本章事实的条目才需要移除。"
+                          : "正文已保存，但还没有可确认的长期记忆。"}
+                    </span>
+                  </div>
+                  <div className="hero-actions">
+                    {activeLedger ? (
+                      <span className={activeLedgerConfirmed ? "pill success" : "pill warning"}>
+                        {activeLedgerConfirmed ? "已收口" : "待收口"}
+                      </span>
+                    ) : (
+                      <span className="pill danger">缺台账</span>
+                    )}
+                    {activeReview ? (
+                      <span className={highRiskIssues.length > 0 ? "pill danger" : "pill success"}>
+                        审稿 {highRiskIssues.length > 0 ? `${highRiskIssues.length} 高风险` : "无高风险"}
+                      </span>
+                    ) : (
+                      <span className="pill warning">未审稿</span>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <div className="empty-state">
-                  <strong>第 {activeDisplayChapterNumber} 章还没有生成章节台账</strong>
-                  <span>台账会记录本章事件、人物变化、伏笔和章末钩子，后续生成新章节时会作为长期记忆使用。</span>
-                  {activeDraft ? (
+
+                {activeLedger ? (
+                  <>
+                    <div className="closure-summary-grid">
+                      <div className="task-block">
+                        <div className="task-title">本章事件</div>
+                        <div className="muted">
+                          {activeLedgerEvents.length > 0 ? activeLedgerEvents.slice(0, 4).join("；") : "未抽取到关键事件"}
+                        </div>
+                      </div>
+                      <div className="task-block">
+                        <div className="task-title">收益 / 爽点</div>
+                        <div className="muted">{activeLedger.payoff || "未抽取到明确收益"}</div>
+                      </div>
+                      <div className="task-block">
+                        <div className="task-title">章末钩子</div>
+                        <div className="muted">{activeLedger.cliffhanger || "未抽取到章末钩子"}</div>
+                      </div>
+                      <div className="task-block">
+                        <div className="task-title">主线状态变化</div>
+                        <div className="muted">
+                          {activeLedgerStateChanges.length > 0
+                            ? activeLedgerStateChanges.slice(0, 4).join("；")
+                            : "未抽取到主线状态变化"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="closure-review-grid">
+                      <div className="task-block">
+                        <div className="task-title">人物记忆变更</div>
+                        {closureCharacters.length > 0 ? (
+                          <div className="closure-entity-list">
+                            {closureCharacters.map((character) => {
+                              const decision = closureDecisionByTarget.get(`character:${character.id}`);
+                              const decisionLabel = closureDecisionLabel(decision);
+
+                              return (
+                                <div key={character.id} className="closure-entity-item">
+                                  <div className="closure-entity-head">
+                                    <div>
+                                      <strong>{character.name}</strong>
+                                      <span>{character.currentState || character.knownInformation || "本章后状态待补充"}</span>
+                                    </div>
+                                    {decisionLabel ? <span className={decisionLabel.className}>{decisionLabel.text}</span> : null}
+                                  </div>
+                                  <div className="closure-entity-actions">
+                                    <ApiButton
+                                      endpoint={`/api/projects/${projectId}/writing`}
+                                      body={{
+                                        action: "decide_chapter_closure_item",
+                                        draftId: activeDraft.id,
+                                        targetType: "character",
+                                        targetId: character.id,
+                                        decision: "ignored"
+                                      }}
+                                      label="从记忆中移除"
+                                      className="button small-button closure-danger-action"
+                                      confirmMessage={`确定把人物“${character.name}”从本章记忆里移除吗？移除后，后续章节不会继续读取这条人物状态。`}
+                                      successMessage="已从记忆中移除"
+                                    />
+                                  </div>
+                                  <details className="closure-inline-editor">
+                                    <summary>修改状态</summary>
+                                    <ApiForm
+                                      className="forms closure-edit-form"
+                                      endpoint={`/api/projects/${projectId}/state`}
+                                      body={{ action: "update_character", characterId: character.id }}
+                                      successMessage="人物状态已保存"
+                                    >
+                                      <div className="split-panels">
+                                        <div className="field">
+                                          <div className="field-label">姓名</div>
+                                          <input name="name" defaultValue={character.name} />
+                                        </div>
+                                        <div className="field">
+                                          <div className="field-label">身份</div>
+                                          <input name="identity" defaultValue={character.identity} />
+                                        </div>
+                                      </div>
+                                      <div className="split-panels">
+                                        <div className="field">
+                                          <div className="field-label">当前目标</div>
+                                          <input name="currentGoal" defaultValue={character.currentGoal} />
+                                        </div>
+                                        <div className="field">
+                                          <div className="field-label">当前态度</div>
+                                          <input name="attitude" defaultValue={character.attitude} />
+                                        </div>
+                                      </div>
+                                      <div className="split-panels">
+                                        <div className="field">
+                                          <div className="field-label">已知信息</div>
+                                          <textarea name="knownInformation" defaultValue={character.knownInformation} />
+                                        </div>
+                                        <div className="field">
+                                          <div className="field-label">不知道的信息</div>
+                                          <textarea name="unknownInformation" defaultValue={character.unknownInformation} />
+                                        </div>
+                                      </div>
+                                      <div className="field">
+                                        <div className="field-label">当前状态</div>
+                                        <textarea name="currentState" defaultValue={character.currentState} />
+                                      </div>
+                                      <input name="longTermGoal" type="hidden" value={character.longTermGoal} />
+                                      <input name="secret" type="hidden" value={character.secret} />
+                                      <input name="relationshipToProtagonist" type="hidden" value={character.relationshipToProtagonist} />
+                                      <input name="abilityBoundary" type="hidden" value={character.abilityBoundary} />
+                                      <input name="voice" type="hidden" value={character.voice} />
+                                      <input name="lastAppearance" type="hidden" value={character.lastAppearance} />
+                                      <button className="button primary" type="submit">
+                                        保存人物
+                                      </button>
+                                    </ApiForm>
+                                  </details>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="muted">本章没有明显人物状态变更，或需要到状态页手动补充。</div>
+                        )}
+                      </div>
+                      <div className="task-block">
+                        <div className="task-title">伏笔 / 线索变更</div>
+                        {closureForeshadowings.length > 0 || activeLedger.newClues.length > 0 ? (
+                          <div className="closure-entity-list">
+                            {closureForeshadowings.map((item) => {
+                              const decision = closureDecisionByTarget.get(`foreshadowing:${item.id}`);
+                              const decisionLabel = closureDecisionLabel(decision);
+
+                              return (
+                                <div key={item.id} className="closure-entity-item">
+                                  <div className="closure-entity-head">
+                                    <div>
+                                      <strong>{item.name}</strong>
+                                      <span>
+                                        {item.status === "closed" ? "已回收" : item.status === "partial" ? "部分回收" : "未回收"} · {item.hiddenInformation || item.revealMethod}
+                                      </span>
+                                    </div>
+                                    {decisionLabel ? <span className={decisionLabel.className}>{decisionLabel.text}</span> : null}
+                                  </div>
+                                  <div className="closure-entity-actions">
+                                    <ApiButton
+                                      endpoint={`/api/projects/${projectId}/writing`}
+                                      body={{
+                                        action: "decide_chapter_closure_item",
+                                        draftId: activeDraft.id,
+                                        targetType: "foreshadowing",
+                                        targetId: item.id,
+                                        decision: "ignored"
+                                      }}
+                                      label="从记忆中移除"
+                                      className="button small-button closure-danger-action"
+                                      confirmMessage={`确定把伏笔“${item.name}”从本章记忆里移除吗？移除后，后续章节不会继续读取这条伏笔状态。`}
+                                      successMessage="已从记忆中移除"
+                                    />
+                                  </div>
+                                  <details className="closure-inline-editor">
+                                    <summary>修改状态</summary>
+                                    <ApiForm
+                                      className="forms closure-edit-form"
+                                      endpoint={`/api/projects/${projectId}/state`}
+                                      body={{ action: "update_foreshadowing", foreshadowingId: item.id }}
+                                      arrayFields={["relatedCharacters"]}
+                                      successMessage="伏笔状态已保存"
+                                    >
+                                      <div className="split-panels">
+                                        <div className="field">
+                                          <div className="field-label">伏笔名称</div>
+                                          <input name="name" defaultValue={item.name} />
+                                        </div>
+                                        <div className="field">
+                                          <div className="field-label">状态</div>
+                                          <select name="status" defaultValue={item.status}>
+                                            <option value="open">未回收</option>
+                                            <option value="partial">部分回收</option>
+                                            <option value="closed">已回收</option>
+                                          </select>
+                                        </div>
+                                      </div>
+                                      <div className="split-panels">
+                                        <div className="field">
+                                          <div className="field-label">埋设章节</div>
+                                          <input name="plantedChapter" defaultValue={item.plantedChapter} />
+                                        </div>
+                                        <div className="field">
+                                          <div className="field-label">预计回收章节</div>
+                                          <input name="expectedRevealChapter" defaultValue={item.expectedRevealChapter} />
+                                        </div>
+                                      </div>
+                                      <div className="split-panels">
+                                        <div className="field">
+                                          <div className="field-label">关联人物</div>
+                                          <textarea name="relatedCharacters" defaultValue={item.relatedCharacters.join("\n")} />
+                                        </div>
+                                        <div className="field">
+                                          <div className="field-label">关联地点</div>
+                                          <input name="relatedLocation" defaultValue={item.relatedLocation} />
+                                        </div>
+                                      </div>
+                                      <div className="field">
+                                        <div className="field-label">回收方式</div>
+                                        <textarea name="revealMethod" defaultValue={item.revealMethod} />
+                                      </div>
+                                      <div className="field">
+                                        <div className="field-label">不能提前透露的信息</div>
+                                        <textarea name="hiddenInformation" defaultValue={item.hiddenInformation} />
+                                      </div>
+                                      <button className="button primary" type="submit">
+                                        保存伏笔
+                                      </button>
+                                    </ApiForm>
+                                  </details>
+                                </div>
+                              );
+                            })}
+                            {closureForeshadowings.length === 0
+                              ? activeLedger.newClues.slice(0, 4).map((clue) => (
+                                  <div key={clue} className="closure-entity-item">
+                                    <strong>新线索</strong>
+                                    <span>{clue}</span>
+                                  </div>
+                                ))
+                              : null}
+                          </div>
+                        ) : (
+                          <div className="muted">本章没有明显伏笔或线索变更。</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className={highRiskIssues.length > 0 ? "quote-box warning-box closure-risk-box" : "quote-box compact-note closure-risk-box"}>
+                      <strong>收口检查</strong>
+                      <span>
+                        {activeReview
+                          ? highRiskIssues.length > 0
+                            ? `还有 ${highRiskIssues.length} 个高风险和 ${mediumRiskIssues.length} 个中等风险问题。建议先修正文稿或重审后再确认。`
+                            : mediumRiskIssues.length > 0
+                              ? `没有高风险，但还有 ${mediumRiskIssues.length} 个中等风险建议。确认前请快速扫一眼。`
+                              : "审稿未发现高风险，可以确认本章状态并继续下一章。"
+                          : "当前还没有一致性审稿。可以先审稿，也可以先确认台账，之后仍能重新审稿。"}
+                      </span>
+                    </div>
+
+                    {activeReview?.stateUpdateSuggestions.length ? (
+                      <div className="task-block">
+                        <div className="task-title">审稿建议同步到状态</div>
+                        <div className="meta-row">
+                          {activeReview.stateUpdateSuggestions.slice(0, 5).map((item) => (
+                            <span key={item} className="chip">
+                              {formatReviewText(item)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="hero-actions">
+                      <ApiButton
+                        endpoint={`/api/projects/${projectId}/writing`}
+                        body={{ action: "confirm_chapter_closure", draftId: activeDraft.id }}
+                        label={activeLedgerConfirmed ? "重新确认本章状态" : "确认本章状态"}
+                        className={activeLedgerConfirmed ? "button" : "button primary"}
+                        confirmMessage={closureConfirmMessage}
+                        successMessage="本章状态已确认"
+                        pendingTitle="正在确认章节状态"
+                        pendingDescription="正在标记本章台账、任务卡和长期记忆确认状态。"
+                      />
+                      <Link className="button" href={`/projects/${projectId}/state`}>
+                        去状态页细修
+                      </Link>
+                      <ApiButton
+                        endpoint={`/api/projects/${projectId}/writing`}
+                        body={{ action: "review_draft", draftId: activeDraft.id }}
+                        label={activeReview ? "重新审稿" : "先做一致性审稿"}
+                        pendingTitle={activeReview ? "正在重新审稿" : "正在一致性审稿"}
+                        pendingDescription="正在检查设定、人物状态、章末钩子和 AI 味表达。"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="empty-state compact-empty">
+                    <strong>还没有可确认的章节台账</strong>
+                    <span>请先生成章节台账。台账会把本章事件、收益、线索和状态变化沉淀成后续章节的结构化记忆。</span>
                     <ApiButton
                       endpoint={`/api/projects/${projectId}/writing`}
                       body={{ action: "create_ledger", draftId: activeDraft.id }}
@@ -546,10 +1025,20 @@ export default async function ProjectWritingPage({
                       pendingTitle="正在生成章节台账"
                       pendingDescription="正在提取本章事件、人物变化、伏笔和章末钩子。"
                     />
-                  ) : null}
-                </div>
-              )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <strong>还没有可收口的正文</strong>
+                <span>生成并保存正文后，这里会集中展示本章入库状态、审稿风险和确认动作。</span>
+              </div>
+            )}
+          </Panel>
 
+          <div id="writing-review" className="scroll-anchor" />
+          <Panel title="一致性审稿" description="台账摘要已在章节收口里确认，这里只保留正文风险。">
+            <div className="list">
               {activeReview ? (
                 <div className="list-item">
                   <div className="row">
@@ -558,23 +1047,29 @@ export default async function ProjectWritingPage({
                   </div>
                   <div className="muted">{formatReviewText(activeReview.overall)}</div>
                   {activeReview.issues.length > 0 ? (
-                    <div className="timeline">
-                      {activeReview.issues.map((issue, index) => {
-                        const severity = formatReviewSeverity(issue.severity);
+                    <details className="writing-context-details review-details">
+                      <summary>
+                        查看 {activeReview.issues.length} 条审稿问题
+                        {highRiskIssues.length > 0 ? ` · ${highRiskIssues.length} 个高风险` : ""}
+                      </summary>
+                      <div className="timeline review-details-body">
+                        {activeReview.issues.map((issue, index) => {
+                          const severity = formatReviewSeverity(issue.severity);
 
-                        return (
-                        <div key={`${issue.type}-${issue.location}-${index}`} className="timeline-item">
-                          <div className="row">
-                            <strong>{formatReviewIssueType(issue.type)}</strong>
-                            <span className={severity.className}>{severity.label}</span>
+                          return (
+                          <div key={`${issue.type}-${issue.location}-${index}`} className="timeline-item">
+                            <div className="row">
+                              <strong>{formatReviewIssueType(issue.type)}</strong>
+                              <span className={severity.className}>{severity.label}</span>
+                            </div>
+                            {issue.problem ? <div className="muted">问题：{formatReviewText(issue.problem)}</div> : null}
+                            <div className="muted">位置：{formatReviewText(issue.location) || "正文相关段落"}</div>
+                            <div className="quote-box">修改建议：{formatReviewText(issue.suggestion)}</div>
                           </div>
-                          {issue.problem ? <div className="muted">问题：{formatReviewText(issue.problem)}</div> : null}
-                          <div className="muted">位置：{formatReviewText(issue.location) || "正文相关段落"}</div>
-                          <div className="quote-box">修改建议：{formatReviewText(issue.suggestion)}</div>
-                        </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    </details>
                   ) : null}
                 </div>
               ) : (
@@ -595,122 +1090,6 @@ export default async function ProjectWritingPage({
             </div>
           </Panel>
         </div>
-
-        <aside className="writing-side">
-          <Panel title="章节目录" description="只看最近几章，完整列表可进入章节总目录。">
-            {chapterDirectory.length > 0 ? (
-              <div className="list chapter-mini-list">
-                {chapterDirectory.map((chapter) => (
-                  <div key={chapter.chapterNumber} className="task-block writing-chapter-card">
-                    <div className="chapter-card-head">
-                      <div className="chapter-card-title">
-                        <strong>第 {chapter.chapterNumber} 章</strong>
-                        <span>{chapter.draft?.title || chapter.taskCard?.title || "尚未生成任务卡"}</span>
-                      </div>
-                      <span className={chapter.draft ? "pill success" : "pill warning"}>
-                        {chapter.draft ? "已有正文" : "待写正文"}
-                      </span>
-                    </div>
-                    <div className="meta-row">
-                      {chapter.taskCard ? <span className="chip">任务卡</span> : null}
-                      {chapter.draft ? <span className="chip">草稿</span> : null}
-                      {chapter.ledger ? <span className="chip">台账</span> : null}
-                      {chapter.review ? <span className="chip">审稿</span> : null}
-                    </div>
-                    <div className="chapter-card-actions">
-                      {chapter.draft ? (
-                        <Link className="button small-button" href={`/projects/${projectId}/writing/${chapter.draft.id}`}>
-                          阅读正文
-                        </Link>
-                      ) : null}
-                      {chapter.draft ? (
-                        <DraftExportActions
-                          content={chapter.draft.content}
-                          projectName={writingState.project.name}
-                          chapterNumber={chapter.draft.chapterNumber}
-                          title={chapter.draft.title}
-                          compact
-                        />
-                      ) : null}
-                      <ApiButton
-                        endpoint={`/api/projects/${projectId}/writing`}
-                        body={{ action: "delete_chapters_from", chapterNumber: chapter.chapterNumber }}
-                        label="从本章起重写"
-                        className="button danger small-button"
-                        confirmMessage={`确定从第 ${chapter.chapterNumber} 章开始重写吗？会删除第 ${chapter.chapterNumber} 章及后续所有任务卡、正文、台账和审稿。`}
-                      />
-                    </div>
-                  </div>
-                ))}
-                <a className="button primary" href="#task-card-form">
-                  继续生成第 {taskCardChapterNumber} 章
-                </a>
-                {chapterDirectoryAll.length > chapterDirectory.length ? (
-                  <Link className="button" href={`/projects/${projectId}/writing/chapters`}>
-                    查看完整章节目录
-                  </Link>
-                ) : null}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <strong>暂无章节</strong>
-                <span>生成第一章任务卡和正文后，这里会出现章节目录。</span>
-              </div>
-            )}
-          </Panel>
-
-          <Panel title="状态索引" description="生成正文时会读取这些结构化记忆，而不是把全文塞给 AI。">
-            <div className="list">
-              <div className="task-block">
-                <div className="task-title">当前主线</div>
-                <div className="muted">{writingState.plotState.mainGoal || "先到状态管理页补充主线目标。"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">地图与敌人</div>
-                <div className="muted">
-                  {writingState.plotState.currentMap || "未记录地图"} · {writingState.plotState.currentEnemy || "未记录压力源"}
-                </div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">战力 / 资源</div>
-                <div className="muted">{writingState.plotState.powerSystemState || writingState.bible.powerSystem}</div>
-                <div className="muted">{writingState.plotState.resourceState || "暂无资源状态"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">核心爽点</div>
-                <div className="muted">{writingState.bible.corePleasure || "先到状态管理页补充核心爽点。"}</div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">相关人物</div>
-                <div className="meta-row">
-                  {activeCharacters.length > 0 ? (
-                    activeCharacters.map((character) => (
-                      <span key={character.id} className="chip">
-                        {character.name}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="chip">暂无人物卡</span>
-                  )}
-                </div>
-              </div>
-              <div className="task-block">
-                <div className="task-title">未回收伏笔</div>
-                <div className="meta-row">
-                  {openForeshadowings.length > 0 ? (
-                    openForeshadowings.map((item) => (
-                      <span key={item.id} className="chip">
-                        {item.name}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="chip">暂无未回收伏笔</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </Panel>
-        </aside>
       </div>
     </div>
   );

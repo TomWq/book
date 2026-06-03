@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -7,6 +7,10 @@ import os from "node:os";
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = resolve(rootDir, "deploy.config.json");
 const forceInstall = process.env.DEPLOY_FORCE_INSTALL?.trim() === "1";
+const downloadManifestFiles = [
+  "public/downloads/manifest.json",
+  "public/downloads/tauri-update.json"
+];
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -160,6 +164,17 @@ async function main() {
     "./",
     `${target}:${config.path}/`
   ]);
+
+  const existingDownloadManifestFiles = downloadManifestFiles.filter((filePath) => existsSync(resolve(rootDir, filePath)));
+  if (existingDownloadManifestFiles.length > 0) {
+    console.log("同步下载清单...");
+    await run("ssh", [...sshArgs, target, `mkdir -p ${shellQuote(`${config.path}/public/downloads`)}`]);
+    await run("scp", [
+      ...scpArgs,
+      ...existingDownloadManifestFiles.map((filePath) => resolve(rootDir, filePath)),
+      `${target}:${config.path}/public/downloads/`
+    ]);
+  }
 
   const remoteScript = `set -eo pipefail
 trap 'echo "[deploy] 失败：第 $LINENO 行，退出码 $?" >&2' ERR

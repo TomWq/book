@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseDir = path.join(root, "release");
 const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-const version = String(packageJson.version ?? "").trim();
+const version = String(process.env.APP_ARTIFACT_VERSION || process.env.DESKTOP_ARTIFACT_VERSION || packageJson.version || "").trim();
 const tag = `app-v${version}`;
 const packageDir = path.join(releaseDir, "packages", `v${version}`);
 const args = new Set(process.argv.slice(2));

@@ -1,7 +1,7 @@
 {
   "name": "ai-novel-workbench",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "面向网文作者的爆款拆解、模板迁移和长篇创作工作台",
   "author": "墨澜 · AI 网文写作助手",
   "scripts": {

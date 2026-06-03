@@ -92,6 +92,7 @@ assertIncludes("src/lib/projects.ts", [
   "processPendingAiJobsAsWorker",
   "processAiJobAsOwner",
   "applyLedgerToWritingState",
+  "confirmChapterClosure",
   "AsyncLocalStorage",
   "createDomainReadRepository",
   "createDomainWriteRepository",
@@ -119,7 +120,26 @@ assertIncludes("src/lib/store-persistence.ts", [
   "resolveSqliteFilePath",
   "syncCoreTables",
   "readCoreStoreFromDb",
+  "closureStatus",
   "getPersistenceStatus"
+]);
+assertIncludes("src/app/api/projects/[projectId]/writing/route.ts", [
+  "confirm_chapter_closure",
+  "decide_chapter_closure_item"
+]);
+assertIncludes("src/app/api/projects/[projectId]/state/route.ts", [
+  "update_foreshadowing",
+  "delete_foreshadowing"
+]);
+assertIncludes("src/app/projects/[projectId]/writing/page.tsx", [
+  "章节收口",
+  "确认本章状态",
+  "待收口",
+  "已收口",
+  "接受",
+  "忽略",
+  "编辑人物状态",
+  "编辑伏笔状态"
 ]);
 assertIncludes("src/proxy.ts", ["/download", "/downloads", "/api/jobs/worker", "/api/app/update/manifest", "/api/app/tauri-update/"]);
 assertIncludes("src-tauri/tauri.conf.json", ["createUpdaterArtifacts", "https://book-1253439621.cos.ap-beijing.myqcloud.com/tauri-update.json"]);

@@ -1,6 +1,8 @@
 import {
   applyEditedTextToDraft,
+  confirmChapterClosure,
   createChapterLedger,
+  decideChapterClosureItem,
   deleteWritingChaptersFrom,
   deleteWritingTaskCard,
   editDraftText,
@@ -124,6 +126,33 @@ export async function POST(
     if (action === "create_ledger") {
       const ledger = await createChapterLedger(projectId, String(body.draftId ?? ""));
       return Response.json({ ledger }, { status: 201 });
+    }
+
+    if (action === "confirm_chapter_closure") {
+      const result = await confirmChapterClosure(projectId, String(body.draftId ?? ""));
+      return Response.json(result);
+    }
+
+    if (action === "decide_chapter_closure_item") {
+      const targetType = String(body.targetType ?? "");
+      const decision = String(body.decision ?? "");
+
+      if (targetType !== "character" && targetType !== "foreshadowing") {
+        throw new Error("收口目标类型不正确");
+      }
+
+      if (decision !== "accepted" && decision !== "ignored") {
+        throw new Error("收口决定不正确");
+      }
+
+      const result = await decideChapterClosureItem(projectId, {
+        draftId: String(body.draftId ?? ""),
+        targetType,
+        targetId: String(body.targetId ?? ""),
+        decision
+      });
+
+      return Response.json(result);
     }
 
     if (action === "review_draft") {
