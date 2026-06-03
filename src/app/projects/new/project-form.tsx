@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AiCoverGeneratorDialog } from "@/components/ai-cover-generator-dialog";
 import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
@@ -275,6 +276,7 @@ export function ProjectForm() {
   const [targetReader, setTargetReader] = useState<TargetReader>("男频");
   const [genre, setGenre] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [isMounted, setIsMounted] = useState(false);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [isAiCoverDialogOpen, setIsAiCoverDialogOpen] = useState(false);
   const [coverPreviewError, setCoverPreviewError] = useState("");
@@ -308,6 +310,37 @@ export function ProjectForm() {
   const selectedRoleCount = selectedTags.filter((tag) => roleTagSet.has(tag)).length;
   const currentSubCategories = currentQidianCategory?.subCategories ?? [];
   const selectedSubCategory = selectedTags.find((tag) => currentSubCategories.includes(tag)) ?? "";
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isTagDialogOpen) {
+      return;
+    }
+
+    const { body, documentElement } = document;
+    const previousBodyOverflow = body.style.overflow;
+    const previousDocumentOverflow = documentElement.style.overflow;
+
+    body.style.overflow = "hidden";
+    documentElement.style.overflow = "hidden";
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsTagDialogOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      body.style.overflow = previousBodyOverflow;
+      documentElement.style.overflow = previousDocumentOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isTagDialogOpen]);
 
   useEffect(() => {
     try {
@@ -758,7 +791,135 @@ export function ProjectForm() {
     }
   }
 
+  const tagDialog = isTagDialogOpen ? (
+    <div className="tag-dialog-backdrop" role="presentation" onMouseDown={() => setIsTagDialogOpen(false)}>
+      <div
+        className="tag-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tag-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="tag-dialog-head">
+          <h3 id="tag-dialog-title">作品标签</h3>
+          <button className="tag-dialog-close" type="button" onClick={() => setIsTagDialogOpen(false)} aria-label="关闭作品标签">
+            ×
+          </button>
+        </div>
+
+        <div className="tag-dialog-body">
+          <nav className="tag-dialog-tabs" aria-label="标签类型">
+            {tagSections.map((section) => (
+              <button
+                key={section.key}
+                className={activeTagSection === section.key ? "active" : ""}
+                type="button"
+                onClick={() => setActiveTagSection(section.key)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="tag-dialog-options">
+            {activeTagSection === "mainCategories" && tagTaxonomyStyle === "fanqie" ? taxonomy.mainCategories.map((category) => (
+              <button
+                key={category.name}
+                className={`taxonomy-card taxonomy-card-main ${genre === category.name ? "selected" : ""}`}
+                type="button"
+                onClick={() => updateGenre(category.name)}
+              >
+                <span className="taxonomy-card-icon" aria-hidden="true">{category.name.slice(0, 1)}</span>
+                <span>
+                  <strong>{category.name}</strong>
+                  <small>{category.description}</small>
+                </span>
+              </button>
+            )) : null}
+
+            {activeTagSection === "mainCategories" && tagTaxonomyStyle === "qidian" ? qidianTaxonomy.map((category) => (
+              <button
+                key={category.name}
+                className={`taxonomy-card taxonomy-card-main ${genre === category.name ? "selected" : ""}`}
+                type="button"
+                onClick={() => updateGenre(category.name)}
+              >
+                <span className="taxonomy-card-icon" aria-hidden="true">{category.name.slice(0, 1)}</span>
+                <span>
+                  <strong>{category.name}</strong>
+                  <small>{category.description}</small>
+                </span>
+              </button>
+            )) : null}
+
+            {activeTagSection === "themes" && tagTaxonomyStyle === "fanqie" ? taxonomy.themes.map((tag) => (
+              <button
+                key={tag}
+                className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
+                type="button"
+                disabled={!selectedTagSet.has(tag) && selectedThemeCount >= maxSelectedTagsPerGroup}
+                onClick={() => toggleTag(tag)}
+              >
+                <span className="taxonomy-card-icon" aria-hidden="true">{tag.slice(0, 1)}</span>
+                <strong>{tag}</strong>
+              </button>
+            )) : null}
+
+            {activeTagSection === "roles" && tagTaxonomyStyle === "fanqie" ? taxonomy.roles.map((tag) => (
+              <button
+                key={tag}
+                className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
+                type="button"
+                disabled={!selectedTagSet.has(tag) && selectedRoleCount >= maxSelectedTagsPerGroup}
+                onClick={() => toggleTag(tag)}
+              >
+                <span className="taxonomy-card-icon alt" aria-hidden="true">{tag.slice(0, 1)}</span>
+                <strong>{tag}</strong>
+              </button>
+            )) : null}
+
+            {activeTagSection === "subCategories" && tagTaxonomyStyle === "qidian" ? (
+              currentSubCategories.length > 0 ? currentSubCategories.map((tag) => (
+                <button
+                  key={tag}
+                  className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
+                  type="button"
+                  onClick={() => toggleTag(tag)}
+                >
+                  <span className="taxonomy-card-icon alt" aria-hidden="true">{tag.slice(0, 1)}</span>
+                  <strong>{tag}</strong>
+                </button>
+              )) : (
+                <div className="taxonomy-empty">
+                  <strong>先选择主分类</strong>
+                  <span>起点体系需要先选玄幻、奇幻、都市等大类，再选择对应子类。</span>
+                </div>
+              )
+            ) : null}
+          </div>
+        </div>
+
+        <div className="tag-dialog-foot">
+          <span>
+            {tagTaxonomyStyle === "qidian"
+              ? "起点体系：主分类只能选一个，子类最多选一个"
+              : "番茄体系：主分类必选且只能选一个，主题最多可选 2 个，角色最多可选 2 个"}
+          </span>
+          <div className="hero-actions">
+            <button className="button" type="button" onClick={() => setIsTagDialogOpen(false)}>
+              取消
+            </button>
+            <button className="button primary create-work-button" type="button" onClick={() => setIsTagDialogOpen(false)}>
+              确认
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
+    <>
     <form ref={formRef} className="book-create-form" onSubmit={handleSubmit} aria-busy={isSubmitting}>
       <aside className="book-create-preview">
         <div className={`book-cover ${coverImageUrl ? "has-custom-cover" : ""}`}>
@@ -1024,132 +1185,6 @@ export function ProjectForm() {
             </button>
           </div>
 
-          {isTagDialogOpen ? (
-            <div className="tag-dialog-backdrop" role="presentation" onMouseDown={() => setIsTagDialogOpen(false)}>
-              <div
-                className="tag-dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="tag-dialog-title"
-                onMouseDown={(event) => event.stopPropagation()}
-              >
-                <div className="tag-dialog-head">
-                  <h3 id="tag-dialog-title">作品标签</h3>
-                  <button className="tag-dialog-close" type="button" onClick={() => setIsTagDialogOpen(false)} aria-label="关闭作品标签">
-                    ×
-                  </button>
-                </div>
-
-                <div className="tag-dialog-body">
-                  <nav className="tag-dialog-tabs" aria-label="标签类型">
-                    {tagSections.map((section) => (
-                      <button
-                        key={section.key}
-                        className={activeTagSection === section.key ? "active" : ""}
-                        type="button"
-                        onClick={() => setActiveTagSection(section.key)}
-                      >
-                        {section.label}
-                      </button>
-                    ))}
-                  </nav>
-
-                  <div className="tag-dialog-options">
-                    {activeTagSection === "mainCategories" && tagTaxonomyStyle === "fanqie" ? taxonomy.mainCategories.map((category) => (
-                      <button
-                        key={category.name}
-                        className={`taxonomy-card taxonomy-card-main ${genre === category.name ? "selected" : ""}`}
-                        type="button"
-                        onClick={() => updateGenre(category.name)}
-                      >
-                        <span className="taxonomy-card-icon" aria-hidden="true">{category.name.slice(0, 1)}</span>
-                        <span>
-                          <strong>{category.name}</strong>
-                          <small>{category.description}</small>
-                        </span>
-                      </button>
-                    )) : null}
-
-                    {activeTagSection === "mainCategories" && tagTaxonomyStyle === "qidian" ? qidianTaxonomy.map((category) => (
-                      <button
-                        key={category.name}
-                        className={`taxonomy-card taxonomy-card-main ${genre === category.name ? "selected" : ""}`}
-                        type="button"
-                        onClick={() => updateGenre(category.name)}
-                      >
-                        <span className="taxonomy-card-icon" aria-hidden="true">{category.name.slice(0, 1)}</span>
-                        <span>
-                          <strong>{category.name}</strong>
-                          <small>{category.description}</small>
-                        </span>
-                      </button>
-                    )) : null}
-
-                    {activeTagSection === "themes" && tagTaxonomyStyle === "fanqie" ? taxonomy.themes.map((tag) => (
-                      <button
-                        key={tag}
-                        className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
-                        type="button"
-                        disabled={!selectedTagSet.has(tag) && selectedThemeCount >= maxSelectedTagsPerGroup}
-                        onClick={() => toggleTag(tag)}
-                      >
-                        <span className="taxonomy-card-icon" aria-hidden="true">{tag.slice(0, 1)}</span>
-                        <strong>{tag}</strong>
-                      </button>
-                    )) : null}
-
-                    {activeTagSection === "roles" && tagTaxonomyStyle === "fanqie" ? taxonomy.roles.map((tag) => (
-                      <button
-                        key={tag}
-                        className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
-                        type="button"
-                        disabled={!selectedTagSet.has(tag) && selectedRoleCount >= maxSelectedTagsPerGroup}
-                        onClick={() => toggleTag(tag)}
-                      >
-                        <span className="taxonomy-card-icon alt" aria-hidden="true">{tag.slice(0, 1)}</span>
-                        <strong>{tag}</strong>
-                      </button>
-                    )) : null}
-
-                    {activeTagSection === "subCategories" && tagTaxonomyStyle === "qidian" ? (
-                      currentSubCategories.length > 0 ? currentSubCategories.map((tag) => (
-                        <button
-                          key={tag}
-                          className={`taxonomy-card compact ${selectedTagSet.has(tag) ? "selected" : ""}`}
-                          type="button"
-                          onClick={() => toggleTag(tag)}
-                        >
-                          <span className="taxonomy-card-icon alt" aria-hidden="true">{tag.slice(0, 1)}</span>
-                          <strong>{tag}</strong>
-                        </button>
-                      )) : (
-                        <div className="taxonomy-empty">
-                          <strong>先选择主分类</strong>
-                          <span>起点体系需要先选玄幻、奇幻、都市等大类，再选择对应子类。</span>
-                        </div>
-                      )
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="tag-dialog-foot">
-                  <span>
-                    {tagTaxonomyStyle === "qidian"
-                      ? "起点体系：主分类只能选一个，子类最多选一个"
-                      : "番茄体系：主分类必选且只能选一个，主题最多可选 2 个，角色最多可选 2 个"}
-                  </span>
-                  <div className="hero-actions">
-                    <button className="button" type="button" onClick={() => setIsTagDialogOpen(false)}>
-                      取消
-                    </button>
-                    <button className="button primary create-work-button" type="button" onClick={() => setIsTagDialogOpen(false)}>
-                      确认
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </div>
 
         <div className="book-create-section" id="book-step-story">
@@ -1393,5 +1428,7 @@ export function ProjectForm() {
         </nav>
       </aside>
     </form>
+    {isMounted && tagDialog ? createPortal(tagDialog, document.body) : null}
+    </>
   );
 }

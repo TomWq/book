@@ -11,6 +11,7 @@ import { WorkspaceActions } from "@/components/workspace-actions";
 import { AppIconMark } from "@/components/app-icon-mark";
 import { PenNameOnboarding } from "@/components/pen-name-onboarding";
 import { AutoUpdatePrompt } from "@/components/auto-update-prompt";
+import { FirstUseGuideModal } from "@/components/first-use-guide-modal";
 
 const navItems: SideNavItem[] = [
   { href: "/", label: "首页" },
@@ -143,6 +144,9 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
       {user && !isAdminMode && !isPublicLanding ? <FloatingWritingAssistant authorName={user.penName || user.name} assistantName={assistantName} /> : null}
       {user && !isAdminMode && !isPublicLanding ? <PenNameOnboarding initialPenName={user.penName} /> : null}
+      {user && !isAdminMode && !isPublicLanding && user.penName ? (
+        <FirstUseGuideModal penName={user.penName} assistantName={assistantName} />
+      ) : null}
       {user && !isAdminMode && !isPublicLanding && desktopClient ? <AutoUpdatePrompt /> : null}
     </div>
   );

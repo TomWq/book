@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const rootDir = process.cwd();
@@ -6,6 +6,8 @@ const sourcePath = path.join(rootDir, "USER_MANUAL.md");
 const outputDir = path.join(rootDir, "public", "manual");
 const htmlPath = path.join(outputDir, "墨澜 · AI 网文写作助手使用手册.html");
 const pdfPath = path.join(outputDir, "墨澜 · AI 网文写作助手使用手册.pdf");
+const legacyHtmlPath = path.join(outputDir, "AI网文写作助手使用手册.html");
+const legacyPdfPath = path.join(outputDir, "AI网文写作助手使用手册.pdf");
 
 const markdown = readFileSync(sourcePath, "utf8");
 
@@ -43,6 +45,7 @@ function markdownToHtml(input) {
   const out = [];
   let paragraph = [];
   let listItems = [];
+  let listType = "ul";
   let inCode = false;
   let codeLines = [];
 
@@ -58,12 +61,13 @@ function markdownToHtml(input) {
     if (listItems.length === 0) {
       return;
     }
-    out.push("<ul>");
+    out.push(`<${listType}>`);
     for (const item of listItems) {
       out.push(`<li>${inlineMarkdown(item)}</li>`);
     }
-    out.push("</ul>");
+    out.push(`</${listType}>`);
     listItems = [];
+    listType = "ul";
   }
 
   for (const rawLine of lines) {
@@ -110,7 +114,22 @@ function markdownToHtml(input) {
     const list = line.match(/^-\s+(.+)$/);
     if (list) {
       flushParagraph();
+      if (listItems.length > 0 && listType !== "ul") {
+        flushList();
+      }
+      listType = "ul";
       listItems.push(list[1].trim());
+      continue;
+    }
+
+    const orderedList = line.match(/^\d+\.\s+(.+)$/);
+    if (orderedList) {
+      flushParagraph();
+      if (listItems.length > 0 && listType !== "ol") {
+        flushList();
+      }
+      listType = "ol";
+      listItems.push(orderedList[1].trim());
       continue;
     }
 
@@ -136,6 +155,16 @@ function renderHtmlDocument() {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>墨澜 · AI 网文写作助手使用手册</title>
+  <script>
+    (() => {
+      try {
+        const theme = new URLSearchParams(window.location.search).get("theme");
+        if (theme === "dark") {
+          document.documentElement.dataset.theme = "dark";
+        }
+      } catch {}
+    })();
+  </script>
   <style>
     :root {
       color-scheme: light;
@@ -146,6 +175,37 @@ function renderHtmlDocument() {
       --accent: #2bbfd0;
       --accent-strong: #1293a8;
       --paper: #ffffff;
+      --page-bg: #f7fafc;
+      --hero-bg:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(246, 251, 252, 0.9)),
+        radial-gradient(circle at 92% 12%, rgba(43, 191, 208, 0.1), transparent 30%);
+      --toc-bg: rgba(255, 255, 255, 0.92);
+      --body-text: #324158;
+      --heading-text: #213047;
+      --code-bg: #eef7f8;
+      --code-text: #0f7082;
+      --shadow-soft: rgba(34, 48, 74, 0.06);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --ink: #eef5ff;
+      --muted: #9aa8bc;
+      --line: rgba(148, 163, 184, 0.22);
+      --soft: rgba(30, 41, 59, 0.78);
+      --accent: #55d8e8;
+      --accent-strong: #6fe7f2;
+      --paper: #121922;
+      --page-bg: #0f141c;
+      --hero-bg:
+        linear-gradient(135deg, rgba(18, 25, 34, 0.98), rgba(15, 22, 32, 0.92)),
+        radial-gradient(circle at 92% 12%, rgba(85, 216, 232, 0.12), transparent 30%);
+      --toc-bg: rgba(18, 25, 34, 0.92);
+      --body-text: #c8d3e4;
+      --heading-text: #eef5ff;
+      --code-bg: rgba(85, 216, 232, 0.1);
+      --code-text: #8defff;
+      --shadow-soft: rgba(0, 0, 0, 0.24);
     }
 
     * { box-sizing: border-box; }
@@ -153,90 +213,84 @@ function renderHtmlDocument() {
     body {
       margin: 0;
       color: var(--ink);
-      background:
-        radial-gradient(circle at 18% 8%, rgba(43, 191, 208, 0.13), transparent 30%),
-        linear-gradient(180deg, #fbfcfe 0%, #eef4f7 100%);
+      background: var(--page-bg);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      line-height: 1.72;
+      line-height: 1.68;
     }
 
     .shell {
-      width: min(1180px, calc(100% - 48px));
+      width: min(1080px, calc(100% - 28px));
       margin: 0 auto;
-      padding: 48px 0 72px;
+      padding: 22px 0 36px;
     }
 
     .hero {
-      min-height: 220px;
       display: grid;
-      align-content: end;
-      gap: 16px;
-      padding: 38px 42px;
-      border: 1px solid rgba(43, 191, 208, 0.24);
-      border-radius: 22px;
-      background:
-        linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(246, 251, 252, 0.82)),
-        radial-gradient(circle at 85% 18%, rgba(43, 191, 208, 0.18), transparent 36%);
-      box-shadow: 0 24px 70px rgba(34, 48, 74, 0.1);
+      gap: 8px;
+      padding: 20px 24px;
+      border: 1px solid rgba(43, 191, 208, 0.18);
+      border-radius: 14px;
+      background: var(--hero-bg);
+      box-shadow: 0 12px 32px rgba(34, 48, 74, 0.07);
     }
 
     .hero span {
       width: fit-content;
-      padding: 6px 12px;
+      padding: 4px 9px;
       border-radius: 999px;
       background: rgba(43, 191, 208, 0.12);
       color: var(--accent-strong);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
     }
 
     .hero h1 {
       margin: 0;
-      font-size: clamp(34px, 5vw, 56px);
-      line-height: 1.08;
+      font-size: 28px;
+      line-height: 1.22;
       letter-spacing: 0;
     }
 
     .hero p {
-      max-width: 760px;
+      max-width: 820px;
       margin: 0;
       color: var(--muted);
-      font-size: 17px;
+      font-size: 14px;
     }
 
     .layout {
       display: grid;
-      grid-template-columns: 260px minmax(0, 1fr);
-      gap: 28px;
-      margin-top: 28px;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 18px;
+      margin-top: 18px;
       align-items: start;
     }
 
     .toc {
       position: sticky;
-      top: 24px;
-      max-height: calc(100vh - 48px);
+      top: 14px;
+      max-height: calc(100vh - 28px);
       overflow: auto;
       display: grid;
-      gap: 4px;
-      padding: 18px;
+      gap: 3px;
+      padding: 14px;
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.86);
-      box-shadow: 0 18px 44px rgba(34, 48, 74, 0.08);
+      border-radius: 12px;
+      background: var(--toc-bg);
+      box-shadow: 0 10px 28px var(--shadow-soft);
     }
 
     .toc strong {
-      margin-bottom: 8px;
-      font-size: 15px;
+      margin-bottom: 6px;
+      font-size: 14px;
     }
 
     .toc a {
-      padding: 7px 10px;
-      border-radius: 10px;
+      padding: 6px 8px;
+      border-radius: 8px;
       color: var(--muted);
       text-decoration: none;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       line-height: 1.35;
     }
@@ -247,24 +301,24 @@ function renderHtmlDocument() {
     }
 
     .toc-level-3 {
-      padding-left: 22px !important;
+      padding-left: 18px !important;
       font-weight: 600 !important;
     }
 
     .manual {
-      padding: 42px;
+      padding: 26px 30px;
       border: 1px solid var(--line);
-      border-radius: 22px;
+      border-radius: 14px;
       background: var(--paper);
-      box-shadow: 0 24px 70px rgba(34, 48, 74, 0.08);
+      box-shadow: 0 12px 32px var(--shadow-soft);
     }
 
     .manual h1 { display: none; }
 
     .manual h2 {
-      margin: 52px 0 18px;
-      padding-top: 8px;
-      font-size: 28px;
+      margin: 34px 0 12px;
+      padding-top: 14px;
+      font-size: 22px;
       line-height: 1.25;
       letter-spacing: 0;
       border-top: 1px solid var(--line);
@@ -277,75 +331,101 @@ function renderHtmlDocument() {
     }
 
     .manual h3 {
-      margin: 30px 0 12px;
-      color: #213047;
-      font-size: 20px;
+      margin: 22px 0 8px;
+      color: var(--heading-text);
+      font-size: 17px;
       line-height: 1.35;
     }
 
     .manual p {
-      margin: 12px 0;
-      color: #324158;
+      margin: 9px 0;
+      color: var(--body-text);
+      font-size: 14px;
     }
 
-    .manual ul {
+    .manual ul,
+    .manual ol {
       display: grid;
-      gap: 8px;
-      margin: 14px 0 18px;
+      gap: 6px;
+      margin: 10px 0 14px;
       padding: 0;
       list-style: none;
+      counter-reset: manual-list;
     }
 
     .manual li {
       position: relative;
-      padding: 11px 14px 11px 34px;
+      padding: 8px 12px 8px 30px;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 9px;
       background: var(--soft);
+      color: var(--body-text);
+      font-size: 14px;
     }
 
-    .manual li::before {
+    .manual ul li::before {
       content: "";
       position: absolute;
-      left: 14px;
-      top: 21px;
-      width: 7px;
-      height: 7px;
+      left: 12px;
+      top: 17px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       background: var(--accent);
+    }
+
+    .manual ol li {
+      counter-increment: manual-list;
+    }
+
+    .manual ol li::before {
+      content: counter(manual-list);
+      position: absolute;
+      left: 9px;
+      top: 9px;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: rgba(43, 191, 208, 0.12);
+      color: var(--accent-strong);
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 16px;
+      text-align: center;
     }
 
     .manual code {
       padding: 2px 6px;
       border-radius: 6px;
-      background: #eef7f8;
-      color: #0f7082;
+      background: var(--code-bg);
+      color: var(--code-text);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 0.92em;
     }
 
     .manual pre {
       overflow: auto;
-      padding: 16px;
-      border-radius: 14px;
+      padding: 14px;
+      border-radius: 10px;
       background: #172033;
       color: #f7fbff;
     }
 
     .footer {
-      margin-top: 28px;
+      margin-top: 18px;
       color: var(--muted);
       text-align: center;
-      font-size: 13px;
+      font-size: 12px;
     }
 
     @media (max-width: 900px) {
-      .shell { width: min(100% - 24px, 760px); padding-top: 24px; }
-      .hero { padding: 28px 24px; border-radius: 18px; }
+      .shell { width: min(100% - 20px, 760px); padding-top: 14px; }
+      .hero { padding: 16px 18px; border-radius: 12px; }
+      .hero h1 { font-size: 24px; }
       .layout { grid-template-columns: 1fr; }
       .toc { position: static; max-height: none; }
-      .manual { padding: 26px 20px; border-radius: 18px; }
-      .manual h2 { font-size: 24px; }
+      .manual { padding: 20px 16px; border-radius: 12px; }
+      .manual h2 { font-size: 20px; }
     }
 
     @media print {
@@ -397,6 +477,7 @@ function plainTextForPdf() {
 
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(htmlPath, renderHtmlDocument(), "utf8");
+copyFileSync(htmlPath, legacyHtmlPath);
 
 const { spawnSync } = await import("node:child_process");
 
@@ -426,7 +507,8 @@ function buildPdfFromHtml() {
     fileUrl
   ], {
     encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: 90_000
   });
 
   return result.status === 0 && existsSync(pdfPath);
@@ -453,6 +535,7 @@ const pdfGenerated = buildPdfFromHtml() || buildPdfFromText();
 
 console.log(`[manual] HTML: ${htmlPath}`);
 if (pdfGenerated) {
+  copyFileSync(pdfPath, legacyPdfPath);
   console.log(`[manual] PDF:  ${pdfPath}`);
 } else {
   console.warn("[manual] PDF 生成失败，仅生成 HTML。");

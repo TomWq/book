@@ -93,6 +93,17 @@ async function main() {
   const rsyncSsh = ["ssh", "-p", remotePort, ...sshKeepAlive].join(" ");
 
   console.log(`部署目标: ${target}:${config.path}`);
+  console.log("清理远端桌面端构建缓存...");
+  await run("ssh", [
+    ...sshArgs,
+    target,
+    [
+      "set -e",
+      `rm -rf ${remotePath}/src-tauri/target`,
+      `rm -rf ${remotePath}/build`
+    ].join("; ")
+  ]);
+
   console.log("同步代码...");
 
   await run("rsync", [
@@ -112,6 +123,14 @@ async function main() {
     ".env.*",
     "--exclude",
     "public/downloads",
+    "--exclude",
+    "src-tauri/target",
+    "--exclude",
+    "src-tauri/target/***",
+    "--exclude",
+    "build",
+    "--exclude",
+    "build/***",
     "--exclude",
     "release",
     "--exclude",

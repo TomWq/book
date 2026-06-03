@@ -52,7 +52,7 @@ function formatDate(value: string) {
 
 export default function DownloadPage() {
   const manifest = getLocalUpdateManifest();
-  const manualHtmlUrl = "/manual/AI网文写作助手使用手册.html";
+  const manualHtmlUrl = encodeURI("/manual/墨澜 · AI 网文写作助手使用手册.html");
   const options: DownloadOption[] = [
     {
       key: "win32X64",
@@ -184,10 +184,13 @@ export default function DownloadPage() {
         </div>
 
         <div className="download-notes" id="download-notes">
-          <details className="download-note">
+          <details className="download-note critical" open>
             <summary className="download-help-row">
-              <strong>Mac 首次打开提示</strong>
-              <p>若提示“无法打开”，请在系统设置中允许后再打开应用。</p>
+              <div className="download-help-title">
+                <span className="download-help-badge urgent">Mac 用户必看</span>
+                <strong>Mac 首次打开提示</strong>
+              </div>
+              <p>若提示“无法打开”“无法验证开发者”或“应用已损坏”，请按这里处理。</p>
               <span aria-hidden="true">⌄</span>
             </summary>
             <div className="download-note-detail">
@@ -199,9 +202,12 @@ export default function DownloadPage() {
               <code>xattr -dr com.apple.quarantine "/Applications/墨澜 · AI 网文写作助手.app"</code>
             </div>
           </details>
-          <details className="download-note">
+          <details className="download-note" open>
             <summary className="download-help-row">
-              <strong>本地隐私</strong>
+              <div className="download-help-title">
+                <span className="download-help-badge">隐私说明</span>
+                <strong>本地隐私</strong>
+              </div>
               <p>作品、草稿、设定、人物档案和项目数据默认保存在你的电脑里。</p>
               <span aria-hidden="true">⌄</span>
             </summary>
@@ -209,9 +215,12 @@ export default function DownloadPage() {
               <p>客户端默认把作品、草稿、设定、人物档案、项目状态和模板数据保存在本机。除非你主动配置 AI 接口并发起生成，否则这些创作数据不会上传到我们的服务器。</p>
             </div>
           </details>
-          <details className="download-note">
+          <details className="download-note" open>
             <summary className="download-help-row">
-              <strong>内测签名</strong>
+              <div className="download-help-title">
+                <span className="download-help-badge warning">安装提示</span>
+                <strong>内测签名</strong>
+              </div>
               <p>若遇到系统安全提示，请确认来源可信后继续安装。</p>
               <span aria-hidden="true">⌄</span>
             </summary>
