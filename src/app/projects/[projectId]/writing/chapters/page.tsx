@@ -130,7 +130,9 @@ export default async function WritingChapterDirectoryPage({
                         {draft.title}
                       </Link>
                     </div>
-                    <p>{draftPreview(draft.content) || "本章正文暂无可预览内容。"}</p>
+                    <p className="writing-directory-preview">
+                      {draftPreview(draft.content) || "本章正文暂无可预览内容。"}
+                    </p>
                     <div className="writing-directory-meta">
                       <span>{wordCount.toLocaleString("zh-CN")} 字</span>
                       <span>{updatedAt}</span>

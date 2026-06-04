@@ -1,6 +1,6 @@
 [package]
 name = "ai-novel-workbench"
-version = "1.0.9"
+version = "1.0.10"
 description = "墨澜 · AI 网文写作助手桌面壳"
 authors = ["墨澜"]
 edition = "2021"

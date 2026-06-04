@@ -76,7 +76,7 @@ export function FirstUseGuideModal({ penName, assistantName = "墨澜" }: FirstU
       >
         <div className="first-use-guide-hero">
           <span className="first-use-guide-kicker">第一次使用前，请先读完这段说明</span>
-          <h2 id="first-use-guide-title">欢迎来到墨澜，{penName}</h2>
+          <h2 id="first-use-guide-title">欢迎使用墨澜，{penName}</h2>
           <p>
             {assistantName} 不是“一句话写完整本书”的按钮，而是帮你把一本长篇小说拆成可管理、可检查、可持续推进的创作项目。
           </p>

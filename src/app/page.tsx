@@ -13,6 +13,14 @@ import {
 import { ProjectCover } from "@/components/project-cover";
 import { countTextCharacters, isSameLocalDay } from "@/lib/writing-stats";
 
+type HomeProjectMode = "writing" | "analysis";
+
+function projectModeParam(value: string | string[] | undefined): HomeProjectMode {
+  const raw = Array.isArray(value) ? value[0] : value;
+
+  return raw === "analysis" ? "analysis" : "writing";
+}
+
 function ProjectListItem({
   project,
   mode,
@@ -127,8 +135,14 @@ function FirstCreationFlow({
   );
 }
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams
+}: {
+  searchParams?: Promise<{ type?: string | string[] }>;
+}) {
   const pathname = (await headers()).get("x-nw-pathname") ?? "/";
+  const query = searchParams ? await searchParams : {};
+  const activeMode = projectModeParam(query.type);
   const { user, isAdmin } = await getCurrentUserAccess();
   const desktopRuntime = isDesktopRuntime();
 
@@ -177,7 +191,6 @@ export default async function HomePage() {
     const importedChapterCount = analysisProjects.reduce((total, project) => total + project._count.chapters, 0);
     const analyzedChapterCount = analysisProjects.reduce((total, project) => total + project._count.chapterAnalyses, 0);
     const storyAnalysisCount = analysisProjects.reduce((total, project) => total + project._count.storyAnalyses, 0);
-    const aiJobCount = projects.reduce((total, project) => total + project._count.aiJobs, 0);
     const featuredWritingCharacters = writingProject ? writtenCharactersByProject.get(writingProject.id) ?? 0 : 0;
     const latestTemplate = templates[0];
     const switchableWritingProjects = writingProjects.filter((project) => project.id !== writingProject?.id).slice(0, 4);
@@ -195,22 +208,111 @@ export default async function HomePage() {
     ];
     const continueWritingHref = writingProject ? `/projects/${writingProject.id}/writing` : "/projects/new";
     const continueAnalysisHref = analysisProject ? `/projects/${analysisProject.id}/chapters` : "/projects/new/analysis";
+    const dashboardBaseHref = pathname === "/workspace" ? "/workspace" : "/";
+    const modeTabs = [
+      {
+        type: "writing" as const,
+        href: `${dashboardBaseHref}?type=writing`,
+        label: "创作线",
+        count: writingProjects.length,
+        description: "续写、任务卡、审稿"
+      },
+      {
+        type: "analysis" as const,
+        href: `${dashboardBaseHref}?type=analysis`,
+        label: "拆书线",
+        count: analysisProjects.length,
+        description: "导入、拆解、模板"
+      }
+    ];
+    const analysisPulse = [
+      { label: "拆书项目", value: `${analysisProjects.length} 个` },
+      { label: "导入章节", value: `${importedChapterCount} 章` },
+      { label: "章节拆解", value: `${analyzedChapterCount} 章` },
+      { label: "整书分析", value: `${storyAnalysisCount} 份` }
+    ];
+    const activePulse = activeMode === "writing" ? writingPulse : analysisPulse;
+    const activeHeroTitle = activeMode === "writing"
+      ? writingProject?.name ?? "先开一本能长期写下去的新书"
+      : analysisProject?.name ?? "先导入一本值得拆解的样书";
+    const activeHeroDescription = activeMode === "writing"
+      ? writingProject?.description ?? "从书名、主角和开局钩子开始，把第一章任务卡跑通，再进入正文、台账和审稿闭环。"
+      : analysisProject?.description ?? "把样本文本切成章节，拆出冲突、爽点、钩子和可迁移的商业结构。";
+    const activeNoteTitle = activeMode === "writing"
+      ? writingProject ? "下一步：回到章节任务卡" : "下一步：创建作品骨架"
+      : analysisProject ? "下一步：继续章节拆解" : "下一步：导入样本文本";
+    const activeNoteText = activeMode === "writing"
+      ? writingProject
+        ? `这本书已经写了 ${writingProject._count.chapterDrafts} 章，累计 ${featuredWritingCharacters.toLocaleString("zh-CN")} 字。`
+        : "先确定书名、题材、主角和核心爽点，再让任务卡负责后续章节节奏。"
+      : analysisProject
+        ? `这个样本已导入 ${analysisProject._count.chapters} 章，完成 ${analysisProject._count.chapterAnalyses} 章拆解。`
+        : "先导入样本文本，后面再沉淀章节节奏、爽点公式和迁移模板。";
+    const activePrimaryHref = activeMode === "writing" ? continueWritingHref : continueAnalysisHref;
+    const activePrimaryAction = activeMode === "writing"
+      ? writingProject ? "继续创作" : "新建创作项目"
+      : analysisProject ? "继续拆书" : "新建拆书项目";
+    const activeProjectCenterHref = activeMode === "writing" ? "/projects?type=writing" : "/projects?type=analysis";
+    const homeCommandCards = activeMode === "writing"
+      ? [
+          {
+            href: continueWritingHref,
+            className: "home-command-card home-command-primary",
+            icon: "写",
+            title: writingProject ? "进入创作工作台" : "创建一本新书",
+            meta: writingProject ? `任务卡 ${taskCardCount} · 审稿 ${reviewReportCount}` : "书名、简介、主角、题材先跑通。"
+          },
+          {
+            href: "/stats",
+            className: "home-command-card",
+            icon: "统",
+            title: "查看创作统计",
+            meta: `今日 ${todayCharacters.toLocaleString("zh-CN")} 字 · 累计 ${totalCharacters.toLocaleString("zh-CN")} 字`
+          },
+          {
+            href: "/projects?type=writing",
+            className: "home-command-card",
+            icon: "项",
+            title: "管理创作项目",
+            meta: `${writingProjects.length} 个项目 · ${writtenChapterCount} 章正文`
+          }
+        ]
+      : [
+          {
+            href: continueAnalysisHref,
+            className: "home-command-card home-command-primary",
+            icon: "拆",
+            title: analysisProject ? "继续拆书项目" : "导入一本样书",
+            meta: analysisProject ? `${analysisProject.name} · 已拆 ${analysisProject._count.chapterAnalyses} 章` : "先拆结构，再把公式沉淀成模板。"
+          },
+          {
+            href: latestTemplate ? `/templates/${latestTemplate.id}` : "/templates",
+            className: "home-command-card",
+            icon: "模",
+            title: latestTemplate ? latestTemplate.name : "模板库还在等待第一条公式",
+            meta: latestTemplate ? `${latestTemplate.genre} · 可继续迁移到新题材` : "从整书分析页保存模板后，这里会变成迁移入口。"
+          },
+          {
+            href: "/projects?type=analysis",
+            className: "home-command-card",
+            icon: "项",
+            title: "管理拆书项目",
+            meta: `${analysisProjects.length} 个样本 · ${analyzedChapterCount} 章拆解`
+          }
+        ];
 
     return (
       <div className="home-dashboard">
         <section className="home-studio-hero">
           <div className="home-focus-panel">
             <div className="home-focus-copy">
-              <span className="home-kicker">今日续写</span>
-              <h1>{writingProject ? writingProject.name : "先开一本能长期写下去的新书"}</h1>
-              <p>
-                {writingProject?.description ||
-                  "从书名、主角和开局钩子开始，把第一章任务卡跑通，再进入正文、台账和审稿闭环。"}
-              </p>
+              <span className="home-kicker">{activeMode === "writing" ? "今日续写" : "今日拆书"}</span>
+              <h1>{activeHeroTitle}</h1>
+              <p>{activeHeroDescription}</p>
             </div>
 
             <div className="home-focus-body">
-              {writingProject ? (
+              {activeMode === "writing" && writingProject ? (
                 <ProjectCover
                   title={writingProject.name}
                   authorName={writingProject.authorName}
@@ -221,13 +323,13 @@ export default async function HomePage() {
                 />
               ) : (
                 <div className="book-cover home-default-book-cover" aria-hidden="true">
-                  <div className="book-cover-title">书本名称</div>
-                  <div className="book-cover-author">作者名称</div>
+                  <div className="book-cover-title">{activeMode === "writing" ? "书本名称" : "样本拆解"}</div>
+                  <div className="book-cover-author">{activeMode === "writing" ? "作者名称" : "结构公式"}</div>
                 </div>
               )}
               <div className="home-focus-meta">
-                <div className="home-status-strip" aria-label="创作状态">
-                  {writingPulse.map((item) => (
+                <div className="home-status-strip" aria-label={activeMode === "writing" ? "创作状态" : "拆书状态"}>
+                  {activePulse.map((item) => (
                     <span key={item.label}>
                       <strong>{item.value}</strong>
                       {item.label}
@@ -235,22 +337,18 @@ export default async function HomePage() {
                   ))}
                 </div>
                 <div className="home-focus-note">
-                  <strong>{writingProject ? "下一步：回到章节任务卡" : "下一步：创建作品骨架"}</strong>
-                  <span>
-                    {writingProject
-                      ? `这本书已经写了 ${writingProject._count.chapterDrafts} 章，累计 ${featuredWritingCharacters.toLocaleString("zh-CN")} 字。`
-                      : "先确定书名、题材、主角和核心爽点，再让任务卡负责后续章节节奏。"}
-                  </span>
+                  <strong>{activeNoteTitle}</strong>
+                  <span>{activeNoteText}</span>
                 </div>
                 <div className="home-focus-actions">
-                  <Link href={continueWritingHref} className="button primary">
-                    {writingProject ? "继续创作" : "新建创作项目"}
+                  <Link href={activePrimaryHref} className="button primary">
+                    {activePrimaryAction}
                   </Link>
-                  <Link href="/projects" className="button">
+                  <Link href={activeProjectCenterHref} className="button">
                     查看项目中心
                   </Link>
                 </div>
-                {switchableWritingProjects.length > 0 ? (
+                {activeMode === "writing" && switchableWritingProjects.length > 0 ? (
                   <div className="home-project-switcher" aria-label="切换创作作品">
                     <span>切换作品</span>
                     <div>
@@ -270,35 +368,17 @@ export default async function HomePage() {
           </div>
 
           <aside className="home-command-panel" aria-label="首页快捷入口">
-            <Link href={continueWritingHref} className="home-command-card home-command-primary">
-              <span>写</span>
-              <strong>{writingProject ? "进入创作工作台" : "创建一本新书"}</strong>
-              <em>
-                {writingProject ? `任务卡 ${taskCardCount} · AI 任务 ${aiJobCount}` : "书名、简介、主角、题材先跑通。"}
-              </em>
-            </Link>
-            <Link href={continueAnalysisHref} className="home-command-card">
-              <span>拆</span>
-              <strong>{analysisProject ? "继续拆书项目" : "导入一本样书"}</strong>
-              <em>
-                {analysisProject
-                  ? `${analysisProject.name} · 已拆 ${analysisProject._count.chapterAnalyses} 章`
-                  : "先拆结构，再把公式沉淀成模板。"}
-              </em>
-            </Link>
-            <Link href={latestTemplate ? `/templates/${latestTemplate.id}` : "/templates"} className="home-command-card">
-              <span>模</span>
-              <strong>{latestTemplate ? latestTemplate.name : "模板库还在等待第一条公式"}</strong>
-              <em>
-                {latestTemplate
-                  ? `${latestTemplate.genre} · 可继续迁移到新题材`
-                  : "从整书分析页保存模板后，这里会变成迁移入口。"}
-              </em>
-            </Link>
+            {homeCommandCards.map((card) => (
+              <Link key={`${card.icon}-${card.href}`} href={card.href} className={card.className}>
+                <span>{card.icon}</span>
+                <strong>{card.title}</strong>
+                <em>{card.meta}</em>
+              </Link>
+            ))}
           </aside>
         </section>
 
-        {showFirstCreationFlow ? (
+        {activeMode === "writing" && showFirstCreationFlow ? (
           <FirstCreationFlow
             writingProject={writingProject}
             hasTaskCard={hasWritingTaskCard}
@@ -306,81 +386,102 @@ export default async function HomePage() {
           />
         ) : null}
 
-        <div className="home-stage-board">
-          <section className="home-lane home-writing-lane">
-            <div className="home-lane-head">
-              <div>
-                <span>创作线</span>
-                <h2>最近写作项目</h2>
-                <p>只保留能帮你回到正文、任务卡和审稿闭环的信息。</p>
-              </div>
-              <Link href="/stats" className="button">
-                创作统计
+        <nav className="project-type-tabs home-stage-tabs" aria-label="首页工作线切换">
+          <div className="project-type-tab-list">
+            {modeTabs.map((tab) => (
+              <Link
+                key={tab.type}
+                href={tab.href}
+                className={activeMode === tab.type ? "project-type-tab active" : "project-type-tab"}
+                aria-current={activeMode === tab.type ? "page" : undefined}
+              >
+                <strong>{tab.label}</strong>
+                <span>{tab.count} 个 · {tab.description}</span>
               </Link>
-            </div>
-            <div className="home-lane-body">
-              <div className="list">
-                {writingProjects.length === 0 ? (
-                  <div className="empty-state">
-                    <strong>还没有创作项目</strong>
-                    <span>新建作品后，这里会显示正文、任务卡和审稿进度。</span>
-                    <Link href="/projects/new" className="button primary">
-                      新建创作项目
-                    </Link>
-                  </div>
-                ) : (
-                  writingProjects.slice(0, 3).map((project) => (
-                    <ProjectListItem
-                      key={project.id}
-                      project={project}
-                      mode="writing"
-                      writtenCharacters={writtenCharactersByProject.get(project.id) ?? 0}
-                    />
-                  ))
-                )}
-              </div>
-            </div>
-          </section>
+            ))}
+          </div>
+          {/* <div className="project-type-current">
+            当前显示 <strong>{activeMode === "writing" ? "创作线" : "拆书线"}</strong>
+          </div> */}
+        </nav>
 
-          <section className="home-lane home-analysis-lane">
-            <div className="home-lane-head">
-              <div>
-                <span>拆书线</span>
-                <h2>从样本到模板</h2>
-                <p>把导入、章节拆解、整书分析和模板沉淀放成一条流水线。</p>
-              </div>
-              <Link href={continueAnalysisHref} className="button">
-                {analysisProject ? "继续拆书" : "新建拆书项目"}
-              </Link>
-            </div>
-            <div className="home-pipeline">
-              {analysisPipeline.map((item, index) => (
-                <div key={item.label} className="home-pipeline-step">
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  <strong>{item.value}</strong>
-                  <small>{item.label}</small>
-                  <em>{item.detail}</em>
+        <div className="home-stage-board home-stage-board-single">
+          {activeMode === "writing" ? (
+            <section className="home-lane home-writing-lane">
+              <div className="home-lane-head">
+                <div>
+                  <span>创作线</span>
+                  <h2>最近写作项目</h2>
+                  <p>只保留能帮你回到正文、任务卡和审稿闭环的信息。</p>
                 </div>
-              ))}
-            </div>
-            <div className="home-lane-body">
-              <div className="list">
-                {analysisProjects.length === 0 ? (
-                  <div className="empty-state">
-                    <strong>还没有拆书项目</strong>
-                    <span>导入样本文本后，这里会显示分章和拆解进度。</span>
-                    <Link href="/projects/new/analysis" className="button">
-                      新建拆书项目
-                    </Link>
-                  </div>
-                ) : (
-                  analysisProjects.slice(0, 3).map((project) => (
-                    <ProjectListItem key={project.id} project={project} mode="analysis" />
-                  ))
-                )}
+                <Link href="/stats" className="button">
+                  创作统计
+                </Link>
               </div>
-            </div>
-          </section>
+              <div className="home-lane-body">
+                <div className="list">
+                  {writingProjects.length === 0 ? (
+                    <div className="empty-state">
+                      <strong>还没有创作项目</strong>
+                      <span>新建作品后，这里会显示正文、任务卡和审稿进度。</span>
+                      <Link href="/projects/new" className="button primary">
+                        新建创作项目
+                      </Link>
+                    </div>
+                  ) : (
+                    writingProjects.slice(0, 3).map((project) => (
+                      <ProjectListItem
+                        key={project.id}
+                        project={project}
+                        mode="writing"
+                        writtenCharacters={writtenCharactersByProject.get(project.id) ?? 0}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="home-lane home-analysis-lane">
+              <div className="home-lane-head">
+                <div>
+                  <span>拆书线</span>
+                  <h2>从样本到模板</h2>
+                  <p>把导入、章节拆解、整书分析和模板沉淀放成一条流水线。</p>
+                </div>
+                <Link href={continueAnalysisHref} className="button">
+                  {analysisProject ? "继续拆书" : "新建拆书项目"}
+                </Link>
+              </div>
+              <div className="home-pipeline">
+                {analysisPipeline.map((item, index) => (
+                  <div key={item.label} className="home-pipeline-step">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <strong>{item.value}</strong>
+                    <small>{item.label}</small>
+                    <em>{item.detail}</em>
+                  </div>
+                ))}
+              </div>
+              <div className="home-lane-body">
+                <div className="list">
+                  {analysisProjects.length === 0 ? (
+                    <div className="empty-state">
+                      <strong>还没有拆书项目</strong>
+                      <span>导入样本文本后，这里会显示分章和拆解进度。</span>
+                      <Link href="/projects/new/analysis" className="button">
+                        新建拆书项目
+                      </Link>
+                    </div>
+                  ) : (
+                    analysisProjects.slice(0, 3).map((project) => (
+                      <ProjectListItem key={project.id} project={project} mode="analysis" />
+                    ))
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     );
