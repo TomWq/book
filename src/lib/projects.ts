@@ -45,6 +45,7 @@ import {
   generateWritingTaskCardWithAi,
   maximumDraftCharacters,
   minimumSavableDraftCharacters,
+  reviewLongFormPlanConsistencyWithAi,
   reviewChapterDraftWithAi,
   prepareChapterDraftContentForSave,
   sanitizeChapterDraftDiction,
@@ -402,12 +403,41 @@ function isRunnableAiJob(job: StoredAiJob) {
     return true;
   }
 
-  if (job.type !== "analyze_chapters" || job.status !== "running") {
+  if (job.status !== "running") {
+    return false;
+  }
+
+  const resumableTypes = new Set([
+    "analyze_chapters",
+    "generate_long_form_plan",
+    "review_long_form_plan"
+  ]);
+
+  if (!resumableTypes.has(job.type)) {
     return false;
   }
 
   const updatedAt = Date.parse(job.updatedAt);
-  return Number.isFinite(updatedAt) && Date.now() - updatedAt < 10 * 60 * 1000;
+  if (!Number.isFinite(updatedAt)) {
+    return true;
+  }
+
+  const staleAfterMs = job.type === "analyze_chapters" ? 10 * 60 * 1000 : 90 * 1000;
+
+  return Date.now() - updatedAt > staleAfterMs;
+}
+
+function isActiveAiJob(job: StoredAiJob) {
+  return job.status === "pending" || (job.status === "running" && !isRunnableAiJob(job));
+}
+
+function findActiveLongFormPlanJob(store: AppStore, projectId: string) {
+  return store.aiJobs.find(
+    (item) =>
+      item.projectId === projectId &&
+      (item.type === "generate_long_form_plan" || item.type === "review_long_form_plan") &&
+      isActiveAiJob(item)
+  ) ?? null;
 }
 
 function claimLegacyWorkspace(store: AppStore, userId: string) {
@@ -1639,9 +1669,13 @@ function createDomainReadRepository(store: AppStore) {
     listJobsForUser(userId: string) {
       const projectIds = getOwnedProjects(store, userId).map((project) => project.id);
 
-      return store.aiJobs.filter((job) =>
-        job.projectId ? projectIds.includes(job.projectId) : job.userId === userId
-      );
+      return store.aiJobs.filter((job) => {
+        if (!job.projectId) {
+          return job.userId === userId;
+        }
+
+        return projectIds.includes(job.projectId) && isCurrentLongFormPlanJob(store, job.projectId, job);
+      });
     },
     listProjectJobsForUser(projectId: string, userId: string) {
       const project = getProjectRecordForUser(projectId, userId);
@@ -1652,6 +1686,7 @@ function createDomainReadRepository(store: AppStore) {
 
       return store.aiJobs
         .filter((job) => job.projectId === projectId)
+        .filter((job) => isCurrentLongFormPlanJob(store, projectId, job))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
     getJobForUser(jobId: string, userId: string) {
@@ -1772,6 +1807,14 @@ function createDomainReadRepository(store: AppStore) {
         longFormPlans: (store.longFormPlans ?? [])
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+        longFormPlanJobs: store.aiJobs
+          .filter(
+            (item) =>
+              item.projectId === projectId &&
+              isLongFormPlanJobType(item) &&
+              isCurrentLongFormPlanJob(store, projectId, item)
+          )
+          .sort((a, b) => Number(isActiveAiJob(b)) - Number(isActiveAiJob(a)) || b.updatedAt.localeCompare(a.updatedAt)),
         customRelationGraphs: (store.customRelationGraphs ?? [])
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -3156,32 +3199,105 @@ function estimateChapterCount(targetTotalWords: number) {
   return Math.max(20, Math.ceil(targetTotalWords / 1800));
 }
 
-function buildDefaultLongFormProgressionRules(targetTotalWords: number, estimatedChapters: number) {
-  const isMediumOrLong = targetTotalWords >= 100_000 || estimatedChapters >= 60;
-  const isLong = targetTotalWords >= 300_000 || estimatedChapters >= 120;
+type AiLongFormPlanResult = Awaited<ReturnType<typeof generateLongFormPlanWithAi>>;
 
-  if (!isMediumOrLong) {
-    return [
-      "前10章先建立机制可信度和第一阶段压力，不要用连续突破替代剧情推进。"
-    ];
+function getExpectedPost100StageStarts(estimatedChapters: number) {
+  const starts = [];
+
+  for (let start = 101; start <= estimatedChapters; start += 50) {
+    starts.push(start);
   }
 
+  return starts;
+}
+
+function extractLeadingChapterNumber(value: string) {
+  const normalized = value.replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10));
+  const match = normalized.match(/第\s*(\d+)\s*章|^(\d+)\s*[.、:：]/);
+  const chapterNumber = Number(match?.[1] ?? match?.[2]);
+
+  return Number.isFinite(chapterNumber) ? chapterNumber : 0;
+}
+
+function combinedLongFormPlanText(aiPlan: AiLongFormPlanResult) {
   return [
-    "长期阶梯口径：简介或创作圣经里的等级、阈值、奖励、职位、地图、势力、权限、关系或目标清单，默认是全书长期规则/上限表，不是第一卷进度表；不得按列出顺序自动排进前期章节。",
-    "默认节奏：除非用户明确选择短篇、开局满级、快穿、极限快节奏等特殊模式，前10章最多允许一次正式大阶段跨档，不要连续两次正式大突破。",
-    "默认节奏：多个命名成长阶段应按目标篇幅拉开距离；如果提前触碰下一阶段门槛，只能写成接近门槛、资格、临时收益、风险预告或下一章目标。",
-    "收益口径：一次性收获、短期任务、预期收益、临时合作或试用资格不能直接等同稳定指标/长期权限/永久资源，只能作为进度、资格、临时助力或后续目标。",
-    "章节功能：前10章不能每章都安排数值上涨或正式跨档，必须穿插日常压力、关系铺垫、机制限制、误判、信息差和下一步目标。",
-    "突破口径：凡是正式提升成长层级、身份、地图、权限或核心资源，必须有稳定来源、触发条件、结算周期或代价后果；否则降级为小收益或线索。"
-  ].concat(
-    isLong
-      ? [
-          "长篇预算：前30章默认仍是第一阶段主循环建立期，重点是验证机制、稳定读者期待和制造第一阶段压力，不是快速兑现核心成长表。",
-          "长篇预算：第一卷默认只消耗长期成长阶梯的前段资源；中后期档位、终局目标或高阶敌人不得直接设为第一卷完成目标，除非用户明确要求极快节奏。",
-          "大阶段跨档应按卷或阶段收束安排；小收益可以较高频，中收益需要铺垫，大阶段不要靠阈值表或任务清单自动连跳。"
-        ]
-      : []
+    aiPlan.planningBasis,
+    aiPlan.corePromise,
+    ...aiPlan.volumePlan,
+    ...aiPlan.progressionPacing,
+    ...aiPlan.rewardPacing,
+    ...aiPlan.confirmedFacts,
+    ...aiPlan.openQuestions,
+    ...aiPlan.doNotChange,
+    ...aiPlan.doNotRevealEarly,
+    ...aiPlan.tagPromises,
+    ...aiPlan.first10Chapters,
+    aiPlan.first100Pacing,
+    aiPlan.post100Pacing,
+    ...aiPlan.progressionRules
+  ].join("\n");
+}
+
+function validateAiLongFormPlan(aiPlan: AiLongFormPlanResult, estimatedChapters: number) {
+  if (!aiPlan.first100Pacing.trim()) {
+    throw new Error(`AI 未返回完整长篇规划：缺少第1-${Math.min(100, estimatedChapters)}章阶段节奏，请重试。`);
+  }
+
+  if (
+    aiPlan.confirmedFacts.length === 0 &&
+    aiPlan.openQuestions.length === 0 &&
+    aiPlan.doNotChange.length === 0 &&
+    aiPlan.doNotRevealEarly.length === 0 &&
+    aiPlan.tagPromises.length === 0
+  ) {
+    throw new Error("AI 未返回合格长篇规划：缺少结构化项目事实锁，请重试。");
+  }
+
+  if (aiPlan.doNotChange.length === 0 && aiPlan.confirmedFacts.length > 0) {
+    throw new Error("AI 未返回合格长篇规划：缺少禁止改写约束，请重试。");
+  }
+
+  if (aiPlan.openQuestions.length === 0 && aiPlan.doNotRevealEarly.length === 0) {
+    throw new Error("AI 未返回合格长篇规划：缺少待确认点或禁止提前揭示约束，请重试。");
+  }
+
+  const first10ChapterNumbers = new Set(
+    aiPlan.first10Chapters.map(extractLeadingChapterNumber).filter((chapterNumber) => chapterNumber >= 1 && chapterNumber <= 10)
   );
+  const missingFirst10Chapters = Array.from({ length: 10 }, (_, index) => index + 1).filter(
+    (chapterNumber) => !first10ChapterNumbers.has(chapterNumber)
+  );
+
+  if (missingFirst10Chapters.length > 0) {
+    throw new Error(
+      `AI 未返回完整长篇规划：前10章蓝图缺少第${missingFirst10Chapters.join("、")}章，请重试。`
+    );
+  }
+
+  if (estimatedChapters <= 100) {
+    if (aiPlan.post100Pacing.trim()) {
+      throw new Error(`AI 未返回合格长篇规划：本书预计约${estimatedChapters}章，不应生成第101章后的阶段，请重试。`);
+    }
+
+    return;
+  }
+
+  const post100Pacing = aiPlan.post100Pacing.trim();
+
+  if (!post100Pacing) {
+    throw new Error("AI 未返回完整长篇规划：缺少第101章后的阶段规划，请重试。");
+  }
+
+  const expectedStarts = getExpectedPost100StageStarts(estimatedChapters);
+  const missingStarts = expectedStarts.filter((start) => !post100Pacing.includes(String(start)));
+  const mentionsFinalStage =
+    post100Pacing.includes(String(estimatedChapters)) || /剩余结尾|终局|完结|终章/.test(post100Pacing);
+
+  if (missingStarts.length > 0 || !mentionsFinalStage) {
+    throw new Error(
+      `AI 未返回完整长篇规划：第101章后需要按每50章阶段覆盖到约第${estimatedChapters}章，请重试。`
+    );
+  }
 }
 
 function applyInitialProjectState(
@@ -3252,6 +3368,8 @@ function applyInitialProjectState(
     "不改变主角核心身份、底层欲望和已公开事实。",
     projectPromise ? `作品承诺：${projectPromise}` : "",
     "不改变项目简介、核心卖点、金手指机制和开局承诺；后续支线必须服务这些核心承诺。",
+    "项目简介中的已发生事实、人物关系、身份状态、核心事件、能力/金手指来源、主线目标和读者承诺，都属于禁止擅自改写项。",
+    "简介中未明确的最终归属、亲缘/血脉身份、幕后真相、终局走向和重大反转，只能作为待确认伏笔，不能直接写成既定事实。",
     "不让人物提前知道未揭露真相。",
     ...genreBoundaryRules,
     worldSetting ? "世界规则以「世界规则」字段为准，不随章节临时改写。" : "",
@@ -3523,6 +3641,68 @@ function getJobInputRecord(job: StoredAiJob) {
   }
 
   return job.input as Record<string, unknown>;
+}
+
+function getLongFormPlanJobPlanId(job: StoredAiJob) {
+  const input = getJobInputRecord(job);
+  const output = getJobObject(job.output);
+  return String(output.longFormPlanId ?? input?.longFormPlanId ?? "");
+}
+
+function isLongFormPlanJobType(job: StoredAiJob) {
+  return job.type === "generate_long_form_plan" || job.type === "review_long_form_plan";
+}
+
+function getLatestLongFormPlanIdForProject(store: AppStore, projectId: string) {
+  return (store.longFormPlans ?? [])
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.id ?? "";
+}
+
+function isCurrentLongFormPlanJob(store: AppStore, projectId: string, job: StoredAiJob) {
+  if (!isLongFormPlanJobType(job)) {
+    return true;
+  }
+
+  const latestPlanId = getLatestLongFormPlanIdForProject(store, projectId);
+
+  if (!latestPlanId) {
+    return true;
+  }
+
+  const jobPlanId = getLongFormPlanJobPlanId(job);
+
+  if (jobPlanId === latestPlanId) {
+    return true;
+  }
+
+  return job.type === "generate_long_form_plan" && !jobPlanId && (job.status === "pending" || job.status === "running");
+}
+
+function removeOutdatedLongFormPlanJobs(
+  store: AppStore,
+  projectId: string,
+  latestPlanId: string,
+  keepJobIds = new Set<string>()
+) {
+  const beforeCount = store.aiJobs.length;
+
+  store.aiJobs = store.aiJobs.filter((job) => {
+    if (
+      job.projectId !== projectId ||
+      !isLongFormPlanJobType(job)
+    ) {
+      return true;
+    }
+
+    if (keepJobIds.has(job.id)) {
+      return true;
+    }
+
+    return getLongFormPlanJobPlanId(job) === latestPlanId;
+  });
+
+  return beforeCount - store.aiJobs.length;
 }
 
 function finishAiJob(job: StoredAiJob, output?: unknown) {
@@ -5778,6 +5958,8 @@ export function formatAiJobType(type: string) {
       return "生成任务卡";
     case "generate_long_form_plan":
       return "生成长篇规划";
+    case "review_long_form_plan":
+      return "审查长篇规划";
     case "project_creation_assist":
       return "新书立项辅助";
     case "generate_chapter":
@@ -5850,7 +6032,9 @@ export async function getRecentAiJobs(limit = 3) {
             ? "任务已完成并写入存储。"
             : "任务已完成，当前使用本地兜底结果。"
           : job.status === "running"
-            ? "任务正在执行中。"
+            ? isRunnableAiJob(job)
+              ? "任务上次执行等待过久，可以重新接管继续执行。"
+              : "任务正在执行中。"
             : job.error || "等待执行。"
     };
   });
@@ -8228,6 +8412,7 @@ export async function getProjectWritingState(projectId: string) {
     characters: result.characters,
     foreshadowings: result.foreshadowings,
     longFormPlans: result.longFormPlans,
+    longFormPlanJobs: result.longFormPlanJobs,
     customRelationGraphs: result.customRelationGraphs,
     taskCards: result.taskCards,
     drafts: result.drafts,
@@ -8696,6 +8881,184 @@ export async function updatePlotState(
 
   await writeStore(store);
   return plotState;
+}
+
+export async function resolveLongFormOpenQuestion(
+  projectId: string,
+  input: {
+    question: string;
+    resolution?: string;
+    mode: "confirm_fact" | "mark_forbidden" | "mark_no_early_reveal" | "dismiss";
+    source?: "open_question" | "review_advice";
+  }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(store, project);
+  store.longFormPlans ??= [];
+
+  const question = input.question.trim();
+  const resolution = input.resolution?.trim() || question;
+  const mode = input.mode;
+  const source = input.source ?? "open_question";
+  const plan = getLatestLongFormPlan(store, projectId);
+  const bible = store.writingBibles.find((item) => item.projectId === projectId);
+  const timestamp = now();
+
+  if (!plan) {
+    throw new Error("尚未生成长篇规划");
+  }
+
+  if (!question) {
+    throw new Error("待确认点不能为空");
+  }
+
+  if (mode !== "confirm_fact" && mode !== "mark_forbidden" && mode !== "mark_no_early_reveal" && mode !== "dismiss") {
+    throw new Error("不支持的待确认点处理方式");
+  }
+
+  plan.openQuestions = uniqueList((plan.openQuestions ?? []).filter((item) => item !== question));
+
+  if (mode === "confirm_fact") {
+    plan.confirmedFacts = uniqueList([...(plan.confirmedFacts ?? []), resolution]);
+    plan.doNotChange = uniqueList([...(plan.doNotChange ?? []), resolution]);
+
+    if (bible) {
+      bible.immutableSettings = appendTextBlock(
+        bible.immutableSettings,
+        `已确认事实：${resolution}`
+      );
+      bible.updatedAt = timestamp;
+    }
+  }
+
+  if (mode === "mark_forbidden") {
+    plan.doNotChange = uniqueList([...(plan.doNotChange ?? []), resolution]);
+
+    if (bible) {
+      bible.immutableSettings = appendTextBlock(
+        bible.immutableSettings,
+        `禁止改写：${resolution}`
+      );
+      bible.updatedAt = timestamp;
+    }
+  }
+
+  if (mode === "mark_no_early_reveal") {
+    plan.doNotRevealEarly = uniqueList([...(plan.doNotRevealEarly ?? []), resolution]);
+
+    if (bible) {
+      bible.immutableSettings = appendTextBlock(
+        bible.immutableSettings,
+        `禁止提前揭示：${resolution}`
+      );
+      bible.updatedAt = timestamp;
+    }
+  }
+
+  if (source === "review_advice") {
+    const reviewJobs = store.aiJobs.filter((job) => {
+      if (job.projectId !== projectId || job.type !== "review_long_form_plan" || job.status !== "succeeded") {
+        return false;
+      }
+
+      return getLongFormPlanJobPlanId(job) === plan.id;
+    });
+
+    for (const job of reviewJobs) {
+      const output = getJobObject(job.output);
+      const review = getJobObject(output.review);
+
+      if (!("passed" in review)) {
+        continue;
+      }
+
+      job.output = {
+        ...output,
+        review: {
+          ...review,
+          passed: true,
+          status: "resolved",
+          issues: [],
+          unresolvedCommitmentIssues: [],
+          repairInstructions: [],
+          resolvedByUser: true,
+          resolvedAt: timestamp,
+          resolution
+        }
+      };
+      job.updatedAt = timestamp;
+    }
+  }
+
+  plan.updatedAt = timestamp;
+  project.updatedAt = timestamp;
+
+  await writeStore(store);
+
+  return {
+    longFormPlan: plan,
+    bible
+  };
+}
+
+export async function releaseStaleLongFormPlanJobs(projectId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const timestamp = now();
+  const releasedJobs = store.aiJobs.filter(
+    (job) =>
+      job.projectId === projectId &&
+      (job.type === "generate_long_form_plan" || job.type === "review_long_form_plan") &&
+      isRunnableAiJob(job)
+  );
+
+  for (const job of releasedJobs) {
+    job.status = "pending";
+    job.error = undefined;
+    job.updatedAt = timestamp;
+    job.finishedAt = undefined;
+  }
+
+  if (releasedJobs.length > 0) {
+    project.updatedAt = timestamp;
+    await writeStore(store);
+  }
+
+  return {
+    releasedCount: releasedJobs.length,
+    jobs: releasedJobs
+  };
+}
+
+export async function pruneOldLongFormPlans(projectId: string) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const plans = (store.longFormPlans ?? [])
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const latestPlan = plans[0] ?? null;
+
+  if (!latestPlan) {
+    return { removedPlanCount: 0, removedLongFormJobCount: 0 };
+  }
+
+  const oldPlanIds = new Set(plans.slice(1).map((item) => item.id));
+  store.longFormPlans = (store.longFormPlans ?? []).filter(
+    (item) => item.projectId !== projectId || item.id === latestPlan.id
+  );
+  const removedLongFormJobCount = removeOutdatedLongFormPlanJobs(store, projectId, latestPlan.id);
+  project.updatedAt = now();
+  await writeStore(store);
+
+  return {
+    removedPlanCount: oldPlanIds.size,
+    removedLongFormJobCount
+  };
 }
 
 export async function createCustomRelationGraph(
@@ -9296,6 +9659,12 @@ export async function generateLongFormPlan(
   const foreshadowings = store.foreshadowings
     .filter((item) => item.projectId === projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const activeJob = options?.existingJobId ? null : findActiveLongFormPlanJob(store, projectId);
+
+  if (activeJob) {
+    throw new Error("已有长篇规划正在生成，请等待当前任务完成后再重新生成。");
+  }
+
   const job = options?.existingJobId
     ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
     : createAiJob(store, {
@@ -9325,7 +9694,7 @@ export async function generateLongFormPlan(
     throw new Error(message);
   }
 
-  let aiPlan: Awaited<ReturnType<typeof generateLongFormPlanWithAi>>;
+  let aiPlan: AiLongFormPlanResult;
 
   try {
     aiPlan = await generateLongFormPlanWithAi({
@@ -9339,6 +9708,7 @@ export async function generateLongFormPlan(
       foreshadowings,
       storyAnalysis
     });
+    validateAiLongFormPlan(aiPlan, estimatedChapters);
   } catch (error) {
     const message = error instanceof Error ? error.message : "长篇规划 AI 生成失败";
     failAiJob(job, message);
@@ -9352,33 +9722,154 @@ export async function generateLongFormPlan(
     projectId,
     targetTotalWords,
     estimatedChapters,
-    planningBasis: aiPlan.planningBasis || `按目标 ${targetTotalWords} 字、约 ${estimatedChapters} 章规划阶段节奏。`,
-    corePromise: aiPlan.corePromise || project.description || bible.corePleasure,
+    planningBasis: aiPlan.planningBasis,
+    corePromise: aiPlan.corePromise,
     volumePlan: cleanList(aiPlan.volumePlan).slice(0, 12),
     progressionPacing: cleanList(aiPlan.progressionPacing).slice(0, 20),
     rewardPacing: cleanList(aiPlan.rewardPacing).slice(0, 16),
+    confirmedFacts: cleanList(aiPlan.confirmedFacts).slice(0, 16),
+    openQuestions: cleanList(aiPlan.openQuestions).slice(0, 12),
+    doNotChange: cleanList(aiPlan.doNotChange).slice(0, 16),
+    doNotRevealEarly: cleanList(aiPlan.doNotRevealEarly).slice(0, 12),
+    tagPromises: cleanList(aiPlan.tagPromises).slice(0, 10),
     first10Chapters: cleanList(aiPlan.first10Chapters).slice(0, 12),
-    first100Pacing: aiPlan.first100Pacing || "前100章按开局机制验证、小收益、中收益、大爽点、阶段收束轮换推进。",
-    post100Pacing: aiPlan.post100Pacing || "100章后按全书卷纲进入后期推进：收束支线、回收伏笔、提高核心压力、控制最终成长档位并准备终局。",
-    progressionRules: cleanList([
-      ...buildDefaultLongFormProgressionRules(targetTotalWords, estimatedChapters),
-      ...aiPlan.progressionRules
-    ]).slice(0, 24),
+    first100Pacing: aiPlan.first100Pacing,
+    post100Pacing: aiPlan.post100Pacing,
+    progressionRules: cleanList(aiPlan.progressionRules).slice(0, 24),
     createdAt: timestamp,
     updatedAt: timestamp
   };
 
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => item.projectId !== projectId);
   store.longFormPlans.push(plan);
   project.updatedAt = timestamp;
+  const reviewJob = createAiJob(store, {
+    userId: currentUser.id,
+    projectId,
+    type: "review_long_form_plan",
+    payload: { longFormPlanId: plan.id },
+    model: getActiveAiModel(store, "local-long-form-plan-review", currentUser.id)
+  });
+  removeOutdatedLongFormPlanJobs(store, projectId, plan.id, new Set([job.id, reviewJob.id]));
   finishAiJob(job, withAiBillingOutput(store, job, {
     usedAi: true,
     usedFallback: false,
     longFormPlanId: plan.id,
+    reviewJobId: reviewJob.id,
     targetTotalWords,
     estimatedChapters
   }, getAiTokenUsage(aiPlan)));
   await writeStore(store);
   return plan;
+}
+
+export async function reviewLongFormPlan(
+  projectId: string,
+  input?: { longFormPlanId?: string },
+  options?: { existingJobId?: string; retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(store, project);
+  store.longFormPlans ??= [];
+
+  const plan = input?.longFormPlanId
+    ? store.longFormPlans.find((item) => item.id === input.longFormPlanId && item.projectId === projectId)
+    : getLatestLongFormPlan(store, projectId);
+
+  if (!plan) {
+    throw new Error("尚未生成长篇规划，无法审查");
+  }
+
+  const job = options?.existingJobId
+    ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
+    : createAiJob(store, {
+        userId: currentUser.id,
+        projectId,
+        type: "review_long_form_plan",
+        payload: { longFormPlanId: plan.id },
+        model: getActiveAiModel(store, "local-long-form-plan-review", currentUser.id),
+        retryOfJobId: options?.retryOfJobId
+      });
+
+  if (!options?.existingJobId) {
+    await writeStore(store);
+    startAiJob(job);
+    await writeStore(store);
+  }
+
+  if (!hasConfiguredAiSettings(store, currentUser.id)) {
+    const message = "AI 未配置，无法审查长篇规划";
+    failAiJob(job, message);
+    refundAiJobCredits(store, job, "长篇规划审查失败返还");
+    await writeStore(store);
+    throw new Error(message);
+  }
+
+  const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
+  const plotState = store.plotStates.find((item) => item.projectId === projectId)!;
+  const storyAnalysis = store.storyAnalyses
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+  const characters = store.characterProfiles
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const foreshadowings = store.foreshadowings
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  let review;
+
+  try {
+    review = await reviewLongFormPlanConsistencyWithAi({
+      projectName: project.name,
+      projectDescription: project.description,
+      targetTotalWords: plan.targetTotalWords,
+      estimatedChapters: plan.estimatedChapters,
+      bible,
+      plotState,
+      characters,
+      foreshadowings,
+      storyAnalysis
+    }, {
+      planningBasis: plan.planningBasis,
+      corePromise: plan.corePromise,
+      volumePlan: plan.volumePlan,
+      progressionPacing: plan.progressionPacing,
+      rewardPacing: plan.rewardPacing,
+      confirmedFacts: plan.confirmedFacts,
+      openQuestions: plan.openQuestions,
+      doNotChange: plan.doNotChange,
+      doNotRevealEarly: plan.doNotRevealEarly,
+      tagPromises: plan.tagPromises,
+      first10Chapters: plan.first10Chapters,
+      first100Pacing: plan.first100Pacing,
+      post100Pacing: plan.post100Pacing,
+      progressionRules: plan.progressionRules
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "长篇规划审查失败";
+    review = {
+      passed: null,
+      status: "incomplete",
+      issues: [`审查步骤执行异常：${message}`],
+      unresolvedCommitmentIssues: [],
+      repairInstructions: ["长篇规划主结果已保存；这是审查执行异常，不代表规划内容不通过。请重新审查当前规划。"],
+      reviewError: true
+    };
+  }
+
+  finishAiJob(job, withAiBillingOutput(store, job, {
+    usedAi: true,
+    usedFallback: false,
+    longFormPlanId: plan.id,
+    review
+  }, getAiTokenUsage(review)));
+  await writeStore(store);
+
+  return review;
 }
 
 export async function generateWritingTaskCard(
@@ -9571,7 +10062,7 @@ export async function generateWritingTaskCard(
         : "",
       "禁止机制偷换：不能只保留关键机制名词，却让核心成长实际来自另一套资源、奇遇、副本或外力。",
       longFormPlan
-        ? `长篇规划约束：目标约 ${longFormPlan.targetTotalWords} 字 / ${longFormPlan.estimatedChapters} 章。本章必须符合成长节奏、收益频率和前100章节奏；如冲突，优先降级为小收益、线索、资格或机制试错。`
+        ? `长篇规划约束：目标约 ${longFormPlan.targetTotalWords} 字 / 预计约 ${longFormPlan.estimatedChapters} 章。本章必须符合当前阶段、成长节奏和收益频率；如冲突，优先降级为小收益、线索、资格或机制试错。`
         : "尚未生成长篇规划；本章默认保守推进，不要连续大升级、大地图跳转或让支线替代主线。",
       ...(longFormPlan?.progressionRules ?? []),
       "章节功能可以轮换：允许日常经营、关系铺垫、机制试错、小收益和低强度压力，不要每章都强行新敌人、新地图、大战斗或大突破。"
@@ -11705,12 +12196,63 @@ export async function enqueueLongFormPlanJob(
   const bible = store.writingBibles.find((item) => item.projectId === projectId)!;
   const targetTotalWords = inferTargetTotalWordsFromState(project, bible, input?.targetTotalWords);
   const estimatedChapters = estimateChapterCount(targetTotalWords);
+  const activeJob = findActiveLongFormPlanJob(store, projectId);
+
+  if (activeJob) {
+    return activeJob;
+  }
+
+  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => item.projectId !== projectId);
+  store.aiJobs = store.aiJobs.filter((job) => {
+    if (job.projectId !== projectId || !isLongFormPlanJobType(job)) {
+      return true;
+    }
+
+    return job.status === "pending" || job.status === "running";
+  });
+
   const job = createAiJob(store, {
     userId: currentUser.id,
     projectId,
     type: "generate_long_form_plan",
     payload: { targetTotalWords, estimatedChapters },
     model: getActiveAiModel(store, "local-long-form-plan", currentUser.id),
+    retryOfJobId: options?.retryOfJobId
+  });
+
+  project.updatedAt = now();
+  await writeStore(store);
+  return job;
+}
+
+export async function enqueueReviewLongFormPlanJob(
+  projectId: string,
+  input?: { longFormPlanId?: string },
+  options?: { retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+  const plan = input?.longFormPlanId
+    ? (store.longFormPlans ?? []).find((item) => item.id === input.longFormPlanId && item.projectId === projectId)
+    : getLatestLongFormPlan(store, projectId);
+
+  if (!plan) {
+    throw new Error("尚未生成长篇规划，无法审查");
+  }
+
+  const activeJob = findActiveLongFormPlanJob(store, projectId);
+
+  if (activeJob) {
+    return activeJob;
+  }
+
+  const job = createAiJob(store, {
+    userId: currentUser.id,
+    projectId,
+    type: "review_long_form_plan",
+    payload: { longFormPlanId: plan.id },
+    model: getActiveAiModel(store, "local-long-form-plan-review", currentUser.id),
     retryOfJobId: options?.retryOfJobId
   });
 
@@ -11876,9 +12418,9 @@ export async function processAiJob(jobId: string) {
     return { job, skipped: true, reason: "任务已完成" };
   }
 
-  const canContinueRunningAnalysis = job.type === "analyze_chapters" && job.status === "running";
+  const canResumeRunningJob = job.status === "running" && isRunnableAiJob(job);
 
-  if (job.status !== "pending" && !canContinueRunningAnalysis) {
+  if (job.status !== "pending" && !canResumeRunningJob) {
     throw new Error(`只有待处理任务可以执行，当前状态：${job.status}`);
   }
 
@@ -11983,6 +12525,22 @@ export async function processAiJob(jobId: string) {
       const latestStore = await readStore();
       const updatedJob = latestStore.aiJobs.find((item) => item.id === job.id) ?? job;
       return { job: updatedJob, projectId: job.projectId, result: plan };
+    }
+
+    if (job.type === "review_long_form_plan") {
+      if (!job.projectId) {
+        throw new Error("任务缺少项目归属");
+      }
+
+      const payload = getJobInputRecord(job);
+      const review = await reviewLongFormPlan(job.projectId, {
+        longFormPlanId: String(payload?.longFormPlanId ?? "")
+      }, {
+        existingJobId: job.id
+      });
+      const latestStore = await readStore();
+      const updatedJob = latestStore.aiJobs.find((item) => item.id === job.id) ?? job;
+      return { job: updatedJob, projectId: job.projectId, result: review };
     }
 
     if (job.type === "generate_chapter") {
@@ -12194,6 +12752,18 @@ export async function retryAiJob(jobId: string) {
         jobType: job.type,
         job: await enqueueLongFormPlanJob(job.projectId, {
           targetTotalWords: Number(input?.targetTotalWords ?? 0) || undefined
+        }, { retryOfJobId: job.id })
+      };
+
+    case "review_long_form_plan":
+      if (!job.projectId) {
+        throw new Error("该任务缺少项目归属，无法重试");
+      }
+      return {
+        projectId: job.projectId,
+        jobType: job.type,
+        job: await enqueueReviewLongFormPlanJob(job.projectId, {
+          longFormPlanId: String(input?.longFormPlanId ?? "")
         }, { retryOfJobId: job.id })
       };
 

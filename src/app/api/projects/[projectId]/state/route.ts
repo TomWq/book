@@ -10,11 +10,15 @@ import {
   deleteCustomRelationGraphEdge,
   deleteCustomRelationGraphNode,
   deleteForeshadowing,
+  enqueueReviewLongFormPlanJob,
   getProjectWritingState,
+  pruneOldLongFormPlans,
+  releaseStaleLongFormPlanJobs,
   updateCharacterProfile,
   updateCustomRelationGraph,
   updateCustomRelationGraphNode,
   updateForeshadowing,
+  resolveLongFormOpenQuestion,
   updatePlotState,
   updateProjectMetadata,
   updateWritingBible
@@ -221,6 +225,38 @@ export async function POST(
       });
 
       return Response.json({ plotState });
+    }
+
+    if (action === "resolve_long_form_open_question") {
+      const result = await resolveLongFormOpenQuestion(projectId, {
+        question: String(body.question ?? ""),
+        resolution: String(body.resolution ?? ""),
+        mode:
+          body.mode === "mark_forbidden" || body.mode === "mark_no_early_reveal" || body.mode === "dismiss"
+            ? body.mode
+            : "confirm_fact",
+        source: body.source === "review_advice" ? "review_advice" : "open_question"
+      });
+
+      return Response.json(result);
+    }
+
+    if (action === "review_long_form_plan") {
+      const job = await enqueueReviewLongFormPlanJob(projectId, {
+        longFormPlanId: String(body.longFormPlanId ?? "")
+      });
+
+      return Response.json({ job }, { status: 202 });
+    }
+
+    if (action === "release_stale_long_form_plan_jobs") {
+      const result = await releaseStaleLongFormPlanJobs(projectId);
+      return Response.json(result);
+    }
+
+    if (action === "prune_old_long_form_plans") {
+      const result = await pruneOldLongFormPlans(projectId);
+      return Response.json(result);
     }
 
     if (action === "create_character") {

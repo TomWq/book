@@ -1,7 +1,11 @@
 import { notFound } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
+import { AiJobRunner } from "@/components/ai-job-runner";
 import { Panel } from "@/components/panel";
 import { calculateAiJobProgress, formatAiJobType, getProject, getProjectAiJobs } from "@/lib/projects";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const PAGE_SIZE = 20;
 
@@ -31,10 +35,15 @@ type JobOutputView = {
 };
 
 type ProjectJobView = {
+  id: string;
   type: string;
   status: string;
   input?: unknown;
   output?: unknown;
+  error?: string;
+  attempts: number;
+  createdAt: string;
+  updatedAt?: string;
 };
 
 function numberValue(value: unknown) {
@@ -59,6 +68,18 @@ function readJobOutput(job: { output?: unknown }) {
 
 function readJobInput(job: { input?: unknown }) {
   return job.input && typeof job.input === "object" ? (job.input as Record<string, unknown>) : undefined;
+}
+
+function isLongFormJobStale(job: ProjectJobView) {
+  if (
+    job.status !== "running" ||
+    (job.type !== "generate_long_form_plan" && job.type !== "review_long_form_plan")
+  ) {
+    return false;
+  }
+
+  const updatedAt = Date.parse(String(job.updatedAt ?? ""));
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > 90 * 1000;
 }
 
 function getJobUnitCount(job: ProjectJobView, output?: JobOutputView) {
@@ -191,6 +212,13 @@ function formatJobStatus(status: string) {
   }
 }
 
+function displayJobError(value: string) {
+  return value
+    .replace(/This operation was aborted/g, "AI 请求超时或被中止，请重新执行")
+    .replace(/AI 请求超时或被中止，请稍后重试；如果这是长篇规划，请适当提高 AI 超时时间。/g, "AI 请求超时或被中止，请重新执行")
+    .replace(/AI JSON 修复未正常结束：length/g, "AI 输出被截断，旧版长 JSON 修复失败；请重新执行，将使用分段结构重新生成");
+}
+
 function summarizeJobInput(job: {
   type: string;
   input?: unknown;
@@ -271,6 +299,12 @@ export default async function ProjectJobsPage({
   const runningCount = jobs.filter((job) => job.status === "running").length;
   const failedCount = jobs.filter((job) => job.status === "failed").length;
   const usageStats = buildUsageStats(jobs);
+  const autoTrackedJob = jobs.find(
+    (job) => job.status === "pending" || job.status === "running" || isLongFormJobStale(job)
+  );
+  const visiblePageJobs = autoTrackedJob
+    ? pageJobs.filter((job) => job.id !== autoTrackedJob.id)
+    : pageJobs;
 
   return (
     <div className="grid two-col">
@@ -333,6 +367,18 @@ export default async function ProjectJobsPage({
             第 {currentPage} / {totalPages} 页
           </span>
         </div>
+        {autoTrackedJob ? (
+          <AiJobRunner
+            jobId={autoTrackedJob.id}
+            title={`正在执行：${formatAiJobType(autoTrackedJob.type)}`}
+            runningMessage={
+              autoTrackedJob.status === "running"
+                ? "任务正在后台执行，页面会自动跟踪完成或失败结果。"
+                : "发现待处理任务，正在自动执行。"
+            }
+            doneMessage="任务已完成，正在刷新任务中心。"
+          />
+        ) : null}
         <div className="list">
           {jobs.length === 0 ? (
             <div className="empty-state">
@@ -342,14 +388,19 @@ export default async function ProjectJobsPage({
                 去创作工作台
               </a>
             </div>
+          ) : visiblePageJobs.length === 0 ? (
+            <div className="quote-box compact-note">
+              当前任务正在上方自动跟踪。完成或失败后，这里会刷新为最终任务记录。
+            </div>
           ) : (
-            pageJobs.map((job) => {
+            visiblePageJobs.map((job) => {
               const output = readJobOutput(job);
               const canRetry = job.status === "failed" || output?.usedFallback === true;
               const progressPercent = calculateAiJobProgress(job);
               const unitCount = getJobUnitCount(job, output);
               const tokenUsage = output?.tokenUsage;
               const avgTokens = unitCount > 0 ? numberValue(tokenUsage?.totalTokens) / unitCount : 0;
+              const staleLongFormJob = isLongFormJobStale(job);
 
               return (
                 <div key={job.id} className="list-item">
@@ -399,7 +450,11 @@ export default async function ProjectJobsPage({
                   </div>
                   <div className="muted">{summarizeJobInput(job)}</div>
                   <div className="muted">{summarizeJobOutput(job)}</div>
-                  <div className="muted">{job.error || "任务执行信息已记录。"}</div>
+                  <div className={staleLongFormJob ? "pill warning form-status" : "muted"}>
+                    {staleLongFormJob
+                      ? "这个长篇规划任务已经超过 90 秒没有更新，可以点上方“执行待处理任务”重新接管。"
+                      : job.error ? displayJobError(job.error) : "任务执行信息已记录。"}
+                  </div>
                   {canRetry ? (
                     <div style={{ marginTop: 10 }}>
                       <ApiButton endpoint={`/api/jobs/${job.id}`} label="重新执行" />

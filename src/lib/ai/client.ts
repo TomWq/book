@@ -9,6 +9,7 @@ export type AiJsonRequest = {
   messages: AiChatMessage[];
   temperature?: number;
   maxTokens?: number;
+  timeoutMs?: number;
   thinking?: boolean;
   reasoningEffort?: "low" | "medium" | "high";
 };
@@ -70,8 +71,13 @@ export function attachAiTokenUsage<T>(value: T, usage?: AiTokenUsage): WithAiTok
     return value as WithAiTokenUsage<T>;
   }
 
+  if (Object.prototype.hasOwnProperty.call(value, AI_TOKEN_USAGE)) {
+    delete (value as WithAiTokenUsage<T>)[AI_TOKEN_USAGE];
+  }
+
   Object.defineProperty(value, AI_TOKEN_USAGE, {
     value: usage,
+    configurable: true,
     enumerable: false
   });
 
@@ -121,21 +127,70 @@ function withTimeout(timeoutMs: number) {
   };
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message));
+}
+
 function extractJsonCandidate(content: string) {
   const trimmed = content.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim();
   const source = fenced || trimmed;
   const startObject = source.indexOf("{");
-  const endObject = source.lastIndexOf("}");
   const startArray = source.indexOf("[");
-  const endArray = source.lastIndexOf("]");
 
-  if (startObject >= 0 && endObject > startObject) {
-    return source.slice(startObject, endObject + 1);
+  function balancedJsonSlice(start: number, open: string, close: string) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < source.length; index += 1) {
+      const char = source[index];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+
+        if (char === "\"") {
+          inString = false;
+        }
+
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+
+      if (char === open) {
+        depth += 1;
+      }
+
+      if (char === close) {
+        depth -= 1;
+
+        if (depth === 0) {
+          return source.slice(start, index + 1);
+        }
+      }
+    }
+
+    return source.slice(start);
   }
 
-  if (startArray >= 0 && endArray > startArray) {
-    return source.slice(startArray, endArray + 1);
+  if (startObject >= 0 && (startArray < 0 || startObject < startArray)) {
+    return balancedJsonSlice(startObject, "{", "}");
+  }
+
+  if (startArray >= 0) {
+    return balancedJsonSlice(startArray, "[", "]");
   }
 
   return source;
@@ -224,11 +279,70 @@ function parseJsonContent<T>(content: string): T {
   }
 }
 
+async function requestJsonRepair<T>(
+  config: Awaited<ReturnType<typeof getAiProviderConfig>>,
+  originalContent: string,
+  maxTokens?: number
+) {
+  const timeout = withTimeout(config.timeoutMs);
+  const repairBody: Record<string, unknown> = {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是 JSON 修复器。请只输出一个合法 JSON 对象，不要解释，不要 Markdown，不要代码块。保留原内容里的字段和值；如果某个字段无法修复，用空字符串或空数组。"
+      },
+      {
+        role: "user",
+        content: originalContent.slice(0, 24000)
+      }
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0,
+    max_tokens: Math.max(maxTokens ?? 0, 1800)
+  };
+
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify(repairBody),
+      signal: timeout.signal
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`AI JSON 修复请求失败：${response.status} ${errorText}`);
+    }
+
+    const payload = await response.json();
+    const choice = payload?.choices?.[0];
+    const finishReason = choice?.finish_reason;
+    const content = choice?.message?.content;
+
+    if (finishReason && finishReason !== "stop") {
+      throw new Error(`AI JSON 修复未正常结束：${finishReason}`);
+    }
+
+    if (!content || typeof content !== "string") {
+      throw new Error("AI JSON 修复响应缺少 message.content");
+    }
+
+    return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+  } finally {
+    timeout.clear();
+  }
+}
+
 export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
   const config = await getAiProviderConfig();
   assertAiProviderConfigured(config);
 
-  const timeout = withTimeout(config.timeoutMs);
+  const timeout = withTimeout(Math.max(config.timeoutMs, request.timeoutMs ?? 0));
 
   try {
     const requestBody: Record<string, unknown> = {
@@ -266,6 +380,22 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
 
     if (finishReason && finishReason !== "stop") {
       if (finishReason === "length") {
+        if (content && typeof content === "string") {
+          try {
+            return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+          } catch {
+            const repaired = await requestJsonRepair<T>(
+              config,
+              content,
+              Math.max(request.maxTokens ?? 0, 2400)
+            );
+            return attachAiTokenUsage(
+              repaired,
+              combineAiTokenUsages([normalizeTokenUsage(payload?.usage), getAiTokenUsage(repaired)])
+            );
+          }
+        }
+
         throw new Error("AI 输出被长度限制截断，请减少输入内容或提高本次请求的输出长度上限");
       }
 
@@ -276,7 +406,27 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
       throw new Error("AI 响应缺少 message.content");
     }
 
-    return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+    try {
+      return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+
+      if (!/JSON|不是有效/i.test(message)) {
+        throw error;
+      }
+
+      const repaired = await requestJsonRepair<T>(config, content, request.maxTokens);
+      return attachAiTokenUsage(
+        repaired,
+        combineAiTokenUsages([normalizeTokenUsage(payload?.usage), getAiTokenUsage(repaired)])
+      );
+    }
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("AI 请求超时或被中止，请稍后重试；如果这是长篇规划，请适当提高 AI 超时时间。");
+    }
+
+    throw error;
   } finally {
     timeout.clear();
   }

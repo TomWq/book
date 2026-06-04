@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
+import { AiJobRunner } from "@/components/ai-job-runner";
 import { getProjectWritingState } from "@/lib/projects";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const styleOptions = ["快节奏强爽点", "悬疑推进", "轻松爽文", "热血升级", "压迫反转", "细腻情绪"];
 
@@ -11,6 +15,152 @@ function formatWanWords(value: number) {
   }
 
   return `${Math.round(value / 10000)} 万字`;
+}
+
+function normalizeChapterDash(value: string) {
+  return value.replace(/[—–－~～至]/g, "-");
+}
+
+function splitPacingIntoChapterStages(value: string, estimatedChapters: number) {
+  const normalized = normalizeChapterDash(value.trim());
+
+  if (!normalized) {
+    return [];
+  }
+
+  const expectedRanges = new Map<number, number>();
+
+  for (let start = 101; start <= estimatedChapters; start += 50) {
+    expectedRanges.set(start, Math.min(start + 49, estimatedChapters));
+  }
+
+  const pattern = /第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g;
+  const matches = Array.from(normalized.matchAll(pattern)).filter((match) => {
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+
+    return expectedRanges.get(start) === end;
+  });
+
+  if (matches.length === 0) {
+    return [{ title: "后续阶段", body: normalized }];
+  }
+
+  return matches.map((match, index) => {
+    const startIndex = match.index ?? 0;
+    const nextIndex = matches[index + 1]?.index ?? normalized.length;
+    const chunk = normalized.slice(startIndex, nextIndex).trim();
+    const title = `第${match[1]}-${match[2]}章`;
+    const body = chunk.replace(match[0], "").replace(/^[:：\s]+/, "").trim() || chunk;
+
+    return { title, body };
+  });
+}
+
+function splitPacingByActualRanges(value: string, fallbackTitle: string) {
+  const normalized = normalizeChapterDash(value.trim());
+
+  if (!normalized) {
+    return [];
+  }
+
+  const pattern = /第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g;
+  const matches = Array.from(normalized.matchAll(pattern));
+
+  if (matches.length === 0) {
+    return [{ title: fallbackTitle, body: normalized }];
+  }
+
+  return matches.map((match, index) => {
+    const startIndex = match.index ?? 0;
+    const nextIndex = matches[index + 1]?.index ?? normalized.length;
+    const chunk = normalized.slice(startIndex, nextIndex).trim();
+    const title = `第${match[1]}-${match[2]}章`;
+    const body = chunk.replace(match[0], "").replace(/^[:：\s]+/, "").trim() || chunk;
+
+    return { title, body };
+  });
+}
+
+function extractOpeningChapterNumber(value: string) {
+  const normalized = value.replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10));
+  const match = normalized.match(/第\s*(\d+)\s*章|^(\d+)\s*[.、:：]/);
+  const chapterNumber = Number(match?.[1] ?? match?.[2]);
+
+  return Number.isFinite(chapterNumber) ? chapterNumber : 0;
+}
+
+function missingOpeningBlueprintChapters(items: string[]) {
+  const chapterNumbers = new Set(
+    items.map(extractOpeningChapterNumber).filter((chapterNumber) => chapterNumber >= 1 && chapterNumber <= 10)
+  );
+
+  return Array.from({ length: 10 }, (_, index) => index + 1).filter(
+    (chapterNumber) => !chapterNumbers.has(chapterNumber)
+  );
+}
+
+function safeList(items?: string[]) {
+  return Array.isArray(items) ? items : [];
+}
+
+function objectRecord(value: unknown) {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function textList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+}
+
+function isAdviceAlreadyStored(advice: string, storedRules: string[]) {
+  const normalizedAdvice = advice.replace(/\s+/g, "");
+
+  return storedRules.some((rule) => {
+    const normalizedRule = rule.replace(/\s+/g, "");
+    return normalizedRule === normalizedAdvice || normalizedRule.includes(normalizedAdvice);
+  });
+}
+
+function displayReviewText(value: string) {
+  return value
+    .replace(/This operation was aborted/g, "AI 请求超时或被中止，请重新生成")
+    .replace(/AI 响应缺少 message\.content/g, "AI 审查接口返回空内容，请重新审查")
+    .replace(/AI JSON 修复响应缺少 message\.content/g, "AI 审查修复接口返回空内容，请重新审查")
+    .replace(/AI 输出被长度限制截断，请减少输入内容或提高本次请求的输出长度上限/g, "AI 审查输出被截断，请重新审查当前规划")
+    .replace(/\bdoNotRevealEarly\b/g, "禁止提前揭示")
+    .replace(/\bopenQuestions\b/g, "待确认点")
+    .replace(/\bconfirmedFacts\b/g, "已确定事实")
+    .replace(/\bdoNotChange\b/g, "禁止改写")
+    .replace(/\btagPromises\b/g, "标签承诺")
+    .replace(/\bfirst10Chapters\b/g, "开局任务蓝图")
+    .replace(/\bprogressionRules\b/g, "任务卡硬规则")
+    .replace(/\bpost100Pacing\b/g, "后续阶段节奏")
+    .replace(/\bfirst100Pacing\b/g, "前段阶段节奏");
+}
+
+function displayJobError(value: string) {
+  return displayReviewText(value)
+    .replace(/AI 请求超时或被中止，请稍后重试；如果这是长篇规划，请适当提高 AI 超时时间。/g, "AI 请求超时或被中止，请重新执行。")
+    .replace(/AI JSON 修复未正常结束：length/g, "AI 输出被截断，旧版长 JSON 修复失败；请重新生成，将使用分段结构。");
+}
+
+function isStaleLongFormJob(job?: { status: string; type: string; updatedAt?: string } | null) {
+  if (
+    !job ||
+    job.status !== "running" ||
+    (job.type !== "generate_long_form_plan" && job.type !== "review_long_form_plan")
+  ) {
+    return false;
+  }
+
+  const updatedAt = Date.parse(String(job.updatedAt ?? ""));
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > 90 * 1000;
+}
+
+function isActiveLongFormJob(job?: { status: string; type: string; updatedAt?: string } | null) {
+  return Boolean(job && (job.status === "pending" || (job.status === "running" && !isStaleLongFormJob(job))));
 }
 
 export default async function ProjectStatePage({
@@ -43,6 +193,78 @@ export default async function ProjectStatePage({
         : `继续创作第 ${maxChapterNumber + 1} 章`;
   const openForeshadowingCount = state.foreshadowings.filter((item) => item.status !== "closed").length;
   const latestLongFormPlan = state.longFormPlans[0] ?? null;
+  const hasOldLongFormPlans = state.longFormPlans.length > 1;
+  const confirmedFacts = safeList(latestLongFormPlan?.confirmedFacts);
+  const openQuestions = safeList(latestLongFormPlan?.openQuestions);
+  const doNotChange = safeList(latestLongFormPlan?.doNotChange);
+  const doNotRevealEarly = safeList(latestLongFormPlan?.doNotRevealEarly);
+  const tagPromises = safeList(latestLongFormPlan?.tagPromises);
+  const latestLongFormPlanJob =
+    state.longFormPlanJobs.find(isActiveLongFormJob) ??
+    state.longFormPlanJobs.find((job) => job.status === "pending" || isStaleLongFormJob(job)) ??
+    state.longFormPlanJobs[0] ??
+    null;
+  const latestGenerateLongFormPlanJob =
+    state.longFormPlanJobs.find((job) => job.type === "generate_long_form_plan") ?? null;
+  const latestReviewLongFormPlanJob =
+    state.longFormPlanJobs.find((job) => {
+      if (job.type !== "review_long_form_plan") {
+        return false;
+      }
+      if (!latestLongFormPlan) {
+        return true;
+      }
+      return String(objectRecord(job.input).longFormPlanId ?? "") === latestLongFormPlan.id;
+    }) ?? null;
+  const hasActiveLongFormPlanJob = isActiveLongFormJob(latestLongFormPlanJob);
+  const hasRunnableLongFormPlanJob =
+    latestLongFormPlanJob?.status === "pending" || isStaleLongFormJob(latestLongFormPlanJob);
+  const shouldRunLongFormPlanJob =
+    latestLongFormPlanJob?.status === "pending" ||
+    latestLongFormPlanJob?.status === "running" ||
+    isStaleLongFormJob(latestLongFormPlanJob);
+  const hasStaleLongFormPlanJob = isStaleLongFormJob(latestLongFormPlanJob);
+  const isReviewingLongFormPlan =
+    latestLongFormPlanJob?.type === "review_long_form_plan" &&
+    shouldRunLongFormPlanJob;
+  const isGeneratingLongFormPlan =
+    latestLongFormPlanJob?.type === "generate_long_form_plan" &&
+    (
+      latestLongFormPlanJob.status === "pending" ||
+      latestLongFormPlanJob.status === "running" ||
+      isStaleLongFormJob(latestLongFormPlanJob)
+    );
+  const latestFailedGenerateLongFormPlanJob =
+    latestGenerateLongFormPlanJob?.status === "failed" ? latestGenerateLongFormPlanJob : null;
+  const latestFailedReviewLongFormPlanJob =
+    latestReviewLongFormPlanJob?.status === "failed" ? latestReviewLongFormPlanJob : null;
+  const reviewOutput = objectRecord(latestReviewLongFormPlanJob?.output);
+  const reviewResult = objectRecord(reviewOutput.review);
+  const reviewIssues = textList(reviewResult.issues);
+  const unresolvedCommitmentIssues = textList(reviewResult.unresolvedCommitmentIssues);
+  const repairInstructions = textList(reviewResult.repairInstructions);
+  const storedReviewRules = [...confirmedFacts, ...doNotChange, ...doNotRevealEarly];
+  const unresolvedRepairInstructions = repairInstructions.filter(
+    (item) => !isAdviceAlreadyStored(item, storedReviewRules)
+  );
+  const reviewResolvedByRules = repairInstructions.length > 0 && unresolvedRepairInstructions.length === 0;
+  const hasReviewResult = latestReviewLongFormPlanJob?.status === "succeeded" && "passed" in reviewResult;
+  const reviewResolvedByUser =
+    reviewResult.resolvedByUser === true ||
+    reviewResult.status === "resolved" ||
+    reviewResolvedByRules;
+  const reviewIncomplete =
+    !reviewResolvedByUser &&
+    (
+      Boolean(latestFailedReviewLongFormPlanJob) ||
+      reviewResult.reviewError === true ||
+      reviewResult.status === "incomplete"
+    );
+  const reviewPassed = hasReviewResult && (reviewResult.passed === true || reviewResolvedByUser);
+  const reviewHasProblem =
+    !reviewIncomplete &&
+    hasReviewResult &&
+    !reviewPassed;
   const keySettingCount = [
     state.bible.corePleasure,
     state.bible.protagonistDesire,
@@ -52,6 +274,20 @@ export default async function ProjectStatePage({
     state.plotState.mainGoal,
     state.plotState.nextStageGoal
   ].filter((item) => item.trim()).length;
+  const post100Stages = latestLongFormPlan
+    ? splitPacingIntoChapterStages(latestLongFormPlan.post100Pacing, latestLongFormPlan.estimatedChapters)
+    : [];
+  const frontStageLabel = latestLongFormPlan
+    ? `第1-${Math.min(100, latestLongFormPlan.estimatedChapters)}章阶段`
+    : "前段阶段";
+  const frontStages = latestLongFormPlan
+    ? splitPacingByActualRanges(latestLongFormPlan.first100Pacing, frontStageLabel)
+    : [];
+  const allLongFormStages = [...frontStages, ...post100Stages];
+  const needsPost100Stages = Boolean(latestLongFormPlan && latestLongFormPlan.estimatedChapters > 100);
+  const missingOpeningChapters = latestLongFormPlan
+    ? missingOpeningBlueprintChapters(latestLongFormPlan.first10Chapters)
+    : [];
 
   return (
     <div className="grid state-page">
@@ -101,6 +337,10 @@ export default async function ProjectStatePage({
 
       <section className="state-command-strip" aria-label="页面维护重点">
         <div className="state-guide">
+          <div className={latestLongFormPlan ? "state-guide-primary done" : "state-guide-primary"}>
+            <strong>0. 先做总纲</strong>
+            <span>开写前建议先生成长篇规划，系统会按目标字数估算章节数，再自动分段安排全书节奏。</span>
+          </div>
           <div>
             <strong>1. 定规则</strong>
             <span>创作圣经保存稳定设定：爽点、金手指、世界规则、禁区。</span>
@@ -126,16 +366,31 @@ export default async function ProjectStatePage({
         <summary>
           <span>
             <strong>长篇规划 / 总纲节奏</strong>
-            <small>全书卷纲、成长上限、收益频率、前100章和100章后收束。</small>
+            <small>按目标字数估算章节数，规划全书卷纲、成长上限、收益频率和阶段节奏。</small>
           </span>
           <span className="state-section-tag">
             {latestLongFormPlan
               ? `${formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 ${latestLongFormPlan.estimatedChapters} 章`
+              : hasActiveLongFormPlanJob
+                ? "正在生成"
               : "未生成"}
           </span>
         </summary>
-        <div className="list">
-          {latestLongFormPlan ? (
+        <div className="list long-form-plan-body">
+          {latestLongFormPlan && isGeneratingLongFormPlan ? (
+            <div className="empty-state long-form-regenerating">
+              <strong>正在生成新版长篇规划</strong>
+              <span>旧规划已暂存，不再作为当前展示内容。新版生成完成后会自动替换这些阶段卡片和事实一致性审查。</span>
+              {latestLongFormPlanJob ? (
+                <AiJobRunner
+                  jobId={latestLongFormPlanJob.id}
+                  title="正在重新生成长篇规划 / 总纲节奏"
+                  runningMessage="正在读取作品简介、体量、创作圣经和主线状态，生成新版全书阶段节奏。"
+                  doneMessage="长篇规划已重新生成，正在刷新结果。"
+                />
+              ) : null}
+            </div>
+          ) : latestLongFormPlan ? (
             <>
               <div className="list-item">
                 <div className="row">
@@ -146,7 +401,92 @@ export default async function ProjectStatePage({
                 </div>
                 <div className="muted">{latestLongFormPlan.corePromise || latestLongFormPlan.planningBasis}</div>
               </div>
-              <div className="writing-context-grid">
+              <div className={reviewHasProblem || reviewIncomplete ? "quote-box warning-box compact-note long-form-review-note" : "quote-box compact-note long-form-review-note"}>
+                <div className="long-form-review-head">
+                  <strong>事实一致性审查</strong>
+                  <span className={reviewPassed ? "pill success" : reviewHasProblem ? "pill danger" : reviewIncomplete ? "pill warning" : "pill"}>
+                    {isReviewingLongFormPlan
+                      ? "审查中"
+                      : reviewPassed
+                        ? reviewResolvedByUser ? "已处理" : "已通过"
+                        : reviewIncomplete
+                          ? "审查未完成"
+                        : reviewHasProblem
+                          ? "需处理"
+                          : "待审查"}
+                  </span>
+                </div>
+                {isReviewingLongFormPlan ? (
+                  <div className="muted">规划已保存，正在单独检查是否改写简介、创作圣经、人物状态或待确认点。</div>
+                ) : reviewPassed ? (
+                  <div className="muted">
+                    {reviewResolvedByUser
+                      ? "已采纳审查建议并写入硬规则。后续任务卡和正文会继续读取项目事实锁、待确认点和硬规则。"
+                      : "审查已通过。后续任务卡和正文会继续读取项目事实锁、待确认点和硬规则。"}
+                  </div>
+                ) : latestFailedReviewLongFormPlanJob ? (
+                  <div className="muted">规划已生成，但上次 AI 审查没有拿到完整结果：{displayReviewText(latestFailedReviewLongFormPlanJob.error || "AI 返回内容异常，请重新审查。")}</div>
+                ) : reviewIncomplete ? (
+                  <div className="long-form-review-body">
+                    {reviewIssues.slice(0, 3).map((item) => (
+                      <div key={item}>- {displayReviewText(item)}</div>
+                    ))}
+                    <div className="muted">这是 AI 审查执行异常，不是让你缩短小说简介，也不代表规划内容不通过。请重新审查当前规划。</div>
+                  </div>
+                ) : hasReviewResult && !reviewPassed ? (
+                  <div className="long-form-review-body">
+                    {[...reviewIssues, ...unresolvedCommitmentIssues].slice(0, 4).map((item) => (
+                      <div key={item}>- {displayReviewText(item)}</div>
+                    ))}
+                    {unresolvedRepairInstructions.length > 0 ? (
+                      <div className="muted">建议：{unresolvedRepairInstructions.slice(0, 2).map(displayReviewText).join("；")}</div>
+                    ) : null}
+                    <div className="muted">
+                      你不需要手工改正文。可以先采纳为规则，防止后续任务卡继续写死；如果想修正当前总纲里的阶段文字，再重新生成长篇规划。
+                    </div>
+                    {unresolvedRepairInstructions.length > 0 ? (
+                      <ApiForm
+                        className="long-form-review-form"
+                        endpoint={`/api/projects/${projectId}/state`}
+                        body={{
+                          action: "resolve_long_form_open_question",
+                          question: unresolvedRepairInstructions[0],
+                          resolution: unresolvedRepairInstructions.join("；"),
+                          mode: "mark_no_early_reveal",
+                          source: "review_advice"
+                        }}
+                        pendingTitle="正在写入禁止提前揭示"
+                        pendingDescription="正在把审查建议同步到长篇规划事实锁。"
+                        successMessage="已写入禁止提前揭示"
+                      >
+                        <button className="button tiny primary" type="submit">
+                          {unresolvedRepairInstructions.length > 1 ? "采纳剩余建议" : "采纳为禁止提前揭示"}
+                        </button>
+                      </ApiForm>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="muted">建议先跑一次审查，专门检查规划是否和作品简介、创作圣经、主线状态冲突。</div>
+                )}
+                {!hasActiveLongFormPlanJob ? (
+                  <ApiForm
+                    className="long-form-review-form"
+                    endpoint={`/api/projects/${projectId}/state`}
+                    body={{
+                      action: "review_long_form_plan",
+                      longFormPlanId: latestLongFormPlan.id
+                    }}
+                    pendingTitle="正在创建长篇规划审查任务"
+                    pendingDescription="正在排队执行第二步事实一致性审查。"
+                    successMessage="审查任务已创建"
+                  >
+                    <button className="button tiny ghost" type="submit">
+                      {hasReviewResult || latestFailedReviewLongFormPlanJob ? "重新审查当前规划" : "审查当前规划"}
+                    </button>
+                  </ApiForm>
+                ) : null}
+              </div>
+              <div className="plan-summary-grid">
                 <div className="task-block compact-context-card">
                   <div className="task-title">卷 / 阶段规划</div>
                   <div className="muted clamped-text three-lines">
@@ -165,47 +505,160 @@ export default async function ProjectStatePage({
                     {latestLongFormPlan.rewardPacing.slice(0, 3).join("；") || "暂无收益频率"}
                   </div>
                 </div>
-                <div className="task-block compact-context-card">
-                  <div className="task-title">前100章节奏</div>
-                  <div className="muted clamped-text three-lines">
-                    {latestLongFormPlan.first100Pacing || "暂无前100章节奏"}
+              </div>
+              <div className="plan-stage-grid">
+                {allLongFormStages.length > 0 ? (
+                  allLongFormStages.map((stage) => (
+                    <div key={stage.title} className="task-block compact-context-card">
+                      <div className="task-title">{stage.title}</div>
+                      <div className="muted clamped-text three-lines">{stage.body}</div>
+                    </div>
+                  ))
+                ) : needsPost100Stages ? (
+                  <div className="task-block compact-context-card">
+                    <div className="task-title">后续阶段</div>
+                    <div className="muted clamped-text three-lines">暂无第101章后规划</div>
                   </div>
-                </div>
-                <div className="task-block compact-context-card">
-                  <div className="task-title">100章后收束</div>
-                  <div className="muted clamped-text three-lines">
-                    {latestLongFormPlan.post100Pacing || "暂无100章后规划"}
-                  </div>
-                </div>
+                ) : null}
               </div>
               <details className="writing-context-details">
                 <summary>查看规划硬约束</summary>
                 <div className="writing-context-full">
-                  <div className="task-block">
-                    <div className="task-title">前10章功能</div>
-                    <div className="meta-row">
-                      {latestLongFormPlan.first10Chapters.length > 0 ? (
-                        latestLongFormPlan.first10Chapters.map((item) => (
-                          <span key={item} className="chip">
-                            {item}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="chip">暂无前10章规划</span>
-                      )}
+                  <div className="task-block full-width-context plan-rule-panel">
+                    <div className="task-title">项目事实锁</div>
+                    <div className="muted plan-rule-hint">后续任务卡、正文和审稿都会读取；项目事实源没定死或互相有张力的地方只能保留为待确认，不能由 AI 擅自写死。</div>
+                    <div className="fact-lock-metrics">
+                      <span>已确定 {confirmedFacts.length}</span>
+                      <span>待确认 {openQuestions.length}</span>
+                      <span>禁止改写 {doNotChange.length}</span>
+                      <span>揭示限制 / 标签 {doNotRevealEarly.length + tagPromises.length}</span>
+                    </div>
+                    <div className="fact-lock-grid">
+                      <div>
+                        <strong>已确定事实</strong>
+                        <ul className="plan-rule-list compact no-counter">
+                          {confirmedFacts.length > 0 ? (
+                            confirmedFacts.map((item) => <li key={item}>{item}</li>)
+                          ) : (
+                            <li>暂无明确事实锁</li>
+                          )}
+                        </ul>
+                      </div>
+                      <div>
+                        <strong>待确认点</strong>
+                        <div className="open-question-actions">
+                          {openQuestions.length > 0 ? (
+                            openQuestions.map((item) => (
+                              <details key={item} className="open-question-item">
+                                <summary>
+                                  <span>{item}</span>
+                                  <em>处理</em>
+                                </summary>
+                                <div className="open-question-editor">
+                                  <ApiForm
+                                    className="open-question-form"
+                                    endpoint={`/api/projects/${projectId}/state`}
+                                    body={{
+                                      action: "resolve_long_form_open_question",
+                                      question: item
+                                    }}
+                                    pendingTitle="正在处理待确认点"
+                                    pendingDescription="正在同步长篇规划和创作圣经。"
+                                    successMessage="待确认点已处理"
+                                  >
+                                    <input
+                                      name="resolution"
+                                      placeholder="填写作者决定；留空则使用原待确认点"
+                                    />
+                                    <div className="open-question-buttons">
+                                      <button className="button tiny primary" type="submit" name="mode" value="confirm_fact">
+                                        确认为事实
+                                      </button>
+                                      <button className="button tiny" type="submit" name="mode" value="mark_forbidden">
+                                        加入禁止改写
+                                      </button>
+                                      <button className="button tiny ghost" type="submit" name="mode" value="dismiss">
+                                        暂不处理
+                                      </button>
+                                    </div>
+                                  </ApiForm>
+                                </div>
+                              </details>
+                            ))
+                          ) : (
+                            <div className="muted empty-inline">暂无待确认点</div>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <strong>禁止改写</strong>
+                        <ul className="plan-rule-list compact no-counter">
+                          {doNotChange.length > 0 ? (
+                            doNotChange.map((item) => <li key={item}>{item}</li>)
+                          ) : (
+                            <li>暂无禁止改写项</li>
+                          )}
+                        </ul>
+                      </div>
+                      <div>
+                        <strong>禁止提前揭示 / 标签承诺</strong>
+                        <ul className="plan-rule-list compact no-counter">
+                          {[...doNotRevealEarly, ...tagPromises].length > 0 ? (
+                            [...doNotRevealEarly, ...tagPromises].map((item) => (
+                              <li key={item}>{item}</li>
+                            ))
+                          ) : (
+                            <li>暂无前期揭示限制或标签承诺</li>
+                          )}
+                        </ul>
+                      </div>
                     </div>
                   </div>
-                  <div className="task-block">
-                    <div className="task-title">任务卡硬规则</div>
-                    <div className="meta-row">
-                      {latestLongFormPlan.progressionRules.length > 0 ? (
-                        latestLongFormPlan.progressionRules.map((item) => (
-                          <span key={item} className="chip">
-                            {item}
-                          </span>
+                  <div className="task-block plan-rule-panel">
+                    <div className="task-title">开局任务蓝图</div>
+                    <div className="muted plan-rule-hint">生成第1-10章任务卡时，用来约束每章必须完成的剧情功能。</div>
+                    {missingOpeningChapters.length > 0 ? (
+                      <div className="quote-box warning-box compact-note plan-warning-note">
+                        这份前10章蓝图不完整，缺少第{missingOpeningChapters.join("、")}章。建议重新生成长篇规划。
+                      </div>
+                    ) : null}
+                    <ul className="plan-rule-list compact no-counter">
+                      {latestLongFormPlan.first10Chapters.length > 0 ? (
+                        latestLongFormPlan.first10Chapters.map((item) => (
+                          <li key={item}>{item}</li>
                         ))
                       ) : (
-                        <span className="chip">暂无硬规则</span>
+                        <li>暂无前10章规划</li>
+                      )}
+                    </ul>
+                  </div>
+                  <div className="task-block plan-rule-panel">
+                    <div className="task-title">任务卡硬规则</div>
+                    <div className="muted plan-rule-hint">所有章节任务卡都会读取，用来限制升级、收益、地图和伏笔推进。</div>
+                    <ol className="plan-rule-list">
+                      {latestLongFormPlan.progressionRules.length > 0 ? (
+                        latestLongFormPlan.progressionRules.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))
+                      ) : (
+                        <li>暂无硬规则</li>
+                      )}
+                    </ol>
+                  </div>
+                  <div className="task-block full-width-context">
+                    <div className="task-title">全书阶段节奏</div>
+                    <div className="long-form-stage-list">
+                      {allLongFormStages.length > 0 ? (
+                        allLongFormStages.map((stage) => (
+                          <div key={stage.title} className="long-form-stage-item">
+                            <strong>{stage.title}</strong>
+                            <p>{stage.body}</p>
+                          </div>
+                        ))
+                      ) : needsPost100Stages ? (
+                        <div className="muted long-form-plan-text">暂无第101章至终章规划</div>
+                      ) : (
+                        <div className="muted long-form-plan-text">预计不超过100章时，前段阶段已覆盖全书节奏和结尾收束。</div>
                       )}
                     </div>
                   </div>
@@ -214,33 +667,114 @@ export default async function ProjectStatePage({
             </>
           ) : (
             <div className="empty-state">
-              <strong>还没有长篇规划</strong>
-              <span>建议开写前先生成一次。它会作为任务卡的远期边界，但不会替代每章台账和主线状态。</span>
+              <strong>{hasActiveLongFormPlanJob ? "长篇规划正在生成" : "还没有长篇规划"}</strong>
+              <span>
+                {hasActiveLongFormPlanJob
+                  ? "创建作品后已自动排队生成总纲。页面会自动执行并刷新结果；如果生成失败，可以在这里重新生成。"
+                  : "建议正式生成任务卡和正文前先做这一步。它相当于开书总控台，会按目标字数估算章节数，再定全书阶段、成长上限和收益频率。"}
+              </span>
+              {shouldRunLongFormPlanJob && latestLongFormPlanJob ? (
+                <AiJobRunner
+                  jobId={latestLongFormPlanJob.id}
+                  title={isReviewingLongFormPlan ? "正在审查长篇规划 / 总纲节奏" : "正在生成长篇规划 / 总纲节奏"}
+                  runningMessage={
+                    isReviewingLongFormPlan
+                      ? "规划草稿已生成，正在单独审查事实一致性和待确认项。"
+                      : "正在读取作品简介、体量、创作圣经和主线状态，生成全书阶段节奏。"
+                  }
+                  doneMessage={isReviewingLongFormPlan ? "长篇规划审查已完成，正在刷新结果。" : "长篇规划已生成，正在刷新结果。"}
+                />
+              ) : null}
             </div>
           )}
 
+          {latestLongFormPlan && shouldRunLongFormPlanJob && latestLongFormPlanJob && !isGeneratingLongFormPlan ? (
+            <AiJobRunner
+              jobId={latestLongFormPlanJob.id}
+              title={isReviewingLongFormPlan ? "正在审查长篇规划 / 总纲节奏" : "正在重新生成长篇规划 / 总纲节奏"}
+              runningMessage={
+                isReviewingLongFormPlan
+                  ? "新规划已保存，正在单独审查事实一致性和待确认项。"
+                  : "正在生成新的长篇规划草稿。"
+              }
+              doneMessage={isReviewingLongFormPlan ? "长篇规划审查已完成，正在刷新结果。" : "长篇规划已重新生成，正在刷新结果。"}
+            />
+          ) : null}
+          {hasStaleLongFormPlanJob ? (
+            <div className="quote-box warning-box compact-note long-form-stale-note">
+              <strong>这个长篇规划任务已经超过 90 秒没有更新。</strong>
+              <span>如果页面一直停在进行中，可以先解除卡住状态，再由页面或任务中心重新接管执行。</span>
+              <ApiForm
+                className="long-form-review-form"
+                endpoint={`/api/projects/${projectId}/state`}
+                body={{ action: "release_stale_long_form_plan_jobs" }}
+                pendingTitle="正在解除卡住任务"
+                pendingDescription="正在把超时未更新的长篇规划任务恢复为待处理。"
+                successMessage="已解除卡住任务，请稍后刷新或等待自动接管"
+              >
+                <button className="button tiny" type="submit">
+                  解除卡住并重新接管
+                </button>
+              </ApiForm>
+            </div>
+          ) : null}
+          {latestFailedGenerateLongFormPlanJob ? (
+            <div className="quote-box warning-box compact-note">
+              长篇规划生成失败：{displayJobError(latestFailedGenerateLongFormPlanJob.error || "AI 返回内容异常，请重新生成。")}
+            </div>
+          ) : null}
+          {hasOldLongFormPlans ? (
+            <div className="quote-box compact-note long-form-stale-note">
+              <strong>检测到旧版长篇规划</strong>
+              <span>旧版规划和旧审查记录可能会误导判断。可以只保留当前最新版本，后续任务卡也只读取最新规划。</span>
+              <ApiForm
+                className="long-form-review-form"
+                endpoint={`/api/projects/${projectId}/state`}
+                body={{ action: "prune_old_long_form_plans" }}
+                pendingTitle="正在清理旧版规划"
+                pendingDescription="正在只保留当前最新长篇规划和对应审查记录。"
+                successMessage="旧版长篇规划已清理"
+              >
+                <button className="button tiny" type="submit">
+                  只保留当前规划
+                </button>
+              </ApiForm>
+            </div>
+          ) : null}
+
           <ApiForm
-            className="forms writing-form"
+            className="forms writing-form long-form-plan-form"
             endpoint={`/api/projects/${projectId}/writing`}
-            body={{ action: "generate_long_form_plan" }}
+            body={{ action: "generate_long_form_plan", defer: true }}
             resetOnSuccess
-            pendingTitle="正在生成长篇规划"
-            pendingDescription="正在规划总篇幅、卷结构、成长上限、收益频率、前100章和后期收束。"
+            pendingTitle="正在创建长篇规划任务"
+            pendingDescription="正在排队生成长篇规划，稍后会自动执行并刷新结果。"
+            successMessage="长篇规划任务已创建"
           >
+            {!latestLongFormPlan ? (
+              <div className="quote-box compact-note long-form-priority-note">
+                建议先完成这一步再去创作页生成任务卡；否则任务卡只能保守推进，无法按预计篇幅约束成长、地图、收益和伏笔回收。
+              </div>
+            ) : null}
             <div className="writing-form-grid">
               <div className="field">
                 <div className="field-label">目标总字数</div>
                 <input
                   name="targetTotalWords"
                   inputMode="numeric"
+                  disabled={hasActiveLongFormPlanJob}
                   placeholder={latestLongFormPlan ? String(latestLongFormPlan.targetTotalWords) : "例如：300000"}
                 />
                 <div className="field-hint">可留空，系统会从创作圣经/作品体量里推断；30 万字就填 300000。</div>
               </div>
             </div>
-            <div className="hero-actions writing-submit-row">
-              <button className="button primary" type="submit">
-                {latestLongFormPlan ? "重新生成长篇规划" : "生成长篇规划"}
+            <div className="state-form-actions">
+              <button className="button primary" type="submit" disabled={hasActiveLongFormPlanJob}>
+                {hasActiveLongFormPlanJob
+                  ? "正在生成中"
+                  : latestLongFormPlan
+                    ? "重新生成长篇规划"
+                    : "生成长篇规划"}
               </button>
             </div>
           </ApiForm>
@@ -284,9 +818,11 @@ export default async function ProjectStatePage({
               placeholder="一句话说明这本新书要写什么，不是原书复述。"
             />
           </div>
-          <button className="button primary" type="submit">
-            保存作品信息
-          </button>
+          <div className="state-form-actions">
+            <button className="button primary" type="submit">
+              保存作品信息
+            </button>
+          </div>
         </ApiForm>
       </details>
 
@@ -357,9 +893,11 @@ export default async function ProjectStatePage({
             <div className="field-label">不能违反的设定</div>
             <textarea name="immutableSettings" defaultValue={state.bible.immutableSettings} />
           </div>
-          <button className="button" type="submit">
-            保存创作圣经
-          </button>
+          <div className="state-form-actions">
+            <button className="button primary" type="submit">
+              保存创作圣经
+            </button>
+          </div>
         </ApiForm>
       </details>
 
@@ -476,9 +1014,11 @@ export default async function ProjectStatePage({
               <textarea name="relationshipChanges" defaultValue={state.plotState.relationshipChanges.join("\n")} />
             </div>
           </div>
-          <button className="button" type="submit">
-            保存主线状态
-          </button>
+          <div className="state-form-actions">
+            <button className="button primary" type="submit">
+              保存主线状态
+            </button>
+          </div>
         </ApiForm>
       </details>
 
@@ -547,9 +1087,11 @@ export default async function ProjectStatePage({
             <input name="lastAppearance" placeholder="第几章出场" />
             <input name="currentState" placeholder="当前状态" />
           </div>
-          <button className="button" type="submit">
-            添加人物
-          </button>
+          <div className="state-form-actions">
+            <button className="button primary" type="submit">
+              添加人物
+            </button>
+          </div>
         </ApiForm>
         </details>
 
@@ -640,7 +1182,7 @@ export default async function ProjectStatePage({
                         <input name="currentState" defaultValue={character.currentState} />
                       </div>
                     </div>
-                    <div className="hero-actions">
+                    <div className="state-form-actions">
                       <button className="button primary" type="submit">
                         保存人物
                       </button>
@@ -712,9 +1254,11 @@ export default async function ProjectStatePage({
             <div className="field-label">不能提前透露的信息</div>
             <textarea name="hiddenInformation" />
           </div>
-          <button className="button" type="submit">
-            添加伏笔
-          </button>
+          <div className="state-form-actions">
+            <button className="button primary" type="submit">
+              添加伏笔
+            </button>
+          </div>
         </ApiForm>
         </details>
 

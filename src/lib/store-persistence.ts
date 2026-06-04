@@ -328,6 +328,11 @@ function ensureSqliteSchema() {
       "volumePlan" JSON,
       "progressionPacing" JSON,
       "rewardPacing" JSON,
+      "confirmedFacts" JSON,
+      "openQuestions" JSON,
+      "doNotChange" JSON,
+      "doNotRevealEarly" JSON,
+      "tagPromises" JSON,
       "first10Chapters" JSON,
       "first100Pacing" TEXT NOT NULL,
       "post100Pacing" TEXT NOT NULL DEFAULT '',
@@ -636,6 +641,11 @@ function ensureSqliteSchema() {
     'ALTER TABLE "PlotState" ADD COLUMN "resourceState" TEXT NOT NULL DEFAULT \'\'',
     'ALTER TABLE "PlotState" ADD COLUMN "relationshipChanges" JSON',
     'ALTER TABLE "LongFormPlan" ADD COLUMN "post100Pacing" TEXT NOT NULL DEFAULT \'\'',
+    'ALTER TABLE "LongFormPlan" ADD COLUMN "confirmedFacts" JSON',
+    'ALTER TABLE "LongFormPlan" ADD COLUMN "openQuestions" JSON',
+    'ALTER TABLE "LongFormPlan" ADD COLUMN "doNotChange" JSON',
+    'ALTER TABLE "LongFormPlan" ADD COLUMN "doNotRevealEarly" JSON',
+    'ALTER TABLE "LongFormPlan" ADD COLUMN "tagPromises" JSON',
     'ALTER TABLE "ChapterAnalysis" ADD COLUMN "entityRelations" JSON',
     'ALTER TABLE "EditReport" ADD COLUMN "draftId" TEXT',
     'ALTER TABLE "ChapterLedger" ADD COLUMN "closureStatus" TEXT NOT NULL DEFAULT \'pending\'',
@@ -1218,9 +1228,9 @@ function syncCoreTables(store: unknown) {
 
     const insertLongFormPlan = db.prepare(`
       INSERT INTO "LongFormPlan" (
-        "id", "projectId", "targetTotalWords", "estimatedChapters", "planningBasis", "corePromise", "volumePlan", "progressionPacing", "rewardPacing", "first10Chapters", "first100Pacing", "post100Pacing", "progressionRules", "createdAt", "updatedAt"
+        "id", "projectId", "targetTotalWords", "estimatedChapters", "planningBasis", "corePromise", "volumePlan", "progressionPacing", "rewardPacing", "confirmedFacts", "openQuestions", "doNotChange", "doNotRevealEarly", "tagPromises", "first10Chapters", "first100Pacing", "post100Pacing", "progressionRules", "createdAt", "updatedAt"
       ) VALUES (
-        @id, @projectId, @targetTotalWords, @estimatedChapters, @planningBasis, @corePromise, @volumePlan, @progressionPacing, @rewardPacing, @first10Chapters, @first100Pacing, @post100Pacing, @progressionRules, @createdAt, @updatedAt
+        @id, @projectId, @targetTotalWords, @estimatedChapters, @planningBasis, @corePromise, @volumePlan, @progressionPacing, @rewardPacing, @confirmedFacts, @openQuestions, @doNotChange, @doNotRevealEarly, @tagPromises, @first10Chapters, @first100Pacing, @post100Pacing, @progressionRules, @createdAt, @updatedAt
       )
     `);
 
@@ -1235,6 +1245,11 @@ function syncCoreTables(store: unknown) {
         volumePlan: jsonText(item.volumePlan),
         progressionPacing: jsonText(item.progressionPacing),
         rewardPacing: jsonText(item.rewardPacing),
+        confirmedFacts: jsonText(item.confirmedFacts),
+        openQuestions: jsonText(item.openQuestions),
+        doNotChange: jsonText(item.doNotChange),
+        doNotRevealEarly: jsonText(item.doNotRevealEarly),
+        tagPromises: jsonText(item.tagPromises),
         first10Chapters: jsonText(item.first10Chapters),
         first100Pacing: text(item.first100Pacing),
         post100Pacing: text(item.post100Pacing),
@@ -2032,6 +2047,11 @@ function readCoreStoreFromDb<T>(fallback: T) {
         volumePlan: parseJsonArray(item.volumePlan),
         progressionPacing: parseJsonArray(item.progressionPacing),
         rewardPacing: parseJsonArray(item.rewardPacing),
+        confirmedFacts: parseJsonArray(item.confirmedFacts),
+        openQuestions: parseJsonArray(item.openQuestions),
+        doNotChange: parseJsonArray(item.doNotChange),
+        doNotRevealEarly: parseJsonArray(item.doNotRevealEarly),
+        tagPromises: parseJsonArray(item.tagPromises),
         first10Chapters: parseJsonArray(item.first10Chapters),
         first100Pacing: text(item.first100Pacing),
         post100Pacing: text(item.post100Pacing),

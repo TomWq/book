@@ -11,6 +11,7 @@ import {
   enqueueRegenerateChapterDraftContentJob,
   enqueueReviewChapterJob,
   enqueueWritingTaskCardJob,
+  enqueueLongFormPlanJob,
   generateChapterDraft,
   generateLongFormPlan,
   generateWritingTaskCard,
@@ -75,6 +76,13 @@ export async function POST(
     }
 
     if (action === "generate_long_form_plan") {
+      if (body.defer === true) {
+        const job = await enqueueLongFormPlanJob(projectId, {
+          targetTotalWords: Number(body.targetTotalWords ?? 0) || undefined
+        });
+        return Response.json({ job }, { status: 202 });
+      }
+
       const plan = await generateLongFormPlan(projectId, {
         targetTotalWords: Number(body.targetTotalWords ?? 0) || undefined
       });

@@ -152,6 +152,34 @@ function asTextList(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
+function cleanPromptText(value: string, limit = 260) {
+  return value.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function buildProjectFactGuardRules(context: LongFormPlanContext) {
+  const projectDescription = context.projectDescription;
+  const description = cleanPromptText(projectDescription ?? "", 900);
+
+  if (!description) {
+    return [
+      "项目简介为空时，必须以创作圣经、主线状态、人物档案和伏笔表作为事实源；confirmedFacts 只能写这些事实源已明确的信息。",
+      "如果所有项目事实源都没有明确某个核心方向，openQuestions 必须列出需要作者确认的方向；不要擅自补出不可逆核心关系、最终归属、亲缘身份、重大真相或终局走向。"
+    ];
+  }
+
+  return [
+    `项目简介是重要事实源：${description}`,
+    "项目事实源包括：项目简介、创作圣经、主线状态、人物档案、伏笔表和拆书参考中已迁移到本项目的设定。规划不得只看简介，也不得忽略用户已在状态页维护的设定。",
+    "必须先输出结构化“项目事实锁”：confirmedFacts 写所有项目事实源已明确且彼此不冲突的事实；openQuestions 写事实源没有定死或互相有张力的待确认点；doNotChange 写不得改写的事实；doNotRevealEarly 写前期不得提前揭开的核心信息；tagPromises 写题材标签和卖点承诺。",
+    "规划不得改写项目事实源里的已发生事实、人物关系、身份状态、核心事件、能力/金手指来源、主线目标、人物当前状态、伏笔限制和读者承诺。",
+    "项目事实源中已经明确且不冲突的事实必须原样承接；存在歧义、张力、缺口或跨字段冲突的地方，必须标成“待确认/需作者确认”，不能擅自裁决。",
+    "凡是写入 openQuestions 或 doNotRevealEarly 的事项，后续 volumePlan、first10Chapters、first100Pacing、post100Pacing 和 progressionRules 中不得再用确定语气写成已发生/必然发生；如必须提及，只能写“可能/待确认/保留伏笔/视作者选择”。",
+    "不要把项目事实源里的核心事件擅自改写成另一种真相；除非事实源明确说明，否则不能把未写出的反转当成既定事实。",
+    "不要擅自决定最终情感归属、亲缘/血脉身份、幕后真相、政权/阵营终局等不可逆设定；除非项目事实源已明确，否则只能作为可选方向或待确认伏笔。",
+    "前10章只能验证核心机制、建立压力和释放小回报；不能提前揭开核心冤案、终极身份、终极资源用途、最终反派底牌或主线最大反转。"
+  ];
+}
+
 function asReviewIssues(value: unknown): ReviewIssue[] {
   if (!Array.isArray(value)) {
     return [];
@@ -396,6 +424,12 @@ function buildLongFormPlanSummary(plan?: StoredLongFormPlan | null) {
     return null;
   }
 
+  const confirmedFacts = asTextList(plan.confirmedFacts);
+  const openQuestions = asTextList(plan.openQuestions);
+  const doNotChange = asTextList(plan.doNotChange);
+  const doNotRevealEarly = asTextList(plan.doNotRevealEarly);
+  const tagPromises = asTextList(plan.tagPromises);
+
   return {
     targetTotalWords: plan.targetTotalWords,
     estimatedChapters: plan.estimatedChapters,
@@ -404,11 +438,57 @@ function buildLongFormPlanSummary(plan?: StoredLongFormPlan | null) {
     volumePlan: plan.volumePlan,
     progressionPacing: plan.progressionPacing,
     rewardPacing: plan.rewardPacing,
+    confirmedFacts,
+    openQuestions,
+    doNotChange,
+    doNotRevealEarly,
+    tagPromises,
     first10Chapters: plan.first10Chapters,
     first100Pacing: plan.first100Pacing,
     post100Pacing: plan.post100Pacing,
     progressionRules: plan.progressionRules
   };
+}
+
+function normalizeLongFormChapterRanges(value: string) {
+  return value.replace(/[—–－~～至]/g, "-");
+}
+
+function extractLongFormStageText(plan: StoredLongFormPlan, chapterNumber?: number) {
+  if (!chapterNumber || chapterNumber <= 0) {
+    return "";
+  }
+
+  const frontStageEnd = Math.min(100, plan.estimatedChapters);
+
+  if (chapterNumber <= frontStageEnd) {
+    return plan.first100Pacing ? `当前章节属于第1-${frontStageEnd}章规划阶段：${plan.first100Pacing}` : "";
+  }
+
+  if (!plan.post100Pacing) {
+    return plan.first100Pacing
+      ? `当前章节已超过原估算约${plan.estimatedChapters}章；仍需承接全书阶段规划：${plan.first100Pacing}`
+      : "";
+  }
+
+  const stageStart = 101 + Math.floor((chapterNumber - 101) / 50) * 50;
+  const stageEnd = Math.min(stageStart + 49, plan.estimatedChapters);
+  const normalized = normalizeLongFormChapterRanges(plan.post100Pacing);
+  const pattern = new RegExp(`第\\s*${stageStart}\\s*-\\s*(?:第\\s*)?${stageEnd}\\s*章`);
+  const match = pattern.exec(normalized);
+
+  if (!match) {
+    return `当前章节属于第${stageStart}-${stageEnd}章阶段；后续阶段规划参考：${plan.post100Pacing}`;
+  }
+
+  const nextStageStart = stageStart + 50;
+  const nextStageEnd = Math.min(nextStageStart + 49, plan.estimatedChapters);
+  const nextPattern = new RegExp(`第\\s*${nextStageStart}\\s*-\\s*(?:第\\s*)?${nextStageEnd}\\s*章`);
+  const rest = normalized.slice((match.index ?? 0) + match[0].length);
+  const nextMatch = nextPattern.exec(rest);
+  const stageBody = rest.slice(0, nextMatch?.index ?? rest.length).replace(/^[:：\s]+/, "").trim();
+
+  return `当前章节属于第${stageStart}-${stageEnd}章阶段：${stageBody || plan.post100Pacing}`;
 }
 
 function buildLongFormPlanRules(plan?: StoredLongFormPlan | null, chapterNumber?: number) {
@@ -422,27 +502,42 @@ function buildLongFormPlanRules(plan?: StoredLongFormPlan | null, chapterNumber?
     chapterNumber && chapterNumber <= 10 && plan.first10Chapters.length > 0
       ? `当前是第 ${chapterNumber} 章，必须优先对齐长篇规划的前10章功能：${plan.first10Chapters.join("；")}`
       : "";
+  const currentStageRule = extractLongFormStageText(plan, chapterNumber);
+  const confirmedFacts = asTextList(plan.confirmedFacts);
+  const openQuestions = asTextList(plan.openQuestions);
+  const doNotChange = asTextList(plan.doNotChange);
+  const doNotRevealEarly = asTextList(plan.doNotRevealEarly);
+  const tagPromises = asTextList(plan.tagPromises);
 
   return [
     `长篇规划基准：目标约 ${plan.targetTotalWords} 字，预计 ${plan.estimatedChapters} 章；核心承诺：${plan.corePromise || plan.planningBasis}`,
+    confirmedFacts.length ? `项目事实源已确定事实，后续任务卡和正文必须承接：${confirmedFacts.join("；")}` : "",
+    openQuestions.length ? `项目事实源待确认点，不得在任务卡或正文中擅自裁决：${openQuestions.join("；")}` : "",
+    doNotChange.length ? `禁止改写的核心事实：${doNotChange.join("；")}` : "",
+    doNotRevealEarly.length ? `禁止提前揭示的信息：${doNotRevealEarly.join("；")}` : "",
+    tagPromises.length ? `必须持续兑现的标签/卖点承诺：${tagPromises.join("；")}` : "",
     first10Rule,
+    currentStageRule,
     chapterNumber && chapterNumber > 100
       ? plan.post100Pacing
-        ? `100章后收束节奏参考：${plan.post100Pacing}`
+        ? `后续阶段总览：${plan.post100Pacing}`
         : plan.first100Pacing
-          ? `前100章后的章节仍需承接全书卷纲；已有前100章参考：${plan.first100Pacing}`
+          ? `超过原估算前段后仍需承接全书卷纲：${plan.first100Pacing}`
           : ""
       : plan.first100Pacing
-        ? `前100章节奏参考：${plan.first100Pacing}`
+        ? `全书前段节奏参考：${plan.first100Pacing}`
         : "",
     plan.post100Pacing && (!chapterNumber || chapterNumber <= 100)
-      ? `100章后规划只作为远期边界，不要提前兑现：${plan.post100Pacing}`
+      ? `后续阶段规划只作为远期边界，不要提前兑现：${plan.post100Pacing}`
       : "",
     plan.progressionPacing.length
       ? `成长/境界/资源节奏上限：${plan.progressionPacing.join("；")}`
       : "",
     plan.rewardPacing.length ? `收益释放频率：${plan.rewardPacing.join("；")}` : "",
     ...plan.progressionRules,
+    chapterNumber
+      ? `本章任务卡和正文必须优先遵守“当前章节阶段约束”，不得提前兑现后续阶段的地图、敌人、身份、资源、大收益或终局信息。`
+      : "",
     "如果本章任务与长篇规划冲突，优先降低收益等级、推迟大突破、收束支线或改成线索/资格/试用/小收益。"
   ].filter(Boolean);
 }
@@ -476,8 +571,145 @@ function buildLongFormPlanningGuardRules(context: Pick<LongFormPlanContext, "tar
   );
 }
 
+function buildRequiredPost100PlanRanges(estimatedChapters: number) {
+  if (estimatedChapters <= 100) {
+    return ["本书预计不超过100章，post100Pacing 留空；first100Pacing 必须按预计总章数覆盖全书起承转合、阶段压力、阶段爽点、伏笔回收和终局收束。"];
+  }
+
+  const ranges = [];
+  for (let start = 101; start <= estimatedChapters; start += 50) {
+    const end = Math.min(start + 49, estimatedChapters);
+    const finalLabel = end === estimatedChapters ? "（剩余结尾）" : "";
+    ranges.push(`第${start}-${end}章${finalLabel}：必须写满“阶段目标、主要对手/压力、主角成长上限、地图/势力推进、爽点类型与频率、伏笔埋设/回收、重要支线收束、感情/关系变化、阶段结尾钩子、进入下一阶段条件”`);
+  }
+
+  return ranges;
+}
+
+function normalizeAiLongFormPlanResponse(response: Partial<StoredLongFormPlan>) {
+  return {
+    planningBasis: String(response.planningBasis ?? "").trim(),
+    corePromise: String(response.corePromise ?? "").trim(),
+    volumePlan: asTextList(response.volumePlan),
+    progressionPacing: asTextList(response.progressionPacing),
+    rewardPacing: asTextList(response.rewardPacing),
+    confirmedFacts: asTextList(response.confirmedFacts),
+    openQuestions: asTextList(response.openQuestions),
+    doNotChange: asTextList(response.doNotChange),
+    doNotRevealEarly: asTextList(response.doNotRevealEarly),
+    tagPromises: asTextList(response.tagPromises),
+    first10Chapters: asTextList(response.first10Chapters).slice(0, 12),
+    first100Pacing: String(response.first100Pacing ?? "").trim(),
+    post100Pacing: String(response.post100Pacing ?? "").trim(),
+    progressionRules: asTextList(response.progressionRules)
+  };
+}
+
+type AiLongFormPlanPayload = ReturnType<typeof normalizeAiLongFormPlanResponse>;
+
+type LongFormPost100StageResponse = {
+  stages?: Array<{
+    range?: string;
+    stageTarget?: string;
+    pressure?: string;
+    growthLimit?: string;
+    mapAndForces?: string;
+    payoffRhythm?: string;
+    foreshadowing?: string;
+    sideClosure?: string;
+    relationshipChange?: string;
+    stageHook?: string;
+    nextCondition?: string;
+    body?: string;
+  }>;
+  post100Pacing?: string;
+};
+
+type LongFormStageStructuredResponse = {
+  first100Stages?: LongFormPost100StageResponse["stages"];
+  first100Pacing?: string;
+};
+
+function buildLongFormPlanPromptContext(context: LongFormPlanContext) {
+  return {
+    projectName: context.projectName,
+    projectDescription: context.projectDescription,
+    targetTotalWords: context.targetTotalWords,
+    estimatedChapters: context.estimatedChapters,
+    bible: context.bible,
+    plotState: context.plotState,
+    characters: context.characters.slice(0, 8),
+    foreshadowings: context.foreshadowings.slice(0, 10),
+    storyReference: buildStoryReference(context.storyAnalysis)
+  };
+}
+
+function normalizePost100StageText(value: unknown) {
+  return cleanPromptText(String(value ?? ""), 520);
+}
+
+function buildPacingTextFromStages(response: LongFormPost100StageResponse, requiredRanges: string[]) {
+  const stages = Array.isArray(response.stages) ? response.stages : [];
+
+  if (stages.length === 0) {
+    return String(response.post100Pacing ?? "").trim();
+  }
+
+  return stages
+    .map((stage, index) => {
+      const requestedRange = requiredRanges[index]?.match(/第\d+-\d+章/)?.[0] ?? "";
+      const range = normalizePost100StageText(stage.range) || requestedRange || `第${index + 1}阶段`;
+      const parts = [
+        ["阶段目标", stage.stageTarget],
+        ["主要压力/对手", stage.pressure],
+        ["成长上限", stage.growthLimit],
+        ["地图/势力推进", stage.mapAndForces],
+        ["爽点节奏", stage.payoffRhythm],
+        ["伏笔", stage.foreshadowing],
+        ["支线收束", stage.sideClosure],
+        ["关系变化", stage.relationshipChange],
+        ["阶段钩子", stage.stageHook],
+        ["进入下一阶段条件", stage.nextCondition]
+      ]
+        .map(([label, value]) => {
+          const text = normalizePost100StageText(value);
+          return text ? `${label}：${text}` : "";
+        })
+        .filter(Boolean);
+      const body = normalizePost100StageText(stage.body);
+      const detail = parts.length > 0 ? parts.join("；") : body;
+
+      return detail ? `${range}：${detail}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildFirst100PacingFromResponse(response: LongFormStageStructuredResponse, estimatedChapters: number) {
+  const stages = Array.isArray(response.first100Stages) ? response.first100Stages : [];
+
+  if (stages.length === 0) {
+    return String(response.first100Pacing ?? "").trim();
+  }
+
+  const frontStageEnd = Math.min(100, estimatedChapters);
+  const requiredRanges = [];
+  const windowSize = frontStageEnd <= 40 ? 10 : 20;
+
+  for (let start = 1; start <= frontStageEnd; start += windowSize) {
+    const end = Math.min(start + windowSize - 1, frontStageEnd);
+    requiredRanges.push(`第${start}-${end}章`);
+  }
+
+  return buildPacingTextFromStages({ stages }, requiredRanges);
+}
+
 export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
   const planningGuardRules = buildLongFormPlanningGuardRules(context);
+  const projectFactGuardRules = buildProjectFactGuardRules(context);
+  const post100RequiredRanges = buildRequiredPost100PlanRanges(context.estimatedChapters);
+  const frontStageEnd = Math.min(100, context.estimatedChapters);
+  const promptContext = buildLongFormPlanPromptContext(context);
   const response = await requestAiJson<
     Partial<
       Pick<
@@ -487,12 +719,16 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
         | "volumePlan"
         | "progressionPacing"
         | "rewardPacing"
+        | "confirmedFacts"
+        | "openQuestions"
+        | "doNotChange"
+        | "doNotRevealEarly"
+        | "tagPromises"
         | "first10Chapters"
-        | "first100Pacing"
-        | "post100Pacing"
         | "progressionRules"
       >
-    >
+    > &
+      LongFormStageStructuredResponse
   >({
     messages: [
       {
@@ -504,39 +740,49 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
         role: "user",
         content: JSON.stringify(
           {
-            projectName: context.projectName,
-            projectDescription: context.projectDescription,
-            targetTotalWords: context.targetTotalWords,
-            estimatedChapters: context.estimatedChapters,
-            bible: context.bible,
-            plotState: context.plotState,
-            characters: context.characters.slice(0, 8),
-            foreshadowings: context.foreshadowings.slice(0, 10),
-            storyReference: buildStoryReference(context.storyAnalysis),
+            ...promptContext,
             planningRules: [
               "先提炼本书的核心承诺：主角靠什么获得成长、读者期待反复看到什么、主线最终要兑现什么。",
+              ...projectFactGuardRules,
               "如果 projectDescription 或 bible 中列出了等级、阈值、奖励、职位、地图、势力、关系、权限、目标清单，必须先判断它是长期规则表、阶段目标表还是当前章节任务；默认按长期规则表处理，不能直接变成第一卷进度。",
               "如果作品存在任何成长阶梯，必须把“当前阶段允许提升什么、不允许越过什么、什么情况允许例外”写进 progressionPacing。",
               "volumePlan 必须体现“长期阶梯分配”：第一卷只建立核心循环和前段成长，后续卷逐步消耗中段、高段、终局档位；除非用户明确要求快节奏，不要第一卷吃完多个核心档位。",
+              "为了保证 JSON 稳定，不要输出 Markdown、代码块、换行表格或超长单句；但不能为了变短而省略有效规划。每个阶段仍必须写清目标、压力、回报、收束、成长边界。",
+              "质量优先：阶段规划必须贴合本书设定、主角成长、地图/势力/关系/伏笔，不要写成通用套话；如果信息多，用短句和分号拆开，不要压缩成空泛概括。",
+              "全书阶段节奏不能写成一句话梗概。每个阶段必须至少包含：阶段目标、主要压力/对手、主角成长上限、地图/势力推进、爽点类型、伏笔埋设或回收、支线收束、关系变化、阶段结尾钩子。",
+              "每个阶段必须写具体到本书人物、势力、资源、秘密、情绪关系和主线承诺；不能只写“扩大势力、揭露真相、终局决战”这类空泛词。",
               "按目标总字数和预计章节数规划：每卷/阶段要有开始目标、阶段压力、阶段回报、阶段收束，不要只列地图名。",
+              "first10Chapters 必须恰好输出10项，并且每项开头必须是“第1章：”到“第10章：”，不能漏第1章，不能从第2章开始，也不能把多章合并成一项。",
               "前 10 章主要负责建立主角处境、关键机制、第一轮小收益、第一阶段压力和读者期待；不要连续大突破，不要过早开大型副本替代核心承诺。",
               ...planningGuardRules,
-              "前 100 章需要有清晰的节奏表：哪些章节段落做机制验证、小爽点、中爽点、大爽点、地图/势力升级、伏笔埋设与回收。",
-              "100章后也必须规划：写清后期阶段如何升级、如何收束支线、如何回收伏笔、如何逼近终局；不能只规划前100章。",
+              `系统已按目标总字数估算本书约 ${context.estimatedChapters} 章；规划必须按这个预计章数分段，不要假定一定会写到100章。`,
+              `first100Stages 实际含义是“第1-${frontStageEnd}章阶段节奏”：如果预计不超过100章，它必须覆盖全书起承转合和终局收束；如果预计超过100章，它只覆盖前100章。`,
+              "first100Stages 必须拆成数组项，不要把第1-100章阶段节奏写成一个超长字符串。",
+              "凡是 openQuestions、doNotRevealEarly 或输出中的“待确认/未定”事项，在 first100Stages、volumePlan、progressionPacing、rewardPacing 和 progressionRules 中不得写成确定结果；只能写成压力、伏笔、可选方向或待作者确认。",
+              "不要把待确认角色结局、最终情感归属、真实动机、血脉身份、幕后真相、政权终局、死亡/成婚/复合/原谅/牺牲/下线/登基/继位等不可逆事项写死。",
+              "如果阶段节奏需要使用待确认事项，只能用“制造压力”“关系试探”“出现迹象”“保留伏笔”“可能走向之一”这类表达，不得直接写“死亡、精神失常、原谅、确定复合、确定归属”。",
+              context.estimatedChapters > 100
+                ? "第101章后的阶段节奏会由第二次 AI 请求单独生成；本次不要输出 post100Pacing。"
+                : "预计不超过100章时，post100Pacing 必须留空；不要虚构第101章后的阶段。",
               "rewardPacing 必须写清小收益、中收益、大收益的大致频率；收益可以是能力、境界、金钱、资源、地位、情报、关系或权限。",
               "progressionRules 必须写成后续任务卡能直接执行的硬约束，例如：第几章前只允许小台阶，第几章左右才允许大阶段，越级必须有成本和后果。",
               "不要照搬拆书来源作品的人物、地点、专有设定、具体桥段；拆书只能作为商业节奏参考。"
             ],
             outputSchema: {
-              planningBasis: "string：为什么按这个篇幅和节奏规划",
-              corePromise: "string：本书核心承诺和长期爽点循环",
-              volumePlan: "string[]：每项包含卷/阶段、章节范围、阶段目标、阶段回报、收束条件",
-              progressionPacing: "string[]：成长层级/能力/资源/地位/权限/关系/地图等节奏，必须写章节范围和允许上限；必须说明哪些档位属于长期后置，不得前期兑现",
-              rewardPacing: "string[]：小收益/中收益/大收益频率与类型",
-              first10Chapters: "string[]：前10章每章功能，不写正文；长篇体量下不得安排进入第二个命名大阶段，不得每章都写数值上涨",
-              first100Pacing: "string：前100章节奏表，按章节段落说明",
-              post100Pacing: "string：100章后到完结的后期节奏，必须说明后期阶段目标、成长上限、支线收束、伏笔回收、终局推进",
-              progressionRules: "string[]：任务卡生成时必须遵守的硬规则"
+              planningBasis: "string，240字以内，说明规划依据、篇幅判断和阶段划分理由",
+              corePromise: "string，360字以内，说明核心承诺、长期爽点循环、情绪补偿和终局承诺边界",
+              confirmedFacts: "string[]，每项180字以内，最多16项；只写项目事实源已经明确且彼此不冲突的事实，不要加入推测",
+              openQuestions: "string[]，每项180字以内，最多14项；写项目事实源没有定死或互相有张力、需要作者后续确认的方向",
+              doNotChange: "string[]，每项180字以内，最多16项；写后续规划和正文不得改写的核心事实",
+              doNotRevealEarly: "string[]，每项180字以内，最多14项；写前10章或前期不能提前揭示的核心真相、底牌或终局信息",
+              tagPromises: "string[]，每项160字以内，最多12项；写题材标签、情绪卖点、读者期待必须兑现的承诺",
+              volumePlan: "string[]，每项440字以内，最多12项；每项包含阶段范围、目标、压力、成长上限、回报、伏笔、关系变化、收束",
+              progressionPacing: "string[]，每项360字以内，最多16项；写清成长边界、卡点、代价和不能提前兑现的档位",
+              rewardPacing: "string[]，每项360字以内，最多16项；写清小/中/大收益频率、类型、出现条件、兑现方式和不能滥发的限制",
+              first10Chapters: "string[]，必须恰好10项；每项240字以内；每项以第1章至第10章开头，逐章写功能、压力、收益、伏笔、关系变化或钩子",
+              first100Stages:
+                "array；按第1-20章、第21-40章这类阶段写到前段结束；预计很短时可按每10章；每项字段：range, stageTarget, pressure, growthLimit, mapAndForces, payoffRhythm, foreshadowing, sideClosure, relationshipChange, stageHook, nextCondition；每个字段70-160字以内",
+              progressionRules: "string[]，每项280字以内，最多18项；必须能被后续任务卡直接执行"
             }
           },
           null,
@@ -545,20 +791,263 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
       }
     ],
     temperature: 0.22,
-    maxTokens: 3200
+    maxTokens: 7600,
+    timeoutMs: 300000
   });
 
-  return attachAiTokenUsage({
-    planningBasis: String(response.planningBasis ?? "").trim(),
-    corePromise: String(response.corePromise ?? "").trim(),
-    volumePlan: asTextList(response.volumePlan),
-    progressionPacing: asTextList(response.progressionPacing),
-    rewardPacing: asTextList(response.rewardPacing),
-    first10Chapters: asTextList(response.first10Chapters).slice(0, 12),
-    first100Pacing: String(response.first100Pacing ?? "").trim(),
-    post100Pacing: String(response.post100Pacing ?? "").trim(),
-    progressionRules: asTextList(response.progressionRules)
-  }, getAiTokenUsage(response));
+  const initialPlan = normalizeAiLongFormPlanResponse(response);
+  initialPlan.first100Pacing = buildFirst100PacingFromResponse(response, context.estimatedChapters);
+  let post100Pacing = "";
+  let post100Usage: AiTokenUsage | undefined;
+
+  if (context.estimatedChapters > 100) {
+    const post100Response = await requestAiJson<LongFormPost100StageResponse>({
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是长篇网文后续阶段规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你的任务是为第101章后按每50章阶段生成可执行的长篇节奏规划。必须把每个阶段拆成 JSON 数组项，不要把所有内容塞进一个长字符串。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              ...promptContext,
+              corePromise: initialPlan.corePromise,
+              confirmedFacts: initialPlan.confirmedFacts,
+              openQuestions: initialPlan.openQuestions,
+              doNotChange: initialPlan.doNotChange,
+              doNotRevealEarly: initialPlan.doNotRevealEarly,
+              tagPromises: initialPlan.tagPromises,
+              first100Pacing: initialPlan.first100Pacing,
+              volumePlan: initialPlan.volumePlan,
+              progressionPacing: initialPlan.progressionPacing,
+              rewardPacing: initialPlan.rewardPacing,
+              requiredRanges: post100RequiredRanges,
+              rules: [
+                `必须从第101章开始，按每50章一个阶段写到预计终章第${context.estimatedChapters}章。`,
+                "stages 数组必须与 requiredRanges 一一对应，不能漏段、合并段或跳段。",
+                "每段 range 必须使用“第101-150章”这种格式，最后一段按实际剩余章节写，例如“第401-445章”。",
+                "每段必须填写 stageTarget、pressure、growthLimit、mapAndForces、payoffRhythm、foreshadowing、sideClosure、relationshipChange、stageHook、nextCondition。",
+                "必须承接第1-100章规划和项目事实锁；不得把 openQuestions 或 doNotRevealEarly 写成确定真相。",
+                "凡是 openQuestions、doNotRevealEarly 或前文标注“未定/待确认”的事项，后续阶段只能写成伏笔、压力、可选方向或待作者确认，不能写成确定结局。",
+                "禁止擅自写死角色死亡、精神失常、最终CP、原谅/复合、成婚、牺牲、下线、登基、继位、真实血脉、幕后真相、政权最终形式等不可逆结果，除非项目事实源已明确。",
+                "内容要具体到本书人物、势力、资源、秘密和主线承诺，不要写通用套话。",
+                "为了保证 JSON 稳定，每个字段写中文短句，使用分号表达多点，不要在字段中换行，不要输出引号包裹的对白。"
+              ],
+              outputSchema: {
+                stages:
+                  "array；每个 requiredRanges 对应1项；每项字段：range, stageTarget, pressure, growthLimit, mapAndForces, payoffRhythm, foreshadowing, sideClosure, relationshipChange, stageHook, nextCondition；每个字段90-180字以内"
+              }
+            },
+            null,
+            2
+          )
+        }
+      ],
+      temperature: 0.22,
+      maxTokens: 5600,
+      timeoutMs: 300000
+    });
+
+    post100Pacing = buildPacingTextFromStages(post100Response, post100RequiredRanges);
+    post100Usage = getAiTokenUsage(post100Response);
+  }
+
+  const combinedPlan = {
+    ...initialPlan,
+    post100Pacing
+  };
+  const usage = combineAiTokenUsages([getAiTokenUsage(response), post100Usage]);
+
+  return attachAiTokenUsage(combinedPlan, usage ?? getAiTokenUsage(response));
+}
+
+type LongFormPlanReviewSlice = {
+  pass?: boolean;
+  issues?: string[];
+  unresolvedCommitmentIssues?: string[];
+  repairInstructions?: string[];
+};
+
+function normalizeLongFormPlanReviewSlice(review: LongFormPlanReviewSlice) {
+  const unresolvedCommitmentIssues = asTextList(review.unresolvedCommitmentIssues).slice(0, 3);
+
+  return {
+    passed: review.pass !== false && unresolvedCommitmentIssues.length === 0,
+    incomplete: false,
+    issues: asTextList(review.issues).slice(0, 3),
+    unresolvedCommitmentIssues,
+    repairInstructions: asTextList(review.repairInstructions).slice(0, 3)
+  };
+}
+
+async function requestLongFormPlanReviewSlice(input: {
+  title: string;
+  facts: Record<string, unknown>;
+  planPart: Record<string, unknown>;
+  rules: string[];
+}) {
+  const requestPayload = {
+    messages: [
+      {
+        role: "system" as const,
+        content:
+          "你是长篇规划事实一致性审稿人。只输出一个合法 JSON 对象，不要 Markdown，不要解释。只判断当前片段，不重写规划，不硬编码任何题材规则。字符串必须用中文短句，不要输出 openQuestions、doNotRevealEarly 等英文字段名。"
+      },
+      {
+        role: "user" as const,
+        content: JSON.stringify(
+          {
+            reviewTitle: input.title,
+            facts: input.facts,
+            planPart: input.planPart,
+            reviewRules: input.rules,
+            outputSchema: {
+              pass: "boolean",
+              issues: "string[]，最多2项，每项30字以内；没有则空数组",
+              unresolvedCommitmentIssues: "string[]，最多2项，每项30字以内；没有则空数组",
+              repairInstructions: "string[]，最多2项，每项30字以内；没有则空数组"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.12,
+    maxTokens: 2000,
+    timeoutMs: 120000
+  };
+  let review: {
+    pass?: boolean;
+    issues?: string[];
+    unresolvedCommitmentIssues?: string[];
+    repairInstructions?: string[];
+  };
+
+  try {
+    review = await requestAiJson<typeof review>(requestPayload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+
+    if (!/缺少 message\.content|响应缺少/i.test(message)) {
+      throw error;
+    }
+
+    review = await requestAiJson<typeof review>({
+      ...requestPayload,
+      temperature: 0,
+      timeoutMs: 180000
+    });
+  }
+
+  return attachAiTokenUsage(normalizeLongFormPlanReviewSlice(review), getAiTokenUsage(review));
+}
+
+async function safeReviewLongFormPlanSlice(input: {
+  title: string;
+  facts: Record<string, unknown>;
+  planPart: Record<string, unknown>;
+  rules: string[];
+}) {
+  try {
+    return await requestLongFormPlanReviewSlice(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "审查步骤执行失败";
+    return {
+      passed: null,
+      incomplete: true,
+      issues: [`${input.title}未完成：${message}`],
+      unresolvedCommitmentIssues: [],
+      repairInstructions: ["这是审查执行异常，不代表规划内容不通过；可重新审查。"]
+    };
+  }
+}
+
+export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanContext, plan: AiLongFormPlanPayload) {
+  const factReview = await safeReviewLongFormPlanSlice({
+    title: "事实锁审查",
+    facts: {
+      projectName: context.projectName,
+      projectDescription: cleanPromptText(context.projectDescription ?? "", 700),
+      bible: {
+        corePleasure: cleanPromptText(context.bible.corePleasure, 240),
+        protagonistDesire: cleanPromptText(context.bible.protagonistDesire, 180),
+        goldenFingerRules: cleanPromptText(context.bible.goldenFingerRules, 240),
+        immutableSettings: cleanPromptText(context.bible.immutableSettings, 360),
+        narrativeTaboos: cleanPromptText(context.bible.narrativeTaboos, 240)
+      },
+      plotState: {
+        mainGoal: cleanPromptText(context.plotState.mainGoal, 180),
+        nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 180)
+      }
+    },
+    planPart: {
+      corePromise: cleanPromptText(plan.corePromise, 260),
+      confirmedFacts: plan.confirmedFacts.slice(0, 10),
+      doNotChange: plan.doNotChange.slice(0, 10),
+      tagPromises: plan.tagPromises.slice(0, 8)
+    },
+    rules: [
+      "检查 confirmedFacts/doNotChange/corePromise 是否改写项目简介或稳定设定。",
+      "没有明显改写就 pass=true。",
+      "只列最严重问题，不做故事推演。"
+    ]
+  });
+
+  const commitmentReview = await safeReviewLongFormPlanSlice({
+    title: "待确认点确定化审查",
+    facts: {
+      openQuestions: plan.openQuestions.slice(0, 10),
+      doNotRevealEarly: plan.doNotRevealEarly.slice(0, 10)
+    },
+    planPart: {
+      corePromise: cleanPromptText(plan.corePromise, 220),
+      first100Pacing: cleanPromptText(plan.first100Pacing, 1400),
+      post100Pacing: cleanPromptText(plan.post100Pacing, 1800),
+      progressionRules: plan.progressionRules.slice(0, 8)
+    },
+    rules: [
+      "检查 openQuestions/doNotRevealEarly 是否在阶段规划里被写成定论。",
+      "只要待确认事项被写死为唯一答案，pass=false。",
+      "如果只是保留伏笔或可能方向，pass=true。"
+    ]
+  });
+
+  const openingReview = await safeReviewLongFormPlanSlice({
+    title: "前10章提前揭示审查",
+    facts: {
+      doNotRevealEarly: plan.doNotRevealEarly.slice(0, 10),
+      openQuestions: plan.openQuestions.slice(0, 8)
+    },
+    planPart: {
+      first10Chapters: plan.first10Chapters.slice(0, 10)
+    },
+    rules: [
+      "前10章只能埋线、制造压力、验证机制和小收益。",
+      "不得揭开核心冤案真相、终极身份、终局底牌或最终情感归属。",
+      "没有提前揭示就 pass=true。"
+    ]
+  });
+
+  const reviews = [factReview, commitmentReview, openingReview];
+  const hasIncompleteStep = reviews.some((review) => review.incomplete);
+  const result = {
+    passed: hasIncompleteStep ? null : reviews.every((review) => review.passed),
+    status: hasIncompleteStep ? "incomplete" : "complete",
+    issues: reviews.flatMap((review) => review.issues).slice(0, 6),
+    unresolvedCommitmentIssues: reviews.flatMap((review) => review.unresolvedCommitmentIssues).slice(0, 6),
+    repairInstructions: reviews.flatMap((review) => review.repairInstructions).slice(0, 6),
+    reviewSteps: [
+      { name: "事实锁审查", passed: factReview.passed, incomplete: factReview.incomplete === true },
+      { name: "待确认点审查", passed: commitmentReview.passed, incomplete: commitmentReview.incomplete === true },
+      { name: "前10章审查", passed: openingReview.passed, incomplete: openingReview.incomplete === true }
+    ],
+    reviewError: hasIncompleteStep
+  };
+
+  return attachAiTokenUsage(result, combineAiTokenUsages(reviews.map((review) => getAiTokenUsage(review))));
 }
 
 function normalizeDraftTargetWordCount(value?: number) {

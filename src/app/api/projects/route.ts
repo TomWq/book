@@ -1,4 +1,4 @@
-import { createProject, getProjects } from "@/lib/projects";
+import { createProject, enqueueLongFormPlanJob, getProjects } from "@/lib/projects";
 
 export const runtime = "nodejs";
 
@@ -62,6 +62,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "项目名称不能为空" }, { status: 400 });
   }
 
+  const targetTotalWords = readTargetTotalWords(body.targetTotalWords);
   const project = await createProject({
     name,
     authorName: String(body.authorName ?? ""),
@@ -76,7 +77,7 @@ export async function POST(request: Request) {
       protagonistNames: list(body.protagonistNames),
       protagonistCharacters: characterList(body.protagonistCharacters),
       workLengthType: readWorkLengthType(body.workLengthType),
-      targetTotalWords: readTargetTotalWords(body.targetTotalWords),
+      targetTotalWords,
       coreSellingPoint: String(body.coreSellingPoint ?? ""),
       openingHook: String(body.openingHook ?? ""),
       goldenFinger: String(body.goldenFinger ?? ""),
@@ -91,5 +92,14 @@ export async function POST(request: Request) {
     }
   });
 
-  return Response.json({ project }, { status: 201 });
+  const shouldGenerateLongFormPlan =
+    project.type === "writing" &&
+    (body.autoGenerateLongFormPlan === true ||
+      body.autoGenerateLongFormPlan === "true" ||
+      body.autoGenerateLongFormPlan === "on");
+  const longFormPlanJob = shouldGenerateLongFormPlan
+    ? await enqueueLongFormPlanJob(project.id, { targetTotalWords })
+    : null;
+
+  return Response.json({ project, longFormPlanJob }, { status: 201 });
 }

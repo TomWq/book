@@ -35,12 +35,12 @@ export default async function NewProjectPage() {
         <div>
           <span>{assistantName}建议</span>
           <strong>第一次创建作品，不用把所有设定都想完</strong>
-          <p>先选读者和题材标签，再让 AI 试起书名、主角名和简介。创建成功后，直接去生成第一章任务卡。</p>
+          <p>先选读者和题材标签，再让 AI 试起书名、主角名和简介。创建成功后，建议先生成长篇规划 / 总纲节奏，再去写第一章任务卡。</p>
         </div>
         <ol>
           <li><span>1</span>选读者与标签</li>
           <li><span>2</span>AI 起名和取主角</li>
-          <li><span>3</span>生成简介并创建</li>
+          <li><span>3</span>生成简介和总纲</li>
         </ol>
       </section>
 

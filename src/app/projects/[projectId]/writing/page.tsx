@@ -375,6 +375,11 @@ export default async function ProjectWritingPage({
               <Link className="button" href={`/projects/${projectId}/state`}>
                 完善设定
               </Link>
+              {!latestLongFormPlan ? (
+                <Link className="button" href={`/projects/${projectId}/state#long-form-plan`}>
+                  先做长篇规划
+                </Link>
+              ) : null}
               {contextStats.map((item) => (
                 <span key={item} className="chip">
                   {item}
@@ -442,10 +447,10 @@ export default async function ProjectWritingPage({
               <span>
                 {latestLongFormPlan
                   ? `长篇规划已接入：${formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 ${latestLongFormPlan.estimatedChapters} 章。`
-                  : "还没有生成长篇规划；任务卡会保守推进，但建议先到状态页补总纲。"}
+                  : "建议先生成长篇规划 / 总纲节奏，再生成任务卡。它会按目标字数估算章节数，提前定好全书阶段、成长上限和收益频率。"}
               </span>
               <Link className="button small-button" href={`/projects/${projectId}/state#long-form-plan`}>
-                管理长篇规划
+                {latestLongFormPlan ? "管理长篇规划" : "先做长篇规划"}
               </Link>
             </div>
           </div>
@@ -478,8 +483,8 @@ export default async function ProjectWritingPage({
                   </div>
                   <div className={latestLongFormPlan ? "quote-box compact-note" : "quote-box warning-box compact-note"}>
                     {latestLongFormPlan
-                      ? "已接入长篇规划：任务卡会参考总篇幅、前100章节奏、成长上限和收益频率。"
-                      : "建议先生成上方长篇规划；没有规划时会保守推进，但无法明确约束多少章小提升、多少章大提升。"}
+                      ? "已接入长篇规划：任务卡会参考总篇幅、预计章节数、当前阶段、成长上限和收益频率。"
+                      : "建议先到状态页生成长篇规划；没有规划时可以继续生成任务卡，但无法按预计篇幅约束后续成长、地图、收益和伏笔回收。"}
                   </div>
                   <label className="option-row">
                     <input name="useAnalysisContext" type="checkbox" defaultChecked />

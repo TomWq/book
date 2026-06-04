@@ -53,6 +53,14 @@ export const AI_TASK_PRICING_DEFINITIONS: AiTaskPricingDefinition[] = [
     multiplier: 1
   },
   {
+    type: "review_long_form_plan",
+    label: "审查长篇规划",
+    unitLabel: "次",
+    baseCredits: 80,
+    unitCredits: 0,
+    multiplier: 1
+  },
+  {
     type: "project_creation_assist",
     label: "建书辅助",
     unitLabel: "次",

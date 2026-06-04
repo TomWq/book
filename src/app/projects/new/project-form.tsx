@@ -74,7 +74,7 @@ type ProjectFormDraft = {
   coreSellingPoint: string;
   goldenFinger: string;
   openingHook: string;
-  writingGoal: string;
+  autoGenerateLongFormPlan: boolean;
   workLengthType: WorkLengthType;
   targetTotalWords: string;
 };
@@ -104,7 +104,7 @@ const defaultDraft: ProjectFormDraft = {
   coreSellingPoint: "",
   goldenFinger: "",
   openingHook: "",
-  writingGoal: "",
+  autoGenerateLongFormPlan: true,
   workLengthType: "medium",
   targetTotalWords: "50"
 };
@@ -250,7 +250,10 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
     coreSellingPoint: stringValue(raw.coreSellingPoint, 160),
     goldenFinger: stringValue(raw.goldenFinger, 160),
     openingHook: stringValue(raw.openingHook, 160),
-    writingGoal: stringValue(raw.writingGoal, 500),
+    autoGenerateLongFormPlan:
+      typeof raw.autoGenerateLongFormPlan === "boolean"
+        ? raw.autoGenerateLongFormPlan
+        : defaultDraft.autoGenerateLongFormPlan,
     workLengthType: isWorkLengthType(raw.workLengthType) ? raw.workLengthType : defaultDraft.workLengthType,
     targetTotalWords: normalizeTargetTotalWords(raw.targetTotalWords)
   };
@@ -287,7 +290,7 @@ export function ProjectForm() {
   const [coreSellingPoint, setCoreSellingPoint] = useState("");
   const [goldenFinger, setGoldenFinger] = useState("");
   const [openingHook, setOpeningHook] = useState("");
-  const [writingGoal, setWritingGoal] = useState("");
+  const [autoGenerateLongFormPlan, setAutoGenerateLongFormPlan] = useState(true);
   const [workLengthType, setWorkLengthType] = useState<WorkLengthType>("medium");
   const [targetTotalWords, setTargetTotalWords] = useState("50");
 
@@ -366,7 +369,7 @@ export function ProjectForm() {
         setCoreSellingPoint(draft.coreSellingPoint);
         setGoldenFinger(draft.goldenFinger);
         setOpeningHook(draft.openingHook);
-        setWritingGoal(draft.writingGoal);
+        setAutoGenerateLongFormPlan(draft.autoGenerateLongFormPlan);
         setWorkLengthType(draft.workLengthType);
         setTargetTotalWords(draft.targetTotalWords);
       }
@@ -401,7 +404,7 @@ export function ProjectForm() {
       coreSellingPoint,
       goldenFinger,
       openingHook,
-      writingGoal,
+      autoGenerateLongFormPlan,
       workLengthType,
       targetTotalWords
     };
@@ -435,7 +438,7 @@ export function ProjectForm() {
     titleConcept,
     titleNamingStyle,
     workLengthType,
-    writingGoal
+    autoGenerateLongFormPlan
   ]);
 
   function updateTagTaxonomyStyle(nextStyle: TagTaxonomyStyle) {
@@ -767,7 +770,7 @@ export function ProjectForm() {
           coreSellingPoint: asText(formData.get("coreSellingPoint")),
           openingHook: asText(formData.get("openingHook")),
           goldenFinger: asText(formData.get("goldenFinger")),
-          writingGoal: asText(formData.get("writingGoal"))
+          autoGenerateLongFormPlan
         })
       });
 
@@ -784,7 +787,11 @@ export function ProjectForm() {
       }
 
       window.localStorage.removeItem(draftStorageKey);
-      router.push(`/projects/${projectId}/writing`);
+      router.push(
+        payload?.longFormPlanJob
+          ? `/projects/${projectId}/state#long-form-plan`
+          : `/projects/${projectId}/writing`
+      );
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "创建作品失败");
       setIsSubmitting(false);
@@ -1282,7 +1289,7 @@ export function ProjectForm() {
           <div className="field">
             <div className="field-label field-label-row">
               <span>目标总字数</span>
-              <span className="field-hint">用于控制长期节奏，不要求精确到每一章</span>
+              <span className="field-hint">创建后建议先生成长篇规划 / 总纲节奏</span>
             </div>
             <div className="target-total-words-input">
               <input
@@ -1387,14 +1394,26 @@ export function ProjectForm() {
             <div className="field-hint">{description.length}/500</div>
           </div>
 
-          <div className="field">
-            <div className="field-label">创作目标</div>
-            <textarea
-              name="writingGoal"
-              value={writingGoal}
-              onChange={(event) => setWritingGoal(event.target.value)}
-              placeholder="例如：先完成前 10 章开局，把主角目标、核心冲突、追读钩子和第一轮爽点跑顺。"
-            />
+          <div className="long-form-create-card">
+            <div>
+              <div className="mini-label">建议开写前先完成</div>
+              <strong>长篇规划 / 总纲节奏</strong>
+              <p>
+                创建作品后自动按目标字数估算章节数，并生成全书总纲节奏、成长上限、收益频率和任务卡硬规则。
+                这份规划会同步到状态页，后续任务卡和正文都会读取；不合适可以在状态页重新生成。
+              </p>
+            </div>
+            <label className="option-row compact-option-row long-form-create-toggle">
+              <input
+                type="checkbox"
+                checked={autoGenerateLongFormPlan}
+                onChange={(event) => setAutoGenerateLongFormPlan(event.target.checked)}
+              />
+              <span>
+                <strong>创建后自动生成长篇规划</strong>
+                <small>建议保持开启；关闭后也可以稍后在状态页手动生成。</small>
+              </span>
+            </label>
           </div>
         </div>
 

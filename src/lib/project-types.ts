@@ -440,6 +440,11 @@ export type StoredLongFormPlan = {
   volumePlan: string[];
   progressionPacing: string[];
   rewardPacing: string[];
+  confirmedFacts: string[];
+  openQuestions: string[];
+  doNotChange: string[];
+  doNotRevealEarly: string[];
+  tagPromises: string[];
   first10Chapters: string[];
   first100Pacing: string;
   post100Pacing: string;
