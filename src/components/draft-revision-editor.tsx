@@ -269,6 +269,12 @@ function issueReplacementText(issue: ReviewIssue) {
   return rewritten?.[1]?.trim() ?? "";
 }
 
+function issueHasUnmatchedQuotedOriginal(content: string, issue: ReviewIssue) {
+  const quotedOriginal = suggestionOriginalText(issue);
+
+  return Boolean(quotedOriginal && !candidateRange(content, quotedOriginal));
+}
+
 function hasCompleteSentenceEnding(value: string) {
   return /[。！？!?…」』”’"）)]$/.test(value.trim());
 }
@@ -314,7 +320,22 @@ function looksLikeInstruction(value: string) {
 }
 
 function analyzeIssueApply(content: string, issue: ReviewIssue): IssueApplyAnalysis {
-  const original = issueOriginalTexts(content, issue).find((candidate) => content.includes(candidate)) ?? "";
+  if (issueHasUnmatchedQuotedOriginal(content, issue)) {
+    return {
+      canApply: false,
+      original: "",
+      replacement: "",
+      insertAfter: false,
+      reason: "AI 引用的原句未在当前正文中找到，这条建议只能作为修改方向手动核对。"
+    };
+  }
+
+  const original = issueOriginalTexts(content, issue)
+    .map((candidate) => {
+      const range = candidateRange(content, candidate);
+      return range ? content.slice(range.start, range.end) : "";
+    })
+    .find(Boolean) ?? "";
   const replacement = issueReplacementText(issue);
   const insertAfter = /后(?:补入|补上|补一段|加入|添加|增加)|之后(?:补入|补上|加入|添加|增加)/.test(
     issue.suggestion
@@ -582,6 +603,7 @@ export function DraftRevisionEditor({
           <div className="review-apply-list">
             {reviewIssues.map((issue, index) => {
               const status = issueStatus(issue, index);
+              const unmatchedQuotedOriginal = issueHasUnmatchedQuotedOriginal(content, issue);
               const statusLabel =
                 status === "applied" ? "已套用" : status === "manual" ? "需手动" : "可自动";
               const statusClass =
@@ -604,6 +626,11 @@ export function DraftRevisionEditor({
                     <div className="muted">
                       {formatReviewText(issue.location) || "正文相关段落"}：{formatReviewText(issue.suggestion)}
                     </div>
+                    {unmatchedQuotedOriginal ? (
+                      <div className="footer-note warning-text">
+                        AI 引用的原句未在当前正文中找到，请按修改方向手动核对，不要直接套用。
+                      </div>
+                    ) : null}
                     {status === "manual" ? (
                       <div className="footer-note">
                         {analyzeIssueApply(content, issue).reason || "这条建议不适合自动替换，请在下方正文里手动修改。"}

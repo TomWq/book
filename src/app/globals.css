@@ -15024,6 +15024,10 @@ body.update-prompt-open .floating-ai-launcher {
   font-size: 12px;
 }
 
+.footer-note.warning-text {
+  color: var(--warning);
+}
+
 .draft-reader {
   max-width: 760px;
   margin: 0 auto;

@@ -4789,6 +4789,60 @@ function sanitizeReviewIssueText(issue: ReviewIssue): ReviewIssue {
   };
 }
 
+function reviewQuotedTexts(value: string) {
+  const matches = value.matchAll(/[“"‘'「『]([^“”"‘’'「」『』]{2,500})[”"’'」』]/g);
+  return Array.from(matches).map((match) => match[1].trim()).filter(Boolean);
+}
+
+function compactReviewText(value: string) {
+  return value.replace(/\s+/g, "");
+}
+
+function draftContainsReviewQuote(content: string, quote: string) {
+  if (content.includes(quote)) {
+    return true;
+  }
+
+  const compactQuote = compactReviewText(quote);
+
+  if (compactQuote.length < 8) {
+    return false;
+  }
+
+  return compactReviewText(content).includes(compactQuote);
+}
+
+function reviewSuggestionOriginalQuote(issue: ReviewIssue) {
+  const quoted = reviewQuotedTexts(issue.suggestion);
+
+  return quoted.length >= 2 && /将|把|在|原句|后补|补入|改为|改成|替换/.test(issue.suggestion)
+    ? quoted[0]
+    : "";
+}
+
+function downgradeUnmatchedReviewIssueQuote(issue: ReviewIssue, draftContent: string): ReviewIssue {
+  const originalQuote = reviewSuggestionOriginalQuote(issue);
+
+  if (!originalQuote || draftContainsReviewQuote(draftContent, originalQuote)) {
+    return issue;
+  }
+
+  const problem = [
+    issue.problem,
+    `AI 审稿引用的原句“${originalQuote}”未在当前正文中找到，这条建议只能作为修改方向，不能直接套用。`
+  ].filter(Boolean).join(" ");
+
+  return {
+    ...issue,
+    location: "未在正文中定位到引用原句",
+    severity: issue.severity === "low" ? "medium" : issue.severity,
+    problem,
+    suggestion: /^需手动处理/.test(issue.suggestion)
+      ? issue.suggestion
+      : `需手动处理：${issue.suggestion}`
+  };
+}
+
 function extractLinesByKeywords(content: string, keywords: string[], limit = 6) {
   return cleanStateEntries(
     splitDraftSentences(content).filter((sentence) =>
@@ -11674,13 +11728,16 @@ export async function reviewChapterDraft(
         ];
   const shouldUpdateState = aiReview?.shouldUpdateState ?? true;
 
+  const normalizedIssues = mergedIssues
+    .map((issue) => downgradeUnmatchedReviewIssueQuote(issue, draft.content))
+    .map(sanitizeReviewIssueText);
   const report: StoredReviewReport = {
     id: randomUUID(),
     projectId,
     draftId: draft.id,
     chapterNumber: draft.chapterNumber,
     overall: formatReviewText(finalOverall),
-    issues: mergedIssues.map(sanitizeReviewIssueText),
+    issues: normalizedIssues,
     shouldUpdateState,
     stateUpdateSuggestions: finalStateSuggestions.map(formatReviewText),
     createdAt: timestamp,

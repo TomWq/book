@@ -1652,6 +1652,70 @@ function buildCharacterPronounRules(characters: StoredCharacterProfile[]) {
     .filter(Boolean);
 }
 
+function firstChineseSurname(name: string) {
+  const base = baseCharacterName(name);
+  const match = base.match(/^[\u4e00-\u9fff]/u);
+  return match?.[0] ?? "";
+}
+
+function buildFamilyNameConsistencyRules(characters: StoredCharacterProfile[]) {
+  const relationCharacters = characters
+    .map((character) => ({
+      name: baseCharacterName(character.name),
+      surname: firstChineseSurname(character.name),
+      relationText: [
+        character.identity,
+        character.relationshipToProtagonist,
+        character.currentState,
+        character.longTermGoal
+      ].join(" ")
+    }))
+    .filter((item) => item.name && item.surname);
+  const familyMembers = relationCharacters.filter((item) =>
+    /嫡姐|庶姐|嫡妹|庶妹|姐妹|姐姐|妹妹|兄弟|兄长|弟弟|父亲|母亲|嫡母|姨娘|主母|继母|族兄|族弟|族姐|族妹|府中.*女|家中.*女|宗族.*女/.test(item.relationText)
+  );
+  const surnames = Array.from(new Set(familyMembers.map((item) => item.surname)));
+
+  if (familyMembers.length < 2 || surnames.length <= 1) {
+    return [
+      "同一家族、同一府邸或同一宗族内的亲兄弟姐妹，默认必须同姓；如果正文写不同姓，必须明确说明是表亲、继亲、养女、外姓寄居或改姓，否则视为人物关系错误。"
+    ];
+  }
+
+  return [
+    `人物档案里疑似同一家族/府邸/宗族亲属却出现不同姓氏：${familyMembers.map((item) => `${item.name}（${item.relationText.slice(0, 24)}）`).join("；")}。生成正文前必须先统一亲属姓氏，或明确写出表亲、继亲、养女、外姓寄居等解释。`,
+    "同一家族、同一府邸或同一宗族内的亲兄弟姐妹，默认必须同姓；如果正文写不同姓，必须明确说明是表亲、继亲、养女、外姓寄居或改姓，否则视为人物关系错误。"
+  ];
+}
+
+function buildAddressFormRules(context: {
+  projectDescription?: string;
+  bible: StoredWritingBible;
+  plotState: StoredPlotState;
+  taskCard?: Pick<StoredWritingTaskCard, "chapterGoal" | "rulesNotToBreak">;
+}) {
+  const text = [
+    context.projectDescription,
+    context.bible.workType,
+    context.bible.corePleasure,
+    context.bible.immutableSettings,
+    context.bible.narrativeTaboos,
+    context.bible.styleGuide,
+    context.plotState.currentMap,
+    context.taskCard?.chapterGoal,
+    context.taskCard?.rulesNotToBreak.join("、")
+  ].join("\n");
+
+  if (!/古言|古风|古代|宅斗|内宅|后宅|嫡|庶|世家|宗族|家族|门第|府邸|府中|府里|府上|院里|院中/.test(text)) {
+    return [];
+  }
+
+  return [
+    "古言/古代府邸/内宅称谓必须统一：未出阁府中女儿默认称“姑娘/排行姑娘”，自家婢女称女主“姑娘”或“排行姑娘”；不要在“姑娘/小姐”之间摇摆。",
+    "若正文使用“小姐”，必须是本书创作圣经已明确采用的称谓体系；否则古言内宅默认使用“姑娘”。"
+  ];
+}
+
 function fixCharacterPronouns(content: string, characters: StoredCharacterProfile[]) {
   return characters.reduce((text, character) => {
     const gender = inferCharacterPronoun(character);
@@ -1677,6 +1741,8 @@ function fixCharacterPronouns(content: string, characters: StoredCharacterProfil
 
 function buildNarrativeDictionRules(context: ChapterDraftContext) {
   const pronounRules = buildCharacterPronounRules(context.characters);
+  const familyNameRules = buildFamilyNameConsistencyRules(context.characters);
+  const addressFormRules = buildAddressFormRules(context);
   const premiseAnchorRules = buildPremiseAnchorRules({
     projectName: context.projectName,
     projectDescription: context.projectDescription,
@@ -1700,6 +1766,8 @@ function buildNarrativeDictionRules(context: ChapterDraftContext) {
     context.projectDescription
       ? `项目简介是核心承诺参考：正文不要与「${context.projectDescription}」中的主角身份、初始危机、金手指机制和核心卖点明显冲突；具体桥段以任务卡为准。`
       : "",
+    ...familyNameRules,
+    ...addressFormRules,
     "创作圣经 immutableSettings、narrativeTaboos、corePleasure、styleGuide 中的主分类、题材边界、作品标签和禁止项都是硬约束；如果任务卡与圣经冲突，优先遵守圣经。",
     ...premiseAnchorRules,
     ...mechanismIntegrityRules,
@@ -1795,6 +1863,13 @@ export function sanitizeChapterDraftDiction(content: string, context: ChapterDra
 }
 
 export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
+  const familyNameRules = buildFamilyNameConsistencyRules(context.characters);
+  const addressFormRules = buildAddressFormRules({
+    projectDescription: context.projectDescription,
+    bible: context.bible,
+    plotState: context.plotState,
+    taskCard: context.userInput?.chapterGoal ? { chapterGoal: context.userInput.chapterGoal, rulesNotToBreak: [] } : undefined
+  });
   const premiseAnchorRules = buildPremiseAnchorRules({
     projectName: context.projectName,
     projectDescription: context.projectDescription,
@@ -1843,6 +1918,8 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "latestDraftActualEnding 是上一章真实正文落点；continuity 必须优先承接这个落点。lastLedger.cliffhanger 和旧任务卡 endingHook 只能辅助，不能覆盖真实正文。",
               "如果 latestDraftActualEnding 与 lastLedger.cliffhanger、旧任务卡钩子或主线状态不一致，以 latestDraftActualEnding 为准；缺失事件只能写成后续待发生，不能写成已经发生。",
               "如果 projectDescription 不为空，它是本书核心承诺参考，任务卡不要明显违背简介里的主角身份、初始危机、金手指机制和核心卖点。",
+              ...familyNameRules,
+              ...addressFormRules,
               ...premiseAnchorRules,
               ...mechanismIntegrityRules,
               ...longFormPlanRules,
@@ -2340,6 +2417,13 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
 
 export async function reviewChapterDraftWithAi(context: ReviewContext) {
   try {
+    const familyNameRules = buildFamilyNameConsistencyRules(context.characters);
+    const addressFormRules = buildAddressFormRules({
+      projectDescription: context.projectDescription,
+      bible: context.bible,
+      plotState: context.plotState,
+      taskCard: context.taskCard
+    });
     const premiseAnchorRules = buildPremiseAnchorRules({
       projectName: context.projectName,
       projectDescription: context.projectDescription,
@@ -2377,6 +2461,10 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
               foreshadowings: context.foreshadowings,
               reviewRules: [
                 "必须检查正文是否偏离创作圣经中的目标读者、作品类型、主分类、题材边界、作品标签和禁止偏离项。",
+                ...familyNameRules,
+                ...addressFormRules,
+                "必须检查称谓体系是否统一：古言、古代府邸或内宅语境里，自家婢女称未出阁女主通常用“姑娘/排行姑娘”；若正文同时混用“小姐/姑娘”且无设定说明，应指出称谓漂移并给出统一修改建议。",
+                "必须检查人物亲属关系与姓氏是否一致：同一家族、同一府邸、宗族内的嫡姐、庶姐、兄弟、父女等亲属默认同姓；若正文写成不同姓且未解释为表亲、继亲、养女或外姓寄居，必须作为 high severity 的人物关系错误指出。",
                 ...premiseAnchorRules,
                 ...mechanismIntegrityRules,
                 ...longFormPlanRules,
@@ -2393,7 +2481,9 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
                 "如果正文存在明显 AI 味，即使章末钩子也有问题，也不能只报钩子；AI 味问题必须单独列出。",
                 "problem、location、suggestion 和 overall 都是给用户看的中文文案，不要写 characters、taskCard、chapterGoal、mainPlotProgress、pleasurePoint、endingHook、plotState、bible、ledger、draft、cliffhanger、payoff、style 等内部字段名；请改写成人物档案、章节任务卡、本章目标、主线推进、爽点回报、章末钩子、主线状态、创作圣经、章节台账、正文草稿、风格。",
                 "不要把人物档案、章节台账或代词推断说成“创作圣经明确规定”。只有 bible 字段原文直接写明的内容，才能称为创作圣经设定；人物姓名、身份、代词、已知/未知信息应称为人物档案或正文证据。",
-                "每条 issue 必须可执行：location 优先填写正文中可定位的原句或原段，不要只写“结尾段/全文”；suggestion 必须写成“将‘原句’改为‘改句’”或“在‘原句’后补入‘补写内容’”。",
+                "每条 issue 必须可执行：location 必须逐字摘录正文中真实存在的原句或原段，不允许概括、改写、仿写或拼接正文；如果无法逐字摘录，只能写“全文/相关段落”，并在 problem 里说明需人工定位。",
+                "suggestion 里的“原句”也必须逐字来自正文草稿；不能为了说明问题而编一个类似原句。如果无法提供真实原句，必须写“需手动处理：……”并说明处理方向。",
+                "自动替换建议必须写成“将‘正文真实原句’改为‘改句’”或“在‘正文真实原句’后补入‘补写内容’”。",
                 "如果 suggestion 使用“将原句改为改句”，改句必须是可以直接放回正文的完整句子或完整段落，不能只给半句话、摘要、修改方向或省略上下文；否则请明确写“需手动处理：……”并说明处理方向。",
                 "如果确实无法给出原句替换，也要在 problem 里说明为什么无法自动替换，并给出人工修改方向。"
               ],
