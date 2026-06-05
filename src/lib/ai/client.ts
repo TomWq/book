@@ -242,21 +242,60 @@ function escapeControlCharactersInJsonStrings(value: string) {
   return escaped;
 }
 
+function removeTrailingCommasOutsideJsonStrings(value: string) {
+  let normalized = "";
+  let inString = false;
+  let isEscaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (char === "\"" && !isEscaped) {
+      inString = !inString;
+    }
+
+    if (!inString && char === ",") {
+      let nextIndex = index + 1;
+
+      while (nextIndex < value.length && /\s/.test(value[nextIndex])) {
+        nextIndex += 1;
+      }
+
+      if (value[nextIndex] === "}" || value[nextIndex] === "]") {
+        continue;
+      }
+    }
+
+    normalized += char;
+    isEscaped = char === "\\" && !isEscaped;
+
+    if (char !== "\\" && isEscaped) {
+      isEscaped = false;
+    }
+  }
+
+  return normalized;
+}
+
 function parseJsonCandidate<T>(candidate: string): T {
   try {
     return JSON.parse(candidate) as T;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
 
+    if (/Expected double-quoted property name|Unexpected token.*}/i.test(message)) {
+      return JSON.parse(removeTrailingCommasOutsideJsonStrings(candidate)) as T;
+    }
+
     if (/control character|bad escaped character|unterminated string/i.test(message)) {
-      return JSON.parse(escapeControlCharactersInJsonStrings(candidate)) as T;
+      return JSON.parse(removeTrailingCommasOutsideJsonStrings(escapeControlCharactersInJsonStrings(candidate))) as T;
     }
 
     throw error;
   }
 }
 
-function parseJsonContent<T>(content: string): T {
+function parseJsonContent<T>(content: string, options: { warn?: boolean } = {}): T {
   const candidate = extractJsonCandidate(content);
 
   try {
@@ -264,7 +303,7 @@ function parseJsonContent<T>(content: string): T {
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
 
-    if (detail) {
+    if (detail && options.warn !== false) {
       console.warn("[ai-json] JSON 解析失败：", detail);
     }
 
@@ -332,7 +371,7 @@ async function requestJsonRepair<T>(
       throw new Error("AI JSON 修复响应缺少 message.content");
     }
 
-    return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+    return attachAiTokenUsage(parseJsonContent<T>(content, { warn: false }), normalizeTokenUsage(payload?.usage));
   } finally {
     timeout.clear();
   }
@@ -382,7 +421,7 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
       if (finishReason === "length") {
         if (content && typeof content === "string") {
           try {
-            return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+            return attachAiTokenUsage(parseJsonContent<T>(content, { warn: false }), normalizeTokenUsage(payload?.usage));
           } catch {
             const repaired = await requestJsonRepair<T>(
               config,
@@ -407,7 +446,7 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
     }
 
     try {
-      return attachAiTokenUsage(parseJsonContent<T>(content), normalizeTokenUsage(payload?.usage));
+      return attachAiTokenUsage(parseJsonContent<T>(content, { warn: false }), normalizeTokenUsage(payload?.usage));
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
 

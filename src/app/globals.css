@@ -7546,6 +7546,13 @@ body.update-prompt-open .floating-ai-launcher {
   color: var(--text);
 }
 
+.long-form-review-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
 .long-form-review-form {
   display: flex;
   justify-content: flex-start;
@@ -13419,6 +13426,13 @@ body.update-prompt-open .floating-ai-launcher {
   gap: 10px;
 }
 
+.inline-action-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .title-style-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -13493,6 +13507,17 @@ body.update-prompt-open .floating-ai-launcher {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.title-assist-error {
+  justify-self: stretch;
+  padding: 8px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  font-weight: 800;
+  line-height: 1.5;
 }
 
 .mini-action-button {

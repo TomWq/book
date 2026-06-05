@@ -114,6 +114,19 @@ function textList(value: unknown) {
     : [];
 }
 
+function reviewStepList(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => objectRecord(item))
+        .map((item) => ({
+          name: String(item.name ?? "").trim(),
+          passed: item.passed,
+          incomplete: item.incomplete === true
+        }))
+        .filter((item) => item.name)
+    : [];
+}
+
 function isAdviceAlreadyStored(advice: string, storedRules: string[]) {
   const normalizedAdvice = advice.replace(/\s+/g, "");
 
@@ -138,6 +151,37 @@ function displayReviewText(value: string) {
     .replace(/\bprogressionRules\b/g, "任务卡硬规则")
     .replace(/\bpost100Pacing\b/g, "后续阶段节奏")
     .replace(/\bfirst100Pacing\b/g, "前段阶段节奏");
+}
+
+function reviewAdviceMode(items: string[]) {
+  const text = items.join(" ");
+  const hasOriginalityAdvice = /知名|IP|同人|原创|角色名|势力名|专有设定|版权|替换/.test(text);
+  const hasCommitmentAdvice = /感情|归属|开放|待确认|提前|揭示|真相|身份|终局|幕后/.test(text);
+
+  if (hasOriginalityAdvice && hasCommitmentAdvice) {
+    return {
+      mode: "mark_forbidden" as const,
+      label: "采纳为审查规则",
+      pendingTitle: "正在写入审查规则",
+      successMessage: "已写入审查规则"
+    };
+  }
+
+  if (hasOriginalityAdvice) {
+    return {
+      mode: "mark_forbidden" as const,
+      label: "采纳为原创化规则",
+      pendingTitle: "正在写入原创化规则",
+      successMessage: "已写入原创化规则"
+    };
+  }
+
+  return {
+    mode: "mark_no_early_reveal" as const,
+    label: "采纳为禁止提前揭示",
+    pendingTitle: "正在写入禁止提前揭示",
+    successMessage: "已写入禁止提前揭示"
+  };
 }
 
 function displayJobError(value: string) {
@@ -243,10 +287,12 @@ export default async function ProjectStatePage({
   const reviewIssues = textList(reviewResult.issues);
   const unresolvedCommitmentIssues = textList(reviewResult.unresolvedCommitmentIssues);
   const repairInstructions = textList(reviewResult.repairInstructions);
+  const reviewSteps = reviewStepList(reviewResult.reviewSteps);
   const storedReviewRules = [...confirmedFacts, ...doNotChange, ...doNotRevealEarly];
   const unresolvedRepairInstructions = repairInstructions.filter(
     (item) => !isAdviceAlreadyStored(item, storedReviewRules)
   );
+  const reviewAdviceAction = reviewAdviceMode(unresolvedRepairInstructions);
   const reviewResolvedByRules = repairInstructions.length > 0 && unresolvedRepairInstructions.length === 0;
   const hasReviewResult = latestReviewLongFormPlanJob?.status === "succeeded" && "passed" in reviewResult;
   const reviewResolvedByUser =
@@ -438,6 +484,18 @@ export default async function ProjectStatePage({
                     {[...reviewIssues, ...unresolvedCommitmentIssues].slice(0, 4).map((item) => (
                       <div key={item}>- {displayReviewText(item)}</div>
                     ))}
+                    {reviewSteps.length > 0 ? (
+                      <div className="long-form-review-steps" aria-label="审查步骤">
+                        {reviewSteps.map((step) => (
+                          <span
+                            key={step.name}
+                            className={step.incomplete ? "pill warning" : step.passed === false ? "pill danger" : "pill success"}
+                          >
+                            {step.name}：{step.incomplete ? "未完成" : step.passed === false ? "有问题" : "通过"}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     {unresolvedRepairInstructions.length > 0 ? (
                       <div className="muted">建议：{unresolvedRepairInstructions.slice(0, 2).map(displayReviewText).join("；")}</div>
                     ) : null}
@@ -452,15 +510,15 @@ export default async function ProjectStatePage({
                           action: "resolve_long_form_open_question",
                           question: unresolvedRepairInstructions[0],
                           resolution: unresolvedRepairInstructions.join("；"),
-                          mode: "mark_no_early_reveal",
+                          mode: reviewAdviceAction.mode,
                           source: "review_advice"
                         }}
-                        pendingTitle="正在写入禁止提前揭示"
+                        pendingTitle={reviewAdviceAction.pendingTitle}
                         pendingDescription="正在把审查建议同步到长篇规划事实锁。"
-                        successMessage="已写入禁止提前揭示"
+                        successMessage={reviewAdviceAction.successMessage}
                       >
                         <button className="button tiny primary" type="submit">
-                          {unresolvedRepairInstructions.length > 1 ? "采纳剩余建议" : "采纳为禁止提前揭示"}
+                          {unresolvedRepairInstructions.length > 1 ? "采纳这些建议" : reviewAdviceAction.label}
                         </button>
                       </ApiForm>
                     ) : null}

@@ -54,6 +54,11 @@ type CharacterNameSuggestion = {
   name: string;
 };
 
+type TitleSuggestionBatch = {
+  contextKey: string;
+  titles: string[];
+};
+
 type ProjectFormDraft = {
   name: string;
   titleConcept: string;
@@ -178,6 +183,54 @@ function createCharacterDraft(role: CharacterRole = "男主", name = ""): Charac
   };
 }
 
+function normalizeTitleContextPart(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function hasConcreteTitleDirection(values: Array<string | undefined>) {
+  return values
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .some((item) => {
+      const parts = item.split(/[，,、/；;\s]+/).map(normalizeTitleContextPart).filter(Boolean);
+      const compact = normalizeTitleContextPart(item).replace(/[，,、/；;\s]/g, "");
+
+      if (parts.length >= 2 && parts.every((part) => part.length <= 6)) {
+        return false;
+      }
+
+      return compact.length >= 8;
+    });
+}
+
+function buildTitleSuggestionContextKey(input: {
+  titleNamingStyle: TitleNamingStyle;
+  tagTaxonomyStyle: TagTaxonomyStyle;
+  targetReader: TargetReader;
+  genre: string;
+  selectedTags: string[];
+  titleConcept: string;
+  coreSellingPoint: string;
+  goldenFinger: string;
+  openingHook: string;
+  description: string;
+  characters: CharacterDraft[];
+}) {
+  return JSON.stringify({
+    titleNamingStyle: input.titleNamingStyle,
+    tagTaxonomyStyle: input.tagTaxonomyStyle,
+    targetReader: input.targetReader,
+    genre: normalizeTitleContextPart(input.genre),
+    selectedTags: input.selectedTags.map(normalizeTitleContextPart).filter(Boolean).sort(),
+    titleConcept: normalizeTitleContextPart(input.titleConcept),
+    coreSellingPoint: normalizeTitleContextPart(input.coreSellingPoint),
+    goldenFinger: normalizeTitleContextPart(input.goldenFinger),
+    openingHook: normalizeTitleContextPart(input.openingHook),
+    description: normalizeTitleContextPart(input.description),
+    characterNames: input.characters.map((character) => normalizeTitleContextPart(character.name)).filter(Boolean)
+  });
+}
+
 function normalizeCharacters(rawCharacters: unknown, legacyNames: string[]): CharacterDraft[] {
   if (Array.isArray(rawCharacters)) {
     const characters = rawCharacters
@@ -228,7 +281,7 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
 
   return {
     name: stringValue(raw.name, 60),
-    titleConcept: stringValue(raw.titleConcept, 240),
+    titleConcept: stringValue(raw.titleConcept, 500),
     authorName: stringValue(raw.authorName, 20),
     coverImageUrl: stringValue(raw.coverImageUrl, 1_200_000),
     titleNamingStyle: isTitleNamingStyle(raw.titleNamingStyle) ? raw.titleNamingStyle : defaultDraft.titleNamingStyle,
@@ -264,9 +317,10 @@ export function ProjectForm() {
   const formRef = useRef<HTMLFormElement>(null);
   const draftRestoredRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [assistLoading, setAssistLoading] = useState<"" | "titles" | "protagonists" | "description">("");
+  const [assistLoading, setAssistLoading] = useState<"" | "titles" | "protagonists" | "description" | "titleConcept">("");
   const [error, setError] = useState("");
   const [assistError, setAssistError] = useState("");
+  const [titleAssistError, setTitleAssistError] = useState("");
   const [name, setName] = useState("");
   const [titleConcept, setTitleConcept] = useState("");
   const [authorName, setAuthorName] = useState("");
@@ -284,7 +338,7 @@ export function ProjectForm() {
   const [isAiCoverDialogOpen, setIsAiCoverDialogOpen] = useState(false);
   const [coverPreviewError, setCoverPreviewError] = useState("");
   const [activeTagSection, setActiveTagSection] = useState<TagSectionKey>("mainCategories");
-  const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
+  const [titleSuggestionBatch, setTitleSuggestionBatch] = useState<TitleSuggestionBatch | null>(null);
   const [protagonistSuggestions, setProtagonistSuggestions] = useState<CharacterNameSuggestion[]>([]);
   const [activeStep, setActiveStep] = useState<CreationStepId>("book-step-identity");
   const [coreSellingPoint, setCoreSellingPoint] = useState("");
@@ -313,6 +367,36 @@ export function ProjectForm() {
   const selectedRoleCount = selectedTags.filter((tag) => roleTagSet.has(tag)).length;
   const currentSubCategories = currentQidianCategory?.subCategories ?? [];
   const selectedSubCategory = selectedTags.find((tag) => currentSubCategories.includes(tag)) ?? "";
+  const titleSuggestionContextKey = useMemo(
+    () => buildTitleSuggestionContextKey({
+      titleNamingStyle,
+      tagTaxonomyStyle,
+      targetReader,
+      genre,
+      selectedTags,
+      titleConcept,
+      coreSellingPoint,
+      goldenFinger,
+      openingHook,
+      description,
+      characters
+    }),
+    [
+      titleNamingStyle,
+      tagTaxonomyStyle,
+      targetReader,
+      genre,
+      selectedTags,
+      titleConcept,
+      coreSellingPoint,
+      goldenFinger,
+      openingHook,
+      description,
+      characters
+    ]
+  );
+  const currentTitleSuggestions =
+    titleSuggestionBatch?.contextKey === titleSuggestionContextKey ? titleSuggestionBatch.titles : [];
 
   useEffect(() => {
     setIsMounted(true);
@@ -601,7 +685,7 @@ export function ProjectForm() {
       .slice(0, maxProjectCharacters);
   }
 
-  function getCurrentContext() {
+  function getCurrentContext(options: { descriptionAssistMode?: "generate" | "polish" } = {}) {
     return {
       name,
       genre,
@@ -610,7 +694,7 @@ export function ProjectForm() {
       tagTaxonomyStyle,
       descriptionWritingStyle,
       titleConcept,
-      avoidTitles: titleSuggestions,
+      avoidTitles: currentTitleSuggestions,
       tags: selectedTags,
       protagonistNames: getFilledCharacters().map((character) => character.name),
       protagonistCharacters: characters.map((character) => ({
@@ -620,15 +704,49 @@ export function ProjectForm() {
       coreSellingPoint,
       goldenFinger,
       openingHook,
-      description,
+      description: options.descriptionAssistMode === "polish" ? description : "",
+      descriptionAssistMode: options.descriptionAssistMode ?? "generate",
       workLengthType,
       targetTotalWords
     };
   }
 
-  async function runAssist(action: "titles" | "protagonists" | "description") {
+  async function runAssist(
+    action: "titles" | "protagonists" | "description" | "titleConcept",
+    options: { descriptionAssistMode?: "generate" | "polish" } = {}
+  ) {
     setAssistLoading(action);
     setAssistError("");
+    if (action === "titles" || action === "titleConcept") {
+      setTitleAssistError("");
+    }
+
+    if (action === "titleConcept") {
+      const hasAnyTitleContext = [
+        titleConcept,
+        genre,
+        selectedTags.join(" "),
+        coreSellingPoint,
+        openingHook,
+        goldenFinger,
+        description,
+        ...getFilledCharacters().map((character) => character.name)
+      ].some((item) => item.trim());
+
+      if (!hasAnyTitleContext) {
+        setAssistLoading("");
+        setTitleAssistError("先写一点想法，或先选择主分类、标签、读者，再让 AI 帮你整理起名方向。");
+        return;
+      }
+    }
+
+    if (action === "titles") {
+      if (!titleConcept.trim()) {
+        setAssistLoading("");
+        setTitleAssistError("请先在书本名称上方填写起名前描述，再让 AI 按这个描述起名。");
+        return;
+      }
+    }
 
     try {
       const response = await fetch("/api/projects/new/assist", {
@@ -636,7 +754,7 @@ export function ProjectForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action,
-          ...getCurrentContext()
+          ...getCurrentContext(options)
         })
       });
       const payload = await response.json().catch((e) => ({ error: String(e) }));
@@ -652,7 +770,13 @@ export function ProjectForm() {
           ? result.titles.map((item: unknown) => String(item).trim()).filter(Boolean)
           : [];
 
-        setTitleSuggestions(titles);
+        setTitleSuggestionBatch({
+          contextKey: titleSuggestionContextKey,
+          titles
+        });
+        if (titles.length === 0) {
+          setTitleAssistError("这轮 AI 起名质量不达标，已被筛选拦下。请直接再点一次 AI 起名，系统会避开本轮失败方向重新生成。");
+        }
         if (titles[0]) {
           setName(titles[0].slice(0, 60));
         }
@@ -720,8 +844,25 @@ export function ProjectForm() {
           setDescription(nextDescription.slice(0, 500));
         }
       }
+
+      if (action === "titleConcept") {
+        const nextTitleConcept = String(result.titleConcept ?? "").trim();
+
+        if (nextTitleConcept) {
+          setTitleConcept(nextTitleConcept.slice(0, 500));
+          setTitleAssistError("");
+        } else {
+          setTitleAssistError("AI 没有整理出可用的起名方向，请先补一点主角处境、目标或读者期待。");
+        }
+      }
     } catch (assistError) {
-      setAssistError(assistError instanceof Error ? assistError.message : "AI 辅助生成失败");
+      const message = assistError instanceof Error ? assistError.message : "AI 辅助生成失败";
+
+      if (action === "titles" || action === "titleConcept") {
+        setTitleAssistError(message);
+      } else {
+        setAssistError(message);
+      }
     } finally {
       setAssistLoading("");
     }
@@ -990,14 +1131,26 @@ export function ProjectForm() {
           </div>
 
           <div className="field">
-            <div className="field-label">起名构思（可选）</div>
+            <div className="field-label field-label-row">
+              <span>AI 起名前先填这里</span>
+              <button
+                className="mini-action-button"
+                type="button"
+                onClick={() => runAssist("titleConcept")}
+                disabled={Boolean(assistLoading)}
+              >
+                {assistLoading === "titleConcept" ? "润色中..." : "AI 润色方向"}
+              </button>
+            </div>
             <textarea
               value={titleConcept}
               onChange={(event) => setTitleConcept(event.target.value)}
-              placeholder="可先不填；如果暂时想不出书名，就写题材、主角处境、核心冲突和爽点关键词，让 AI 据此起名"
-              maxLength={240}
+              placeholder="写给 AI 起名用，可以像备忘一样写：主角一开始是什么身份或处境，后面想走到什么位置；读者最期待主角靠什么反击、拿回什么；整体想要什么气质，尽量避开什么联想。"
+              maxLength={500}
             />
-            <div className="field-hint">可选，留空也能直接让 AI 按当前题材起名。{titleConcept.length}/240</div>
+            <div className="field-hint">
+              这是 AI 起名的主要依据；“AI 润色方向”会整理你在上面写的粗略想法，让它更适合拿去起名，不会直接生成书名。{titleConcept.length}/500
+            </div>
           </div>
 
           <div className="field">
@@ -1009,7 +1162,7 @@ export function ProjectForm() {
                 onClick={() => runAssist("titles")}
                 disabled={Boolean(assistLoading)}
               >
-                {assistLoading === "titles" ? "生成中..." : titleConcept.trim() ? "AI 按构思起名" : "AI 起名"}
+                {assistLoading === "titles" ? "生成中..." : titleConcept.trim() ? "AI 按方向起名" : "AI 起名"}
               </button>
             </div>
             <div className="title-style-picker" aria-label="AI 起名风格">
@@ -1041,8 +1194,9 @@ export function ProjectForm() {
               </label>
             </div>
             <div className="assist-context-hint">
-              AI 起名会参考：{titleNamingStyle === "qidian" ? "起点风格" : "番茄小说风格"}、起名构思、读者与标签里的内容，所以调整下方信息会影响起名结果。
+              AI 起名会参考：{titleNamingStyle === "qidian" ? "起点风格" : "番茄小说风格"}、起名方向素材、读者与标签；其中方向素材会直接影响书名的主体、目标和爽点。
             </div>
+            {titleAssistError ? <div className="field-hint title-assist-error">{titleAssistError}</div> : null}
             <input
               name="name"
               value={name}
@@ -1053,11 +1207,11 @@ export function ProjectForm() {
             />
             <div className="field-hint">
               {name.length}/60
-              {titleNamingStyle === "fanqie" ? " · AI 起名建议 8-24 字" : " · AI 起名建议 2-12 字"}
+              {titleNamingStyle === "fanqie" ? " · AI 起名按番茄小说风格生成" : " · AI 起名按起点风格生成"}
             </div>
-            {titleSuggestions.length > 0 ? (
+            {currentTitleSuggestions.length > 0 ? (
               <div className="assist-suggestion-list">
-                {titleSuggestions.map((title) => (
+                {currentTitleSuggestions.map((title) => (
                   <button
                     key={title}
                     className="assist-suggestion"
@@ -1312,7 +1466,7 @@ export function ProjectForm() {
                 name="coreSellingPoint"
                 value={coreSellingPoint}
                 onChange={(event) => setCoreSellingPoint(event.target.value)}
-                placeholder="例如：被误判的废柴，用系统反打所有人"
+                placeholder="例如：主角被长期低估，但能用独特规则扭转局面"
               />
             </div>
             <div className="field">
@@ -1321,7 +1475,7 @@ export function ProjectForm() {
                 name="goldenFinger"
                 value={goldenFinger}
                 onChange={(event) => setGoldenFinger(event.target.value)}
-                placeholder="例如：情绪值系统 / 旧神契约 / 重生记忆"
+                placeholder="例如：隐藏能力 / 资源渠道 / 特殊记忆 / 代价规则"
               />
             </div>
           </div>
@@ -1332,25 +1486,32 @@ export function ProjectForm() {
               name="openingHook"
               value={openingHook}
               onChange={(event) => setOpeningHook(event.target.value)}
-              placeholder="例如：退婚当天，主角觉醒隐藏身份，但必须先装废物"
+              placeholder="例如：主角在第一场公开危机里被迫做出反常选择"
             />
           </div>
 
           <div className="field">
             <div className="field-label field-label-row">
               <span>作品简介</span>
-              <button
-                className="mini-action-button"
-                type="button"
-                onClick={() => runAssist("description")}
-                disabled={Boolean(assistLoading)}
-              >
-                {assistLoading === "description"
-                  ? "润色中..."
-                  : description.trim()
-                    ? "AI 润色扩写"
-                    : "AI 生成简介"}
-              </button>
+              <div className="inline-action-group">
+                <button
+                  className="mini-action-button"
+                  type="button"
+                  onClick={() => runAssist("description", { descriptionAssistMode: "generate" })}
+                  disabled={Boolean(assistLoading)}
+                >
+                  {assistLoading === "description" ? "处理中..." : "AI 生成简介"}
+                </button>
+                <button
+                  className="mini-action-button"
+                  type="button"
+                  onClick={() => runAssist("description", { descriptionAssistMode: "polish" })}
+                  disabled={Boolean(assistLoading) || !description.trim()}
+                  title="按当前选择的平台简介风格润色你已经写好的简介"
+                >
+                  AI 润色简介
+                </button>
+              </div>
             </div>
             <div className="title-style-picker" aria-label="AI 简介风格">
               <label>
@@ -1381,7 +1542,7 @@ export function ProjectForm() {
               </label>
             </div>
             <div className="assist-context-hint">
-              AI 简介会按{descriptionWritingStyle === "qidian" ? "起点简介" : "番茄简介"}生成，并参考上方题材、标签、主角、卖点和开局钩子。
+              AI 简介会按{descriptionWritingStyle === "qidian" ? "起点简介" : "番茄简介"}生成，并参考上方题材、标签、主角、卖点、开局钩子，以及“AI 起名前先填这里”的方向素材。
             </div>
             <textarea
               name="description"

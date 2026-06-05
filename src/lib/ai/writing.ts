@@ -159,20 +159,26 @@ function cleanPromptText(value: string, limit = 260) {
 function buildProjectFactGuardRules(context: LongFormPlanContext) {
   const projectDescription = context.projectDescription;
   const description = cleanPromptText(projectDescription ?? "", 900);
+  const title = cleanPromptText(context.projectName, 180);
+  const titleRule = title
+    ? `书名“${title}”只能作为读者期待、包装方向和卖点语气参考，不是事实源；不得仅凭书名把动作目标、结局承诺、人物关系、具体敌人、资源归属或终局状态写入 confirmedFacts/doNotChange。若这些信息只出现在书名里，必须放到 tagPromises、corePromise 或 openQuestions。`
+    : "书名只能作为读者期待、包装方向和卖点语气参考，不是事实源；不得仅凭书名把动作目标、结局承诺、人物关系、具体敌人、资源归属或终局状态写入 confirmedFacts/doNotChange。";
 
   if (!description) {
     return [
+      titleRule,
       "项目简介为空时，必须以创作圣经、主线状态、人物档案和伏笔表作为事实源；confirmedFacts 只能写这些事实源已明确的信息。",
       "如果所有项目事实源都没有明确某个核心方向，openQuestions 必须列出需要作者确认的方向；不要擅自补出不可逆核心关系、最终归属、亲缘身份、重大真相或终局走向。"
     ];
   }
 
   return [
+    titleRule,
     `项目简介是重要事实源：${description}`,
     "项目事实源包括：项目简介、创作圣经、主线状态、人物档案、伏笔表和拆书参考中已迁移到本项目的设定。规划不得只看简介，也不得忽略用户已在状态页维护的设定。",
     "必须先输出结构化“项目事实锁”：confirmedFacts 写所有项目事实源已明确且彼此不冲突的事实；openQuestions 写事实源没有定死或互相有张力的待确认点；doNotChange 写不得改写的事实；doNotRevealEarly 写前期不得提前揭开的核心信息；tagPromises 写题材标签和卖点承诺。",
     "规划不得改写项目事实源里的已发生事实、人物关系、身份状态、核心事件、能力/金手指来源、主线目标、人物当前状态、伏笔限制和读者承诺。",
-    "项目事实源中已经明确且不冲突的事实必须原样承接；存在歧义、张力、缺口或跨字段冲突的地方，必须标成“待确认/需作者确认”，不能擅自裁决。",
+    "项目事实源中已经明确且不冲突的事实必须原样承接；存在歧义、张力、缺口、标题暗示或跨字段冲突的地方，必须标成“待确认/需作者确认”，不能擅自裁决。",
     "凡是写入 openQuestions 或 doNotRevealEarly 的事项，后续 volumePlan、first10Chapters、first100Pacing、post100Pacing 和 progressionRules 中不得再用确定语气写成已发生/必然发生；如必须提及，只能写“可能/待确认/保留伏笔/视作者选择”。",
     "不要把项目事实源里的核心事件擅自改写成另一种真相；除非事实源明确说明，否则不能把未写出的反转当成既定事实。",
     "不要擅自决定最终情感归属、亲缘/血脉身份、幕后真相、政权/阵营终局等不可逆设定；除非项目事实源已明确，否则只能作为可选方向或待确认伏笔。",
@@ -648,6 +654,47 @@ function normalizePost100StageText(value: unknown) {
   return cleanPromptText(String(value ?? ""), 520);
 }
 
+function keywordTokensFromText(value: string) {
+  const normalized = value.replace(/[^\p{Script=Han}A-Za-z0-9]+/gu, " ");
+  const tokens = normalized.match(/[\p{Script=Han}A-Za-z0-9]{2,}/gu) ?? [];
+  const seen = new Set<string>();
+
+  return tokens
+    .map((token) => token.trim())
+    .filter((token) => {
+      if (token.length < 2 || token.length > 18 || seen.has(token)) {
+        return false;
+      }
+
+      seen.add(token);
+      return true;
+    })
+    .slice(0, 8);
+}
+
+function extractPlanEvidenceForQuestions(plan: AiLongFormPlanPayload) {
+  const questions = [...plan.openQuestions, ...plan.doNotRevealEarly].slice(0, 12);
+  const tokens = keywordTokensFromText(questions.join(" "));
+  const planLines = [
+    plan.corePromise,
+    ...plan.confirmedFacts,
+    ...plan.doNotChange,
+    ...plan.first10Chapters,
+    ...plan.progressionRules,
+    ...plan.first100Pacing.split(/(?=第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章)|[。；;]/),
+    ...plan.post100Pacing.split(/(?=第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章)|[。；;]/)
+  ]
+    .map((line) => cleanPromptText(line, 220))
+    .filter(Boolean);
+
+  if (tokens.length === 0) {
+    return planLines.slice(0, 18);
+  }
+
+  const matched = planLines.filter((line) => tokens.some((token) => line.includes(token)));
+  return (matched.length > 0 ? matched : planLines).slice(0, 24);
+}
+
 function buildPacingTextFromStages(response: LongFormPost100StageResponse, requiredRanges: string[]) {
   const stages = Array.isArray(response.stages) ? response.stages : [];
 
@@ -658,7 +705,8 @@ function buildPacingTextFromStages(response: LongFormPost100StageResponse, requi
   return stages
     .map((stage, index) => {
       const requestedRange = requiredRanges[index]?.match(/第\d+-\d+章/)?.[0] ?? "";
-      const range = normalizePost100StageText(stage.range) || requestedRange || `第${index + 1}阶段`;
+      const aiRange = normalizePost100StageText(stage.range);
+      const range = requestedRange || (/\d+\s*-\s*\d+/.test(aiRange) ? aiRange : "") || `第${index + 1}阶段`;
       const parts = [
         ["阶段目标", stage.stageTarget],
         ["主要压力/对手", stage.pressure],
@@ -683,6 +731,12 @@ function buildPacingTextFromStages(response: LongFormPost100StageResponse, requi
     })
     .filter(Boolean)
     .join("\n");
+}
+
+function missingRequiredRanges(response: LongFormPost100StageResponse, requiredRanges: string[]) {
+  const stages = Array.isArray(response.stages) ? response.stages : [];
+
+  return requiredRanges.slice(stages.length);
 }
 
 function buildFirst100PacingFromResponse(response: LongFormStageStructuredResponse, estimatedChapters: number) {
@@ -850,8 +904,61 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
       timeoutMs: 300000
     });
 
+    const missingRanges = missingRequiredRanges(post100Response, post100RequiredRanges);
+
+    if (missingRanges.length > 0) {
+      const supplementResponse = await requestAiJson<LongFormPost100StageResponse>({
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是长篇网文阶段规划补写师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只负责补齐缺失的章节阶段，每个阶段拆成 JSON 数组项。"
+          },
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                ...promptContext,
+                corePromise: initialPlan.corePromise,
+                confirmedFacts: initialPlan.confirmedFacts,
+                openQuestions: initialPlan.openQuestions,
+                doNotChange: initialPlan.doNotChange,
+                doNotRevealEarly: initialPlan.doNotRevealEarly,
+                tagPromises: initialPlan.tagPromises,
+                existingPost100Pacing: buildPacingTextFromStages(post100Response, post100RequiredRanges),
+                missingRequiredRanges: missingRanges,
+                rules: [
+                  "只补 missingRequiredRanges 中列出的阶段，不要重写已有阶段。",
+                  "stages 数组必须与 missingRequiredRanges 一一对应。",
+                  "每段必须填写 stageTarget、pressure、growthLimit、mapAndForces、payoffRhythm、foreshadowing、sideClosure、relationshipChange、stageHook、nextCondition。",
+                  "不得把 openQuestions、doNotRevealEarly 或待确认事项写成确定结局。"
+                ],
+                outputSchema: {
+                  stages:
+                    "array；每个 missingRequiredRanges 对应1项；每项字段：range, stageTarget, pressure, growthLimit, mapAndForces, payoffRhythm, foreshadowing, sideClosure, relationshipChange, stageHook, nextCondition"
+                }
+              },
+              null,
+              2
+            )
+          }
+        ],
+        temperature: 0.2,
+        maxTokens: Math.max(1800, missingRanges.length * 900),
+        timeoutMs: 180000
+      });
+      const mergedStages = [
+        ...(Array.isArray(post100Response.stages) ? post100Response.stages : []),
+        ...(Array.isArray(supplementResponse.stages) ? supplementResponse.stages : [])
+      ];
+
+      post100Response.stages = mergedStages;
+      post100Usage = combineAiTokenUsages([getAiTokenUsage(post100Response), getAiTokenUsage(supplementResponse)]);
+    } else {
+      post100Usage = getAiTokenUsage(post100Response);
+    }
+
     post100Pacing = buildPacingTextFromStages(post100Response, post100RequiredRanges);
-    post100Usage = getAiTokenUsage(post100Response);
   }
 
   const combinedPlan = {
@@ -870,13 +977,34 @@ type LongFormPlanReviewSlice = {
   repairInstructions?: string[];
 };
 
+function compactReviewInput(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return cleanPromptText(value, depth === 0 ? 1200 : 420);
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, depth === 0 ? 8 : 5).map((item) => compactReviewInput(item, depth + 1));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 10)
+        .map(([key, item]) => [key, compactReviewInput(item, depth + 1)])
+    );
+  }
+
+  return value;
+}
+
 function normalizeLongFormPlanReviewSlice(review: LongFormPlanReviewSlice) {
+  const issues = asTextList(review.issues).slice(0, 3);
   const unresolvedCommitmentIssues = asTextList(review.unresolvedCommitmentIssues).slice(0, 3);
 
   return {
-    passed: review.pass !== false && unresolvedCommitmentIssues.length === 0,
+    passed: review.pass !== false && issues.length === 0 && unresolvedCommitmentIssues.length === 0,
     incomplete: false,
-    issues: asTextList(review.issues).slice(0, 3),
+    issues,
     unresolvedCommitmentIssues,
     repairInstructions: asTextList(review.repairInstructions).slice(0, 3)
   };
@@ -887,38 +1015,41 @@ async function requestLongFormPlanReviewSlice(input: {
   facts: Record<string, unknown>;
   planPart: Record<string, unknown>;
   rules: string[];
+  maxTokens?: number;
 }) {
-  const requestPayload = {
+  const buildRequestPayload = (options?: { compact?: boolean; temperature?: number; maxTokens?: number }) => ({
     messages: [
       {
         role: "system" as const,
         content:
-          "你是长篇规划事实一致性审稿人。只输出一个合法 JSON 对象，不要 Markdown，不要解释。只判断当前片段，不重写规划，不硬编码任何题材规则。字符串必须用中文短句，不要输出 openQuestions、doNotRevealEarly 等英文字段名。"
+          "你是长篇规划事实一致性审稿人。只输出一个合法 JSON 对象，不要 Markdown，不要解释。只判断当前片段，不重写规划，不硬编码任何题材规则。输出总字数必须少于180字；字符串必须用中文短句，不要输出 openQuestions、doNotRevealEarly 等英文字段名。"
       },
       {
         role: "user" as const,
         content: JSON.stringify(
           {
             reviewTitle: input.title,
-            facts: input.facts,
-            planPart: input.planPart,
+            facts: options?.compact ? compactReviewInput(input.facts) : input.facts,
+            planPart: options?.compact ? compactReviewInput(input.planPart) : input.planPart,
             reviewRules: input.rules,
             outputSchema: {
               pass: "boolean",
-              issues: "string[]，最多2项，每项30字以内；没有则空数组",
-              unresolvedCommitmentIssues: "string[]，最多2项，每项30字以内；没有则空数组",
-              repairInstructions: "string[]，最多2项，每项30字以内；没有则空数组"
-            }
+              issues: "string[]，最多2项，每项24字以内；没有则空数组",
+              unresolvedCommitmentIssues: "string[]，最多2项，每项24字以内；没有则空数组",
+              repairInstructions: "string[]，最多2项，每项24字以内；没有则空数组"
+            },
+            hardLimit: "只返回这4个字段；每个数组最多2项；不要展开分析过程。"
           },
           null,
           2
         )
       }
     ],
-    temperature: 0.12,
-    maxTokens: 2000,
+    temperature: options?.temperature ?? 0.12,
+    maxTokens: options?.maxTokens ?? input.maxTokens ?? 3600,
     timeoutMs: 120000
-  };
+  });
+  const requestPayload = buildRequestPayload();
   let review: {
     pass?: boolean;
     issues?: string[];
@@ -931,12 +1062,12 @@ async function requestLongFormPlanReviewSlice(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
 
-    if (!/缺少 message\.content|响应缺少/i.test(message)) {
+    if (!/缺少 message\.content|响应缺少|截断|JSON 不完整|不是有效 JSON/i.test(message)) {
       throw error;
     }
 
     review = await requestAiJson<typeof review>({
-      ...requestPayload,
+      ...buildRequestPayload({ compact: true, temperature: 0, maxTokens: Math.max(input.maxTokens ?? 0, 4800) }),
       temperature: 0,
       timeoutMs: 180000
     });
@@ -996,6 +1127,34 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     ]
   });
 
+  const titleInferenceReview = await safeReviewLongFormPlanSlice({
+    title: "书名推断事实审查",
+    facts: {
+      projectName: context.projectName,
+      projectDescription: cleanPromptText(context.projectDescription ?? "", 700),
+      bible: {
+        corePleasure: cleanPromptText(context.bible.corePleasure, 220),
+        protagonistDesire: cleanPromptText(context.bible.protagonistDesire, 160),
+        immutableSettings: cleanPromptText(context.bible.immutableSettings, 260)
+      },
+      plotState: {
+        mainGoal: cleanPromptText(context.plotState.mainGoal, 160),
+        nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 160)
+      }
+    },
+    planPart: {
+      confirmedFacts: plan.confirmedFacts.slice(0, 12),
+      doNotChange: plan.doNotChange.slice(0, 12),
+      corePromise: cleanPromptText(plan.corePromise, 260),
+      tagPromises: plan.tagPromises.slice(0, 8)
+    },
+    rules: [
+      "书名只能作为读者期待和包装方向，不能单独作为已确定事实来源。",
+      "检查 confirmedFacts/doNotChange 是否把只存在于书名中的动作、目标、敌人、结局或人物关系写成既定事实。",
+      "如果同一信息在简介、创作圣经或主线状态中也明确出现，可视为通过；否则 pass=false，并建议移入标签承诺或待确认点。"
+    ]
+  });
+
   const commitmentReview = await safeReviewLongFormPlanSlice({
     title: "待确认点确定化审查",
     facts: {
@@ -1015,6 +1174,30 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     ]
   });
 
+  const irreversibleReview = await safeReviewLongFormPlanSlice({
+    title: "不可逆设定写死审查",
+    facts: {
+      openQuestions: plan.openQuestions.slice(0, 12),
+      doNotRevealEarly: plan.doNotRevealEarly.slice(0, 12),
+      riskTypes: [
+        "最终情感归属/CP",
+        "师徒或阵营绑定",
+        "亲缘/血脉/身份真相",
+        "幕后黑手/终极反派",
+        "终局胜负/登顶方式",
+        "核心机制最终解释"
+      ]
+    },
+    planPart: {
+      evidence: extractPlanEvidenceForQuestions(plan)
+    },
+    rules: [
+      "只审不可逆设定：最终情感归属、师徒绑定、亲缘身份、幕后真相、终局胜负、核心机制解释。",
+      "若这些事项在事实源或待确认点里未明确，却在规划证据中被写成确定发生，pass=false。",
+      "如果只是作为可能方向、保留伏笔、待作者确认，pass=true。"
+    ]
+  });
+
   const openingReview = await safeReviewLongFormPlanSlice({
     title: "前10章提前揭示审查",
     facts: {
@@ -1031,20 +1214,48 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     ]
   });
 
-  const reviews = [factReview, commitmentReview, openingReview];
+  const originalityReview = await safeReviewLongFormPlanSlice({
+    title: "原创合规审查",
+    facts: {
+      projectName: context.projectName,
+      projectDescription: cleanPromptText(context.projectDescription ?? "", 700),
+      narrativeTaboos: cleanPromptText(context.bible.narrativeTaboos, 260),
+      immutableSettings: cleanPromptText(context.bible.immutableSettings, 360)
+    },
+    planPart: {
+      confirmedFacts: plan.confirmedFacts.slice(0, 8),
+      first10Chapters: plan.first10Chapters.slice(0, 5),
+      first100Pacing: cleanPromptText(plan.first100Pacing, 900),
+      post100Pacing: cleanPromptText(plan.post100Pacing, 900),
+      progressionRules: plan.progressionRules.slice(0, 6)
+    },
+    rules: [
+      "检查规划是否直接使用或强化了知名作品的角色名、势力名、专有设定、标志性组织或同人化表达。",
+      "项目简介里出现的外部作品指向也应提示原创化风险：可以作为用户输入事实保留，但后续商业创作建议替换为原创名称和原创势力。",
+      "如果存在明显 IP/同人/版权风险，pass=false，并给出原创化建议。"
+    ]
+  });
+
+  const reviews = [factReview, titleInferenceReview, commitmentReview, irreversibleReview, openingReview, originalityReview];
   const hasIncompleteStep = reviews.some((review) => review.incomplete);
+  const hasReviewIssue = reviews.some(
+    (review) => review.issues.length > 0 || review.unresolvedCommitmentIssues.length > 0 || review.passed === false
+  );
   const result = {
-    passed: hasIncompleteStep ? null : reviews.every((review) => review.passed),
-    status: hasIncompleteStep ? "incomplete" : "complete",
+    passed: hasReviewIssue ? false : hasIncompleteStep ? null : reviews.every((review) => review.passed),
+    status: hasReviewIssue ? "complete" : hasIncompleteStep ? "incomplete" : "complete",
     issues: reviews.flatMap((review) => review.issues).slice(0, 6),
     unresolvedCommitmentIssues: reviews.flatMap((review) => review.unresolvedCommitmentIssues).slice(0, 6),
     repairInstructions: reviews.flatMap((review) => review.repairInstructions).slice(0, 6),
     reviewSteps: [
       { name: "事实锁审查", passed: factReview.passed, incomplete: factReview.incomplete === true },
+      { name: "书名推断审查", passed: titleInferenceReview.passed, incomplete: titleInferenceReview.incomplete === true },
       { name: "待确认点审查", passed: commitmentReview.passed, incomplete: commitmentReview.incomplete === true },
-      { name: "前10章审查", passed: openingReview.passed, incomplete: openingReview.incomplete === true }
+      { name: "不可逆设定审查", passed: irreversibleReview.passed, incomplete: irreversibleReview.incomplete === true },
+      { name: "前10章审查", passed: openingReview.passed, incomplete: openingReview.incomplete === true },
+      { name: "原创合规审查", passed: originalityReview.passed, incomplete: originalityReview.incomplete === true }
     ],
-    reviewError: hasIncompleteStep
+    reviewError: hasIncompleteStep && !hasReviewIssue
   };
 
   return attachAiTokenUsage(result, combineAiTokenUsages(reviews.map((review) => getAiTokenUsage(review))));

@@ -59,7 +59,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const rawAction = String(body.action ?? "");
   const action =
-    rawAction === "protagonists" || rawAction === "description" || rawAction === "titles"
+    rawAction === "protagonists" || rawAction === "description" || rawAction === "titles" || rawAction === "titleConcept"
       ? rawAction
       : "titles";
   const titleConcept = String(body.titleConcept ?? "");
@@ -80,6 +80,7 @@ export async function POST(request: Request) {
       workLengthType: readWorkLengthType(body.workLengthType),
       targetTotalWords: readTargetTotalWords(body.targetTotalWords),
       description: String(body.description ?? ""),
+      descriptionAssistMode: body.descriptionAssistMode === "polish" ? "polish" : "generate",
       titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie",
       tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",
       descriptionWritingStyle: body.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie",

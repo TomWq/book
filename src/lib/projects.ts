@@ -357,6 +357,10 @@ async function getCurrentUserFromStore(store: AppStore) {
     return null;
   }
 
+  if (repairDesktopWorkspaceOwnership(store, user)) {
+    await writeStore(store);
+  }
+
   session.lastSeenAt = now();
   return user;
 }
@@ -470,6 +474,157 @@ function claimLegacyWorkspace(store: AppStore, userId: string) {
   );
 }
 
+function countUserOwnedProjects(store: AppStore, userId: string) {
+  return store.projects.filter((project) => project.ownerUserId === userId).length;
+}
+
+function hasUserWorkspaceData(store: AppStore, userId: string) {
+  return (
+    countUserOwnedProjects(store, userId) > 0 ||
+    store.templates.some((template) => template.ownerUserId === userId) ||
+    (store.inspirations ?? []).some((inspiration) => inspiration.ownerUserId === userId) ||
+    (store.assistantThreads ?? []).some((thread) => thread.ownerUserId === userId) ||
+    normalizeStoredAiSettings(store.aiSettings).some((item) => item.userId === userId) ||
+    normalizeStoredCoverImageSettings(store.coverImageSettings).some((item) => item.userId === userId)
+  );
+}
+
+function isSameDesktopMachineUser(user: StoredUser, machineHash: string) {
+  return Boolean(
+    user.licenseCodePurpose !== "web" &&
+      (user.licenseCustomerId || user.licenseCodeHash) &&
+      (!user.licenseMachineHash || !machineHash || user.licenseMachineHash === machineHash)
+  );
+}
+
+function findReusableDesktopWorkspaceUser(store: AppStore, machineHash: string, excludeUserId?: string) {
+  return store.users
+    .filter((user) => user.id !== excludeUserId)
+    .filter((user) => isSameDesktopMachineUser(user, machineHash))
+    .filter((user) => hasUserWorkspaceData(store, user.id))
+    .slice()
+    .sort((a, b) => {
+      const leftProjectCount = countUserOwnedProjects(store, a.id);
+      const rightProjectCount = countUserOwnedProjects(store, b.id);
+
+      if (leftProjectCount !== rightProjectCount) {
+        return rightProjectCount - leftProjectCount;
+      }
+
+      const left = a.licenseActivatedAt ?? a.updatedAt ?? a.createdAt;
+      const right = b.licenseActivatedAt ?? b.updatedAt ?? b.createdAt;
+      return right.localeCompare(left);
+    })[0] ?? null;
+}
+
+function transferUserWorkspaceOwnership(store: AppStore, fromUserId: string, toUserId: string) {
+  if (fromUserId === toUserId) {
+    return false;
+  }
+
+  const timestamp = now();
+  let changed = false;
+
+  const transferOwner = <T extends { ownerUserId?: string; updatedAt?: string }>(items: T[]) => {
+    items.forEach((item) => {
+      if (item.ownerUserId === fromUserId) {
+        item.ownerUserId = toUserId;
+        item.updatedAt = timestamp;
+        changed = true;
+      }
+    });
+  };
+
+  transferOwner(store.projects);
+  transferOwner(store.templates);
+  transferOwner(store.inspirations ?? []);
+  transferOwner(store.assistantThreads ?? []);
+
+  store.aiJobs.forEach((job) => {
+    if (job.userId === fromUserId) {
+      job.userId = toUserId;
+      job.updatedAt = timestamp;
+      changed = true;
+    }
+  });
+
+  store.creditTransactions.forEach((transaction) => {
+    if (transaction.userId === fromUserId) {
+      transaction.userId = toUserId;
+      changed = true;
+    }
+  });
+
+  store.aiSettings = normalizeStoredAiSettings(store.aiSettings).map((item) => {
+    if (item.userId !== fromUserId) {
+      return item;
+    }
+
+    changed = true;
+    return { ...item, userId: toUserId, updatedAt: timestamp };
+  });
+
+  store.coverImageSettings = normalizeStoredCoverImageSettings(store.coverImageSettings).map((item) => {
+    if (item.userId !== fromUserId) {
+      return item;
+    }
+
+    changed = true;
+    return { ...item, userId: toUserId, updatedAt: timestamp };
+  });
+
+  store.coverImageUsages = (store.coverImageUsages ?? []).map((item) => {
+    if (item.userId !== fromUserId) {
+      return item;
+    }
+
+    changed = true;
+    return { ...item, userId: toUserId, updatedAt: timestamp };
+  });
+
+  const fromUser = store.users.find((user) => user.id === fromUserId);
+  const toUser = store.users.find((user) => user.id === toUserId);
+
+  if (fromUser && toUser) {
+    if (!toUser.penName && fromUser.penName) {
+      toUser.penName = fromUser.penName;
+      toUser.penNameSetAt = fromUser.penNameSetAt;
+      changed = true;
+    }
+
+    if (!toUser.assistantName && fromUser.assistantName) {
+      toUser.assistantName = fromUser.assistantName;
+      changed = true;
+    }
+
+    if (!toUser.onboardingCompletedAt && fromUser.onboardingCompletedAt) {
+      toUser.onboardingCompletedAt = fromUser.onboardingCompletedAt;
+      changed = true;
+    }
+
+    if (changed) {
+      fromUser.updatedAt = timestamp;
+      toUser.updatedAt = timestamp;
+    }
+  }
+
+  return changed;
+}
+
+function repairDesktopWorkspaceOwnership(store: AppStore, user: StoredUser) {
+  if (!isDesktopRuntime() || !isSubscriptionBillingMode() || countUserOwnedProjects(store, user.id) > 0) {
+    return false;
+  }
+
+  const sourceUser = findReusableDesktopWorkspaceUser(store, user.licenseMachineHash ?? "", user.id);
+
+  if (!sourceUser) {
+    return false;
+  }
+
+  return transferUserWorkspaceOwnership(store, sourceUser.id, user.id);
+}
+
 function createAuthServiceHooks(): AuthServiceHooks {
   return {
     claimLegacyWorkspace
@@ -485,27 +640,8 @@ function normalizeTitleCandidate(value: unknown) {
     .trim();
 }
 
-function collectProjectCreationAvoidTitles(store: AppStore, userId: string, explicitAvoidTitles: string[] = []) {
-  const ownedProjectNames = store.projects
-    .filter((project) => !project.ownerUserId || project.ownerUserId === userId)
-    .map((project) => project.name);
-  const recentJobTitles = store.aiJobs
-    .filter((job) => job.userId === userId && job.type === "project_creation_assist")
-    .slice(-40)
-    .flatMap((job) => {
-      const output = job.output && typeof job.output === "object" ? (job.output as Record<string, unknown>) : null;
-      const result = output?.result && typeof output.result === "object" ? (output.result as Record<string, unknown>) : null;
-      return Array.isArray(result?.titles) ? result.titles : [];
-    })
-    .map(normalizeTitleCandidate);
-
-  return Array.from(
-    new Set([
-      ...explicitAvoidTitles.map(normalizeTitleCandidate),
-      ...ownedProjectNames.map(normalizeTitleCandidate),
-      ...recentJobTitles
-    ].filter(Boolean))
-  ).slice(0, 120);
+function collectProjectCreationAvoidTitles(_store: AppStore, _userId: string, explicitAvoidTitles: string[] = []) {
+  return Array.from(new Set(explicitAvoidTitles.map(normalizeTitleCandidate).filter(Boolean))).slice(0, 40);
 }
 
 export async function getCurrentUser() {
@@ -745,8 +881,13 @@ export async function activateSubscriptionLicense(
   const machineHash = normalizeMachineHash(input.machineHash);
   syncLocalLicenseSnapshot(store, { license, codeHash, machineHash });
   const currentUser = options?.replaceExisting ? await getCurrentUserFromStore(store) : null;
-  const reusableUser = options?.replaceExisting ? currentUser ?? getDesktopLicenseCandidate(store).user : null;
+  const reusableUser = options?.replaceExisting
+    ? currentUser ?? getDesktopLicenseCandidate(store).user
+    : isDesktopRuntime()
+      ? findReusableDesktopWorkspaceUser(store, machineHash)
+      : null;
   let user = reusableUser ?? store.users.find((item) => item.licenseCodeHash === codeHash || item.licenseCustomerId === license.customerId);
+  const shouldReplaceAuthorization = Boolean(options?.replaceExisting || reusableUser);
 
   if (!user) {
     const { salt, hash } = hashPassword(randomUUID());
@@ -771,11 +912,11 @@ export async function activateSubscriptionLicense(
     };
     store.users.push(user);
   } else {
-    user.licenseCustomerId = options?.replaceExisting ? license.customerId : user.licenseCustomerId || license.customerId;
-    user.licenseCodeHash = options?.replaceExisting ? codeHash : user.licenseCodeHash || codeHash;
+    user.licenseCustomerId = shouldReplaceAuthorization ? license.customerId : user.licenseCustomerId || license.customerId;
+    user.licenseCodeHash = shouldReplaceAuthorization ? codeHash : user.licenseCodeHash || codeHash;
     user.licenseCodePurpose = "desktop";
-    user.licenseMachineHash = options?.replaceExisting ? machineHash : user.licenseMachineHash || machineHash;
-    user.licenseActivatedAt = options?.replaceExisting ? license.activatedAt || timestamp : user.licenseActivatedAt || license.activatedAt || timestamp;
+    user.licenseMachineHash = shouldReplaceAuthorization ? machineHash : user.licenseMachineHash || machineHash;
+    user.licenseActivatedAt = shouldReplaceAuthorization ? license.activatedAt || timestamp : user.licenseActivatedAt || license.activatedAt || timestamp;
     user.licenseExpiresAt = license.expiresAt || undefined;
     if (license.customerName) {
       user.name = license.customerName;
@@ -788,6 +929,8 @@ export async function activateSubscriptionLicense(
 
   if (store.projects.every((item) => !item.ownerUserId)) {
     claimLegacyWorkspace(store, user.id);
+  } else {
+    repairDesktopWorkspaceOwnership(store, user);
   }
 
   const token = randomUUID();
@@ -3211,6 +3354,20 @@ function getExpectedPost100StageStarts(estimatedChapters: number) {
   return starts;
 }
 
+function normalizeChapterRangeText(value: string) {
+  return value.replace(/[—–－~～至到]/g, "-");
+}
+
+function extractChapterRanges(value: string) {
+  const normalized = normalizeChapterRangeText(value);
+  const pattern = /第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g;
+
+  return Array.from(normalized.matchAll(pattern)).map((match) => ({
+    start: Number(match[1]),
+    end: Number(match[2])
+  })).filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end));
+}
+
 function extractLeadingChapterNumber(value: string) {
   const normalized = value.replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10));
   const match = normalized.match(/第\s*(\d+)\s*章|^(\d+)\s*[.、:：]/);
@@ -3288,10 +3445,14 @@ function validateAiLongFormPlan(aiPlan: AiLongFormPlanResult, estimatedChapters:
     throw new Error("AI 未返回完整长篇规划：缺少第101章后的阶段规划，请重试。");
   }
 
+  const ranges = extractChapterRanges(post100Pacing);
   const expectedStarts = getExpectedPost100StageStarts(estimatedChapters);
-  const missingStarts = expectedStarts.filter((start) => !post100Pacing.includes(String(start)));
+  const missingStarts = expectedStarts.filter(
+    (start) => !ranges.some((range) => range.start === start || (range.start <= start && range.end >= start))
+  );
+  const maxCoveredChapter = ranges.reduce((max, range) => Math.max(max, range.end), 0);
   const mentionsFinalStage =
-    post100Pacing.includes(String(estimatedChapters)) || /剩余结尾|终局|完结|终章/.test(post100Pacing);
+    maxCoveredChapter >= estimatedChapters || /剩余结尾|终局|完结|终章/.test(post100Pacing);
 
   if (missingStarts.length > 0 || !mentionsFinalStage) {
     throw new Error(
@@ -3501,6 +3662,109 @@ function getLatestLongFormPlan(store: AppStore, projectId: string) {
     .filter((plan) => plan.projectId === projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
     ?? null;
+}
+
+function isBareConfirmationAnswer(value: string) {
+  return /^(是|有|没有|无|不是|否|不|暂不|不确定|待定|无CP|有CP)$/i.test(value.trim());
+}
+
+function formatResolvedOpenQuestion(question: string, resolution: string) {
+  const cleanQuestion = question.trim();
+  const cleanResolution = resolution.trim();
+
+  if (!cleanResolution || cleanResolution === cleanQuestion) {
+    return cleanQuestion;
+  }
+
+  if (isBareConfirmationAnswer(cleanResolution)) {
+    return `${cleanQuestion.replace(/[？?。；;：:]+$/g, "")}：${cleanResolution}`;
+  }
+
+  if (
+    cleanResolution.includes(cleanQuestion) ||
+    /[:：]/.test(cleanResolution) ||
+    cleanResolution.length >= 12
+  ) {
+    return cleanResolution;
+  }
+
+  return `${cleanQuestion.replace(/[？?。；;：:]+$/g, "")}：${cleanResolution}`;
+}
+
+function cleanLongFormFactLockList(items: string[]) {
+  return uniqueList(items.filter((item) => !isBareConfirmationAnswer(item)));
+}
+
+function isQuestionLikeFactLock(value: string) {
+  const text = value.trim();
+
+  return Boolean(
+    /[？?]$/.test(text) ||
+      /是否|何时|如何|谁|哪[个些]?|还是|有没有|有无/.test(text) ||
+      /具体立场|具体动机|善恶阵营|具体罪行|真正原因|归属现状|如何介入|主要派系构成|真实底层欲望|最终是否/.test(text)
+  );
+}
+
+function splitLongFormFactLockList(items: string[]) {
+  const kept: string[] = [];
+  const questions: string[] = [];
+
+  for (const item of items) {
+    if (isBareConfirmationAnswer(item)) {
+      continue;
+    }
+
+    if (isQuestionLikeFactLock(item)) {
+      questions.push(item);
+      continue;
+    }
+
+    kept.push(item);
+  }
+
+  return {
+    kept: uniqueList(kept),
+    questions: uniqueList(questions)
+  };
+}
+
+function sanitizeLongFormPlanFactLocks(plan: StoredLongFormPlan) {
+  const before = JSON.stringify({
+    confirmedFacts: plan.confirmedFacts,
+    openQuestions: plan.openQuestions,
+    doNotChange: plan.doNotChange,
+    doNotRevealEarly: plan.doNotRevealEarly
+  });
+
+  const confirmedFacts = splitLongFormFactLockList(plan.confirmedFacts ?? []);
+  const doNotChange = splitLongFormFactLockList(plan.doNotChange ?? []);
+
+  plan.confirmedFacts = confirmedFacts.kept;
+  plan.doNotChange = doNotChange.kept;
+  plan.openQuestions = uniqueList([
+    ...(plan.openQuestions ?? []),
+    ...confirmedFacts.questions,
+    ...doNotChange.questions
+  ]);
+  plan.doNotRevealEarly = cleanLongFormFactLockList(plan.doNotRevealEarly ?? []);
+
+  return before !== JSON.stringify({
+    confirmedFacts: plan.confirmedFacts,
+    openQuestions: plan.openQuestions,
+    doNotChange: plan.doNotChange,
+    doNotRevealEarly: plan.doNotRevealEarly
+  });
+}
+
+function sanitizeProjectLongFormPlans(store: AppStore, projectId: string) {
+  store.longFormPlans ??= [];
+  let changed = false;
+
+  for (const plan of store.longFormPlans.filter((item) => item.projectId === projectId)) {
+    changed = sanitizeLongFormPlanFactLocks(plan) || changed;
+  }
+
+  return changed;
 }
 
 function getLatestChapterDraft(store: AppStore, projectId: string) {
@@ -8275,7 +8539,9 @@ export async function assistProjectCreation(input: ProjectCreationAssistInput) {
   const store = await readStore();
   const currentUser = await requireCurrentUser(store);
   const action: ProjectCreationAssistAction =
-    input.action === "protagonists" || input.action === "description" ? input.action : "titles";
+    input.action === "protagonists" || input.action === "description" || input.action === "titleConcept"
+      ? input.action
+      : "titles";
   const payload = {
     ...input,
     action,
@@ -8394,8 +8660,9 @@ export async function getProjectWritingState(projectId: string) {
 
   const changed = ensureDefaultWritingState(store, project);
   const cleanedLegacyState = sanitizeLegacyStatePlacement(store, project);
+  const cleanedLongFormFactLocks = sanitizeProjectLongFormPlans(store, projectId);
 
-  if (changed || cleanedLegacyState) {
+  if (changed || cleanedLegacyState || cleanedLongFormFactLocks) {
     await writeStore(store);
   }
 
@@ -8900,7 +9167,10 @@ export async function resolveLongFormOpenQuestion(
   store.longFormPlans ??= [];
 
   const question = input.question.trim();
-  const resolution = input.resolution?.trim() || question;
+  const rawResolution = input.resolution?.trim() || question;
+  const resolution = input.source === "review_advice"
+    ? rawResolution
+    : formatResolvedOpenQuestion(question, rawResolution);
   const mode = input.mode;
   const source = input.source ?? "open_question";
   const plan = getLatestLongFormPlan(store, projectId);
