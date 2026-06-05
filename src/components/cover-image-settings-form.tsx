@@ -30,7 +30,7 @@ async function readError(response: Response) {
 export function CoverImageSettingsForm({ settings }: { settings: PublicCoverImageSettings }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [baseUrl, setBaseUrl] = useState(settings.baseUrl || "https://newapi.602774041.xyz/v1");
+  const [baseUrl, setBaseUrl] = useState(settings.baseUrl || "https://www.e0hub.com/v1");
   const [model, setModel] = useState(settings.model || "gpt-image-2");
   const [timeoutMs, setTimeoutMs] = useState(settings.timeoutMs || 300000);
   const [dailyLimit, setDailyLimit] = useState(settings.dailyLimit || 3);
@@ -73,7 +73,7 @@ export function CoverImageSettingsForm({ settings }: { settings: PublicCoverImag
       <div className="split-panels">
         <div className="field">
           <div className="field-label">请求地址</div>
-          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://newapi.602774041.xyz/v1" />
+          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://www.e0hub.com/v1" />
         </div>
         <div className="field">
           <div className="field-label">模型</div>

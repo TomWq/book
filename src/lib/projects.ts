@@ -7243,7 +7243,7 @@ export async function getPublicAiSettings() {
 }
 
 const COVER_IMAGE_DAILY_LIMIT = 3;
-const DEFAULT_COVER_IMAGE_BASE_URL = "https://newapi.602774041.xyz/v1";
+const DEFAULT_COVER_IMAGE_BASE_URL = "https://www.e0hub.com/v1";
 const DEFAULT_COVER_IMAGE_MODEL = "gpt-image-2";
 const COVER_IMAGE_TIME_ZONE = "Asia/Shanghai";
 const COVER_IMAGE_PLATFORM_SETTINGS_USER_ID = "__platform_cover_image__";
