@@ -1,4 +1,29 @@
 const REVIEW_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\brule violation\b/gi, "规则违反"],
+  [/\brule_violation\b/gi, "规则违反"],
+  [/\bconstraint violation\b/gi, "约束违反"],
+  [/\bconstraint_violation\b/gi, "约束违反"],
+  [/\bconsistency issue\b/gi, "一致性问题"],
+  [/\bconsistency_issue\b/gi, "一致性问题"],
+  [/\bcontinuity issue\b/gi, "承接问题"],
+  [/\bcontinuity_issue\b/gi, "承接问题"],
+  [/\bcharacter issue\b/gi, "人物问题"],
+  [/\bcharacter_issue\b/gi, "人物问题"],
+  [/\blogic issue\b/gi, "剧情逻辑问题"],
+  [/\blogic_issue\b/gi, "剧情逻辑问题"],
+  [/\bpacing issue\b/gi, "节奏问题"],
+  [/\bpacing_issue\b/gi, "节奏问题"],
+  [/\bstyle issue\b/gi, "表达风格问题"],
+  [/\bstyle_issue\b/gi, "表达风格问题"],
+  [/\bAI flavor\b/gi, "AI 味"],
+  [/\bai_flavor\b/gi, "AI 味"],
+  [/\bhigh severity\b/gi, "高风险"],
+  [/\bmedium severity\b/gi, "中等风险"],
+  [/\blow severity\b/gi, "低风险"],
+  [/\bseverity\b/gi, "风险等级"],
+  [/\bhigh risk\b/gi, "高风险"],
+  [/\bmedium risk\b/gi, "中等风险"],
+  [/\blow risk\b/gi, "低风险"],
   [/\bcharacterProfiles\b/g, "人物档案"],
   [/\bcharacter_profiles\b/g, "人物档案"],
   [/\bcharacter profiles\b/gi, "人物档案"],
@@ -8,11 +33,24 @@ const REVIEW_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bchapter_content\b/g, "章节正文"],
   [/\bchapter content\b/gi, "章节正文"],
   [/\bchapterDraft\b/g, "章节正文"],
+  [/\bcurrentDraft\b/g, "当前正文"],
+  [/\bpreviousDraft\b/g, "上一章正文"],
+  [/\blatestDraft\b/g, "最新正文"],
+  [/\bpreviousDraftTail\b/g, "上一章正文结尾"],
+  [/\blatestDraftActualEnding\b/g, "上一章真实结尾"],
   [/\bchapter_draft\b/g, "章节正文"],
   [/\bchapter draft\b/gi, "章节正文"],
+  [/\bcurrent_draft\b/g, "当前正文"],
+  [/\bprevious_draft\b/g, "上一章正文"],
+  [/\blatest_draft\b/g, "最新正文"],
+  [/\bprevious draft tail\b/gi, "上一章正文结尾"],
+  [/\blatest draft actual ending\b/gi, "上一章真实结尾"],
   [/\bchapterGoal\b/g, "本章目标"],
   [/\bchapter_goal\b/g, "本章目标"],
   [/\bchapter goal\b/gi, "本章目标"],
+  [/\bcarryOverTasks\b/g, "滚入下一章的未完成任务"],
+  [/\bcarry_over_tasks\b/g, "滚入下一章的未完成任务"],
+  [/\bcarry over tasks\b/gi, "滚入下一章的未完成任务"],
   [/\bmainPlotProgress\b/g, "主线推进"],
   [/\bmain_plot_progress\b/g, "主线推进"],
   [/\bmain plot progress\b/gi, "主线推进"],
@@ -22,6 +60,9 @@ const REVIEW_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bendingHook\b/g, "章末钩子"],
   [/\bending_hook\b/g, "章末钩子"],
   [/\bending hook\b/gi, "章末钩子"],
+  [/\bforeshadowingTasks\b/g, "伏笔任务"],
+  [/\bforeshadowing_tasks\b/g, "伏笔任务"],
+  [/\bforeshadowing tasks\b/gi, "伏笔任务"],
   [/\btaskCardId\b/g, "任务卡编号"],
   [/\btaskCard\b/g, "章节任务卡"],
   [/\btask_card\b/g, "章节任务卡"],
@@ -32,14 +73,33 @@ const REVIEW_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bplotState\b/g, "主线状态"],
   [/\bplot_state\b/g, "主线状态"],
   [/\bplot state\b/gi, "主线状态"],
+  [/\blongFormPlan\b/g, "长篇规划"],
+  [/\blong_form_plan\b/g, "长篇规划"],
+  [/\blong form plan\b/gi, "长篇规划"],
+  [/\bprojectName\b/g, "项目名"],
+  [/\bprojectDescription\b/g, "项目简介"],
+  [/\bproject_name\b/g, "项目名"],
+  [/\bproject_description\b/g, "项目简介"],
+  [/\bproject name\b/gi, "项目名"],
+  [/\bproject description\b/gi, "项目简介"],
   [/\bwriting bible\b/gi, "创作圣经"],
   [/\bstory bible\b/gi, "创作圣经"],
   [/\bbible\b/gi, "创作圣经"],
   [/\bforeshadowings\b/g, "伏笔表"],
   [/\bforeshadowing\b/g, "伏笔"],
   [/\bchapterLedger\b/g, "章节台账"],
+  [/\bcurrentLedger\b/g, "当前章节台账"],
+  [/\blastLedger\b/g, "上一章台账"],
+  [/\bcurrentChapterLedger\b/g, "当前章节台账"],
+  [/\blastChapterLedger\b/g, "上一章台账"],
   [/\bchapter_ledger\b/g, "章节台账"],
+  [/\bcurrent_ledger\b/g, "当前章节台账"],
+  [/\blast_ledger\b/g, "上一章台账"],
+  [/\bcurrent_chapter_ledger\b/g, "当前章节台账"],
+  [/\blast_chapter_ledger\b/g, "上一章台账"],
   [/\bchapter ledger\b/gi, "章节台账"],
+  [/\bcurrent ledger\b/gi, "当前章节台账"],
+  [/\blast ledger\b/gi, "上一章台账"],
   [/\bledger\b/g, "章节台账"],
   [/\breviewReport\b/g, "审稿报告"],
   [/\breview_report\b/g, "审稿报告"],
@@ -48,6 +108,18 @@ const REVIEW_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bdraft_id\b/g, "正文编号"],
   [/\bdraft\b/g, "正文草稿"],
   [/\breview\b/g, "审稿"],
+  [/\boverall\b/g, "整体评价"],
+  [/\bissue\b/g, "问题"],
+  [/\bissues\b/g, "问题"],
+  [/\bproblem\b/g, "问题"],
+  [/\blocation\b/g, "位置"],
+  [/\bsuggestion\b/g, "修改建议"],
+  [/\bstateUpdateSuggestions\b/g, "状态同步建议"],
+  [/\bstate_update_suggestions\b/g, "状态同步建议"],
+  [/\bstate update suggestions\b/gi, "状态同步建议"],
+  [/\bshouldUpdateState\b/g, "是否需要同步状态"],
+  [/\bshould_update_state\b/g, "是否需要同步状态"],
+  [/\bshould update state\b/gi, "是否需要同步状态"],
   [/\bcontinuity\b/g, "承接前文"],
   [/\breader hook\b/gi, "读者钩子"],
   [/\bcliffhanger\b/g, "章末钩子"],
@@ -74,15 +146,40 @@ const REVIEW_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bcurrentGoal\b/g, "当前目标"],
   [/\bcurrent_goal\b/g, "当前目标"],
   [/\bcurrent goal\b/gi, "当前目标"],
+  [/\blastAppearance\b/g, "最近出场"],
+  [/\blast_appearance\b/g, "最近出场"],
+  [/\blast appearance\b/gi, "最近出场"],
+  [/\brelationshipToProtagonist\b/g, "与主角关系"],
+  [/\brelationship_to_protagonist\b/g, "与主角关系"],
+  [/\brelationship to protagonist\b/gi, "与主角关系"],
+  [/\babilityBoundary\b/g, "能力边界"],
+  [/\bability_boundary\b/g, "能力边界"],
+  [/\bability boundary\b/gi, "能力边界"],
   [/\brulesNotToBreak\b/g, "不可违反设定"],
   [/\brules_not_to_break\b/g, "不可违反设定"],
   [/\brules not to break\b/gi, "不可违反设定"],
   [/\bentityRelations\b/g, "人物关系"]
 ];
 
+function normalizeReviewPunctuation(value: string) {
+  return value
+    .replace(/—{1,}/g, "，")
+    .replace(/，\s*([，。！？；：])/g, "$1")
+    .replace(/([，。！？；：])\s*，/g, "$1")
+    .replace(/，{2,}/g, "，")
+    .replace(/([。！？；：]){2,}/g, "$1")
+    .replace(/，\s*$/g, "。")
+    .replace(/^\s*，/g, "")
+    .replace(/\s+([，。！？；：])/g, "$1");
+}
+
 export function formatReviewText(value?: string | null) {
-  return REVIEW_TEXT_REPLACEMENTS.reduce(
+  const readableText = REVIEW_TEXT_REPLACEMENTS.reduce(
     (text, [pattern, replacement]) => text.replace(pattern, replacement),
     String(value ?? "")
-  ).trim();
+  )
+    .replace(/\b[a-z]+(?:[A-Z][A-Za-z0-9]*)+\b/g, "相关状态字段")
+    .replace(/\b[a-z]+(?:_[a-z0-9]+)+\b/g, "相关状态字段");
+
+  return normalizeReviewPunctuation(readableText).trim();
 }

@@ -104,6 +104,34 @@ function safeList(items?: string[]) {
   return Array.isArray(items) ? items : [];
 }
 
+function isSubplotThreadLine(value: string) {
+  const text = value.trim();
+
+  return /^(配角弧线|支线|暗线)：/.test(text) && !/为重要配角建立|每条支线必须/.test(text);
+}
+
+function subplotField(line: string, label: string) {
+  const prefix = `${label}：`;
+  const item = line.split(/[｜|]/).map((part) => part.trim()).find((part) => part.startsWith(prefix));
+
+  return item ? item.slice(prefix.length).trim() : "";
+}
+
+function parseSubplotThread(line: string) {
+  const firstPart = line.split(/[｜|]/)[0]?.trim() ?? "";
+  const name = firstPart.replace(/^(配角弧线|支线|暗线)：/, "").trim();
+
+  return {
+    name,
+    character: subplotField(line, "人物"),
+    goal: subplotField(line, "小目标"),
+    hidden: subplotField(line, "秘密/误判/亏欠"),
+    mainPlotLink: subplotField(line, "回扣主线"),
+    nextBeat: subplotField(line, "下次节拍"),
+    boundary: subplotField(line, "边界/收束")
+  };
+}
+
 function objectRecord(value: unknown) {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
@@ -334,6 +362,7 @@ export default async function ProjectStatePage({
   const missingOpeningChapters = latestLongFormPlan
     ? missingOpeningBlueprintChapters(latestLongFormPlan.first10Chapters)
     : [];
+  const subplotThreads = state.plotState.openThreads.filter(isSubplotThreadLine);
 
   return (
     <div className="grid state-page">
@@ -579,6 +608,98 @@ export default async function ProjectStatePage({
                   </div>
                 ) : null}
               </div>
+              <details className="writing-context-details">
+                <summary>编辑当前规划</summary>
+                <ApiForm
+                  className="forms writing-form long-form-plan-form long-form-plan-edit-form"
+                  endpoint={`/api/projects/${projectId}/state`}
+                  body={{ action: "update_long_form_plan" }}
+                  lineArrayFields={[
+                    "volumePlan",
+                    "progressionPacing",
+                    "rewardPacing",
+                    "confirmedFacts",
+                    "openQuestions",
+                    "doNotChange",
+                    "doNotRevealEarly",
+                    "tagPromises",
+                    "first10Chapters",
+                    "progressionRules"
+                  ]}
+                  pendingTitle="正在保存长篇规划"
+                  pendingDescription="正在更新总纲节奏、开局蓝图和任务卡硬规则。"
+                  successMessage="长篇规划已更新，请重新审查当前规划"
+                >
+                  <div className="quote-box warning-box compact-note">
+                    修改这里会影响后续任务卡和正文生成。保存后旧审查会失效，建议重新点击“审查当前规划”。
+                  </div>
+                  <div className="writing-form-grid">
+                    <div className="field">
+                      <div className="field-label">规划依据</div>
+                      <textarea name="planningBasis" defaultValue={latestLongFormPlan.planningBasis} rows={3} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">核心承诺</div>
+                      <textarea name="corePromise" defaultValue={latestLongFormPlan.corePromise} rows={3} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">卷 / 阶段规划</div>
+                      <textarea name="volumePlan" defaultValue={latestLongFormPlan.volumePlan.join("\n")} rows={5} />
+                      <div className="field-hint">一行一条。</div>
+                    </div>
+                    <div className="field">
+                      <div className="field-label">成长节奏</div>
+                      <textarea name="progressionPacing" defaultValue={latestLongFormPlan.progressionPacing.join("\n")} rows={5} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">收益频率</div>
+                      <textarea name="rewardPacing" defaultValue={latestLongFormPlan.rewardPacing.join("\n")} rows={5} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">已确定事实</div>
+                      <textarea name="confirmedFacts" defaultValue={confirmedFacts.join("\n")} rows={5} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">待确认点</div>
+                      <textarea name="openQuestions" defaultValue={openQuestions.join("\n")} rows={5} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">禁止改写</div>
+                      <textarea name="doNotChange" defaultValue={doNotChange.join("\n")} rows={5} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">禁止提前揭示</div>
+                      <textarea name="doNotRevealEarly" defaultValue={doNotRevealEarly.join("\n")} rows={5} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">标签承诺</div>
+                      <textarea name="tagPromises" defaultValue={tagPromises.join("\n")} rows={4} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">开局任务蓝图</div>
+                      <textarea name="first10Chapters" defaultValue={latestLongFormPlan.first10Chapters.join("\n")} rows={10} />
+                      <div className="field-hint">这是任务队列，不是一章一条的死板编号；任务拆分后可以写“顺延”。</div>
+                    </div>
+                    <div className="field">
+                      <div className="field-label">任务卡硬规则</div>
+                      <textarea name="progressionRules" defaultValue={latestLongFormPlan.progressionRules.join("\n")} rows={8} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">前段阶段节奏</div>
+                      <textarea name="first100Pacing" defaultValue={latestLongFormPlan.first100Pacing} rows={6} />
+                    </div>
+                    <div className="field">
+                      <div className="field-label">后续阶段节奏</div>
+                      <textarea name="post100Pacing" defaultValue={latestLongFormPlan.post100Pacing} rows={6} />
+                    </div>
+                  </div>
+                  <div className="state-form-actions">
+                    <button className="button primary" type="submit">
+                      保存当前规划
+                    </button>
+                  </div>
+                </ApiForm>
+              </details>
               <details className="writing-context-details">
                 <summary>查看规划硬约束</summary>
                 <div className="writing-context-full">
@@ -971,7 +1092,7 @@ export default async function ProjectStatePage({
           className="forms state-plot-form"
           endpoint={`/api/projects/${projectId}/state`}
           body={{ action: "update_plot_state" }}
-          arrayFields={[
+          lineArrayFields={[
             "unresolvedQuestions",
             "openThreads",
             "resolvedThreads",
@@ -1078,6 +1199,143 @@ export default async function ProjectStatePage({
             </button>
           </div>
         </ApiForm>
+      </details>
+
+      <details id="subplot-threads" className="state-editor-section" open>
+        <summary>
+          <span>
+            <strong>支线 / 配角弧线池</strong>
+            <small>维护配角小目标、秘密、误判、亏欠和回扣主线的方式。</small>
+          </span>
+          <span className="state-section-tag">{subplotThreads.length} 条</span>
+        </summary>
+        <details className="state-inline-form">
+          <summary>添加支线 / 配角弧线</summary>
+          <ApiForm
+            className="forms"
+            endpoint={`/api/projects/${projectId}/state`}
+            body={{ action: "create_subplot_thread" }}
+            resetOnSuccess
+            successMessage="已加入支线池"
+          >
+            <div className="split-panels">
+              <div className="field">
+                <div className="field-label">支线名称</div>
+                <input name="name" placeholder="误判主角的同僚线 / 旧账本暗线" />
+              </div>
+              <div className="field">
+                <div className="field-label">关联人物</div>
+                <input name="character" placeholder="可填一个或多个人物名" />
+              </div>
+            </div>
+            <div className="field">
+              <div className="field-label">当前小目标</div>
+              <textarea name="goal" placeholder="这个配角此刻想要什么，或这条暗线下一步要推动什么。" />
+            </div>
+            <div className="field">
+              <div className="field-label">秘密 / 误判 / 亏欠</div>
+              <textarea name="hidden" placeholder="让配角不只是工具人的隐藏信息、误解、欠债、立场摇摆或代价。" />
+            </div>
+            <div className="field">
+              <div className="field-label">如何回扣主线</div>
+              <textarea name="mainPlotLink" placeholder="说明它给主线提供线索、阻力、情绪补偿、资源代价或伏笔作用。" />
+            </div>
+            <div className="split-panels">
+              <div className="field">
+                <div className="field-label">下次节拍</div>
+                <input name="nextBeat" placeholder="例如：3-5 章内给一次选择或小高光" />
+              </div>
+              <div className="field">
+                <div className="field-label">边界 / 收束</div>
+                <input name="boundary" placeholder="例如：不能替代主线；在本案结束前给出阶段回应" />
+              </div>
+            </div>
+            <div className="state-form-actions">
+              <button className="button primary" type="submit">
+                加入支线池
+              </button>
+            </div>
+          </ApiForm>
+        </details>
+
+        <div className="list">
+          {subplotThreads.length === 0 ? (
+            <div className="section-card">
+              还没有可轮换的支线或配角弧线。这里不是要求每章都写支线，而是给任务卡生成时提供可选择的配角节拍。
+            </div>
+          ) : (
+            subplotThreads.map((line) => {
+              const thread = parseSubplotThread(line);
+
+              return (
+                <div key={line} className="list-item">
+                  <div className="row">
+                    <strong>{thread.name || "未命名支线"}</strong>
+                    <span className="chip">{thread.character || "未关联人物"}</span>
+                  </div>
+                  <div className="muted">小目标：{thread.goal || "未填写"}</div>
+                  <div className="muted">隐藏驱动：{thread.hidden || "未填写"}</div>
+                  <div className="muted">回扣主线：{thread.mainPlotLink || "未填写"}</div>
+                  <details className="chapter-content-editor">
+                    <summary>编辑支线</summary>
+                    <ApiForm
+                      className="forms"
+                      endpoint={`/api/projects/${projectId}/state`}
+                      body={{ action: "update_subplot_thread", previousLine: line }}
+                      successMessage="支线已保存"
+                    >
+                      <div className="split-panels">
+                        <div className="field">
+                          <div className="field-label">支线名称</div>
+                          <input name="name" defaultValue={thread.name} />
+                        </div>
+                        <div className="field">
+                          <div className="field-label">关联人物</div>
+                          <input name="character" defaultValue={thread.character} />
+                        </div>
+                      </div>
+                      <div className="field">
+                        <div className="field-label">当前小目标</div>
+                        <textarea name="goal" defaultValue={thread.goal} />
+                      </div>
+                      <div className="field">
+                        <div className="field-label">秘密 / 误判 / 亏欠</div>
+                        <textarea name="hidden" defaultValue={thread.hidden} />
+                      </div>
+                      <div className="field">
+                        <div className="field-label">如何回扣主线</div>
+                        <textarea name="mainPlotLink" defaultValue={thread.mainPlotLink} />
+                      </div>
+                      <div className="split-panels">
+                        <div className="field">
+                          <div className="field-label">下次节拍</div>
+                          <input name="nextBeat" defaultValue={thread.nextBeat} />
+                        </div>
+                        <div className="field">
+                          <div className="field-label">边界 / 收束</div>
+                          <input name="boundary" defaultValue={thread.boundary} />
+                        </div>
+                      </div>
+                      <div className="state-form-actions">
+                        <button className="button primary" type="submit">
+                          保存支线
+                        </button>
+                        <ApiButton
+                          endpoint={`/api/projects/${projectId}/state`}
+                          body={{ action: "delete_subplot_thread", previousLine: line }}
+                          label="删除支线"
+                          className="button danger"
+                          confirmMessage={`确定删除“${thread.name || "这条支线"}”吗？这只会从支线池移除，不会改动已经生成的正文。`}
+                          successMessage="支线已删除"
+                        />
+                      </div>
+                    </ApiForm>
+                  </details>
+                </div>
+              );
+            })
+          )}
+        </div>
       </details>
 
       <details id="characters" className="state-editor-section" open>
@@ -1347,6 +1605,7 @@ export default async function ProjectStatePage({
             <a href="#project-info">作品</a>
             <a href="#bible">圣经</a>
             <a href="#plot-state">主线</a>
+            <a href="#subplot-threads">支线</a>
             <a href="#characters">人物</a>
             <a href="#foreshadowings">伏笔</a>
           </nav>

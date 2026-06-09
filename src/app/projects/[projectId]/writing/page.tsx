@@ -6,6 +6,7 @@ import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { FullBookExportActions } from "@/components/full-book-export-actions";
 import { Panel } from "@/components/panel";
 import { StreamDraftButton } from "@/components/stream-draft-button";
+import type { StoredWritingTaskCard } from "@/lib/project-types";
 import { getProjectAnalysis, getProjectInspirations, getProjectWritingState } from "@/lib/projects";
 import { formatReviewText } from "@/lib/review-display";
 
@@ -27,6 +28,20 @@ function formatReviewIssueType(type: string) {
     language: "语言表达问题",
     dialogue: "对话问题",
     logic: "剧情逻辑问题",
+    "rule violation": "规则违反",
+    rule_violation: "规则违反",
+    "constraint violation": "约束违反",
+    constraint_violation: "约束违反",
+    "consistency issue": "一致性问题",
+    consistency_issue: "一致性问题",
+    "continuity issue": "承接问题",
+    continuity_issue: "承接问题",
+    "character issue": "人物问题",
+    character_issue: "人物问题",
+    "logic issue": "剧情逻辑问题",
+    logic_issue: "剧情逻辑问题",
+    "style issue": "表达风格问题",
+    style_issue: "表达风格问题",
     emotion: "情绪表达问题",
     pacing: "节奏问题",
     payoff: "爽点释放不足",
@@ -35,7 +50,7 @@ function formatReviewIssueType(type: string) {
     power: "战力体系风险"
   };
 
-  return issueTypeMap[normalized] || type || "需要调整";
+  return issueTypeMap[normalized] || formatReviewText(type) || "需要调整";
 }
 
 function formatReviewSeverity(severity: string) {
@@ -69,6 +84,7 @@ type LedgerDisplayFields = {
   payoff: string;
   cliffhanger: string;
   stateChanges: string[];
+  carryOverTasks?: string[];
 };
 
 function splitLedgerDisplaySegments(value: string) {
@@ -115,6 +131,81 @@ function uniqueDisplayLines(values: string[], exclude: string[] = []) {
   });
 
   return result;
+}
+
+function TaskCardEditForm({
+  projectId,
+  taskCard,
+  hasRelatedDraft = false
+}: {
+  projectId: string;
+  taskCard: StoredWritingTaskCard;
+  hasRelatedDraft?: boolean;
+}) {
+  return (
+    <details className="writing-context-details writing-form-assist">
+      <summary>编辑任务卡</summary>
+      <ApiForm
+        endpoint={`/api/projects/${projectId}/writing`}
+        body={{ action: "update_task_card", taskCardId: taskCard.id }}
+        arrayFields={["requiredCharacters", "foreshadowingTasks", "rulesNotToBreak"]}
+        successMessage="任务卡已更新"
+        pendingTitle="正在更新任务卡"
+        pendingDescription="正在保存本章目标、人物、伏笔和章末钩子。"
+        className="writing-form-assist-body"
+      >
+        {hasRelatedDraft ? (
+          <div className="quote-box warning-box compact-note">
+            这张任务卡已经生成过正文。修改后请用下方“保留任务卡重写正文”重新生成正文；旧台账和旧审稿会清空，避免继续引用过期判断。
+          </div>
+        ) : null}
+        <div className="writing-form-grid">
+          <div className="field">
+            <div className="field-label">章节标题</div>
+            <input name="title" defaultValue={taskCard.title} />
+          </div>
+          <div className="field">
+            <div className="field-label">本章目标</div>
+            <textarea name="chapterGoal" defaultValue={taskCard.chapterGoal} rows={3} />
+          </div>
+          <div className="field">
+            <div className="field-label">承接上一章</div>
+            <textarea name="continuity" defaultValue={taskCard.continuity} rows={3} />
+          </div>
+          <div className="field">
+            <div className="field-label">主线推进</div>
+            <textarea name="mainPlotProgress" defaultValue={taskCard.mainPlotProgress} rows={3} />
+          </div>
+          <div className="field">
+            <div className="field-label">出场人物</div>
+            <textarea name="requiredCharacters" defaultValue={taskCard.requiredCharacters.join("\n")} rows={3} />
+            <div className="field-hint">一行一个。只填本章必须实际出场或被现场质询、比对、阻拦的人物。</div>
+          </div>
+          <div className="field">
+            <div className="field-label">爽点 / 收益机制</div>
+            <textarea name="pleasurePoint" defaultValue={taskCard.pleasurePoint} rows={3} />
+          </div>
+          <div className="field">
+            <div className="field-label">伏笔任务</div>
+            <textarea name="foreshadowingTasks" defaultValue={taskCard.foreshadowingTasks.join("\n")} rows={4} />
+          </div>
+          <div className="field">
+            <div className="field-label">禁止违反</div>
+            <textarea name="rulesNotToBreak" defaultValue={taskCard.rulesNotToBreak.join("\n")} rows={5} />
+          </div>
+          <div className="field">
+            <div className="field-label">章末钩子</div>
+            <textarea name="endingHook" defaultValue={taskCard.endingHook} rows={3} />
+          </div>
+        </div>
+        <div className="hero-actions writing-submit-row">
+          <button className="button primary" type="submit">
+            保存任务卡修改
+          </button>
+        </div>
+      </ApiForm>
+    </details>
+  );
 }
 
 function ledgerEventsForDisplay(ledger: LedgerDisplayFields) {
@@ -227,6 +318,10 @@ export default async function ProjectWritingPage({
   const activeTaskCard = latestTaskCard && !latestTaskCardDraft ? latestTaskCard : null;
   const taskCardChapterNumber = activeTaskCard?.chapterNumber ?? nextChapterNumber;
   const activeDraft = activeTaskCard ? null : writingState.drafts[0] ?? null;
+  const activeDraftTaskCard = activeDraft
+    ? writingState.taskCards.find((card) => card.id === activeDraft.taskCardId) ?? null
+    : null;
+  const displayTaskCard = activeTaskCard ?? activeDraftTaskCard;
   const activeDisplayChapterNumber = activeDraft?.chapterNumber ?? activeTaskCard?.chapterNumber ?? taskCardChapterNumber;
   const activeLedger = activeDraft
     ? writingState.ledgers.find((ledger) => ledger.draftId === activeDraft.id) ?? null
@@ -282,6 +377,7 @@ export default async function ProjectWritingPage({
   const activeLedgerStateChanges = activeLedger
     ? ledgerStateChangesForDisplay(activeLedger, activeLedgerEvents)
     : [];
+  const activeLedgerCarryOver = activeLedger ? uniqueDisplayLines(activeLedger.carryOverTasks ?? []) : [];
   const closureDecisionByTarget = new Map(
     (activeLedger?.closureDecisions ?? []).map((item) => [`${item.targetType}:${item.targetId}`, item.decision] as const)
   );
@@ -299,6 +395,7 @@ export default async function ProjectWritingPage({
         ...activeLedger.events,
         ...activeLedger.newClues,
         ...activeLedger.stateChanges,
+        ...(activeLedger.carryOverTasks ?? []),
         activeLedger.payoff,
         activeLedger.cliffhanger
       ]
@@ -326,8 +423,8 @@ export default async function ProjectWritingPage({
     {
       href: "#task-card-form",
       label: "任务卡",
-      detail: activeTaskCard ? "已生成" : "待生成",
-      className: activeTaskCard ? "done" : ""
+      detail: displayTaskCard ? "已生成" : "待生成",
+      className: displayTaskCard ? "done" : ""
     },
     {
       href: "#writing-draft",
@@ -568,54 +665,95 @@ export default async function ProjectWritingPage({
           </Panel>
 
           <Panel title="当前任务卡" description="确认任务卡后再生成正文；已有正文的章节会进入章节目录。">
-            {activeTaskCard ? (
+            {displayTaskCard ? (
               <div className="list">
                 <div className="list-item">
                   <div className="row">
                     <strong>
-                      第 {activeTaskCard.chapterNumber} 章 · {activeTaskCard.title}
+                      第 {displayTaskCard.chapterNumber} 章 · {displayTaskCard.title}
                     </strong>
-                    <span className="pill warning">{activeTaskCard.status}</span>
+                    <span className={activeDraftTaskCard ? "pill success" : "pill warning"}>
+                      {activeDraftTaskCard ? "已有正文" : displayTaskCard.status}
+                    </span>
                   </div>
-                  <div className="muted">{activeTaskCard.chapterGoal}</div>
+                  <div className="muted">{displayTaskCard.chapterGoal}</div>
                 </div>
                 <div className="task-block">
                   <div className="task-title">承接上一章</div>
-                  <div className="muted">{activeTaskCard.continuity}</div>
+                  <div className="muted">{displayTaskCard.continuity}</div>
                 </div>
                 <div className="task-block">
                   <div className="task-title">主线推进</div>
-                  <div className="muted">{activeTaskCard.mainPlotProgress}</div>
+                  <div className="muted">{displayTaskCard.mainPlotProgress}</div>
                 </div>
                 <div className="task-block">
                   <div className="task-title">爽点 / 收益机制</div>
-                  <div className="muted">{activeTaskCard.pleasurePoint}</div>
+                  <div className="muted">{displayTaskCard.pleasurePoint}</div>
+                </div>
+                <div className="task-block">
+                  <div className="task-title">出场人物</div>
+                  <div className="meta-row">
+                    {displayTaskCard.requiredCharacters.length > 0 ? (
+                      displayTaskCard.requiredCharacters.map((character) => (
+                        <span key={character} className="chip">
+                          {character}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="muted">本章未指定必须出场人物</span>
+                    )}
+                  </div>
+                </div>
+                <div className="task-block">
+                  <div className="task-title">伏笔任务</div>
+                  <div className="meta-row">
+                    {displayTaskCard.foreshadowingTasks.length > 0 ? (
+                      displayTaskCard.foreshadowingTasks.map((task) => (
+                        <span key={task} className="chip">
+                          {task}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="muted">本章未指定伏笔任务</span>
+                    )}
+                  </div>
                 </div>
                 <div className="task-block">
                   <div className="task-title">禁止违反</div>
                   <div className="meta-row">
-                    {activeTaskCard.rulesNotToBreak.map((rule) => (
+                    {displayTaskCard.rulesNotToBreak.map((rule) => (
                       <span key={rule} className="chip">
                         {rule}
                       </span>
                     ))}
                   </div>
                 </div>
-                <div className="quote-box">{activeTaskCard.endingHook}</div>
+                <div className="quote-box">{displayTaskCard.endingHook}</div>
+                <TaskCardEditForm projectId={projectId} taskCard={displayTaskCard} hasRelatedDraft={Boolean(activeDraftTaskCard)} />
                 <div className="list">
-                  <StreamDraftButton
-                    projectId={projectId}
-                    taskCardId={activeTaskCard.id}
-                    projectName={writingState.project.name}
-                    chapterNumber={activeTaskCard.chapterNumber}
-                    title={activeTaskCard.title}
-                  />
+                  {activeTaskCard ? (
+                    <StreamDraftButton
+                      projectId={projectId}
+                      taskCardId={activeTaskCard.id}
+                      projectName={writingState.project.name}
+                      chapterNumber={activeTaskCard.chapterNumber}
+                      title={activeTaskCard.title}
+                    />
+                  ) : activeDraft ? (
+                    <a className="button primary" href="#writing-draft">
+                      去正文草稿重写
+                    </a>
+                  ) : null}
                   <ApiButton
                     endpoint={`/api/projects/${projectId}/writing`}
-                    body={{ action: "delete_task_card", taskCardId: activeTaskCard.id }}
-                    label="删除任务卡"
+                    body={{ action: "delete_task_card", taskCardId: displayTaskCard.id }}
+                    label={activeDraftTaskCard ? "删除本章并重新生成" : "删除任务卡"}
                     className="button danger"
-                    confirmMessage="确定删除这张任务卡吗？如果它已经生成过正文草稿、台账或审稿报告，也会一并删除。"
+                    confirmMessage={
+                      activeDraftTaskCard
+                        ? "确定删除这章正文和对应任务卡吗？删除后会回到这一章重新生成任务卡和正文。"
+                        : "确定删除这张任务卡吗？如果它已经生成过正文草稿、台账或审稿报告，也会一并删除。"
+                    }
                   />
                 </div>
               </div>
@@ -642,9 +780,9 @@ export default async function ProjectWritingPage({
                   reviewIssues={activeReview?.issues ?? []}
                 />
                 <div className="task-block">
-                  <div className="task-title">保留台账重写正文</div>
+                  <div className="task-title">保留任务卡重写正文</div>
                   <div className="muted">
-                    点击后会清空下方实时正文区域并重新流式生成；保存成功后替换当前正文，任务卡和章节台账保留，旧审稿会清空。
+                    点击后会清空下方实时正文区域并重新流式生成；保存成功后替换当前正文，任务卡保留，旧台账和旧审稿清空，请重新生成章节台账。
                   </div>
                   <StreamDraftButton
                     projectId={projectId}
@@ -700,7 +838,7 @@ export default async function ProjectWritingPage({
           </Panel>
 
           <div id="writing-closure" className="scroll-anchor" />
-          <Panel title="章节收口" description="确认本章自动入库的长期记忆，再继续下一章。">
+          <Panel title="章节收口" description="审稿无高风险时会自动确认本章状态；只有高风险章节需要人工处理。">
             {activeDraft ? (
               <div className="chapter-closure-stack">
                 <div className={activeLedgerConfirmed ? "chapter-closure-head confirmed" : "chapter-closure-head pending"}>
@@ -715,9 +853,9 @@ export default async function ProjectWritingPage({
                     </strong>
                     <span>
                       {activeLedgerConfirmed && closureConfirmedAt
-                        ? `确认时间：${closureConfirmedAt}`
+                        ? `系统已确认：${closureConfirmedAt}`
                         : activeLedger
-                          ? "下方条目会随本章状态一起保留；只有不是本章事实的条目才需要移除。"
+                          ? "审稿发现高风险或尚未审稿时会保持待确认；修正后重新审稿即可自动确认。"
                           : "正文已保存，但还没有可确认的长期记忆。"}
                     </span>
                   </div>
@@ -762,6 +900,14 @@ export default async function ProjectWritingPage({
                           {activeLedgerStateChanges.length > 0
                             ? activeLedgerStateChanges.slice(0, 4).join("；")
                             : "未抽取到主线状态变化"}
+                        </div>
+                      </div>
+                      <div className="task-block">
+                        <div className="task-title">滚入下一章</div>
+                        <div className="muted">
+                          {activeLedgerCarryOver.length > 0
+                            ? activeLedgerCarryOver.slice(0, 4).join("；")
+                            : "本章没有需要滚入下一章的任务"}
                         </div>
                       </div>
                     </div>
@@ -977,8 +1123,8 @@ export default async function ProjectWritingPage({
                           ? highRiskIssues.length > 0
                             ? `还有 ${highRiskIssues.length} 个高风险和 ${mediumRiskIssues.length} 个中等风险问题。建议先修正文稿或重审后再确认。`
                             : mediumRiskIssues.length > 0
-                              ? `没有高风险，但还有 ${mediumRiskIssues.length} 个中等风险建议。确认前请快速扫一眼。`
-                              : "审稿未发现高风险，可以确认本章状态并继续下一章。"
+                              ? `没有高风险，系统已自动确认；还有 ${mediumRiskIssues.length} 个中等风险建议，可按需二稿。`
+                              : "审稿未发现高风险，系统会自动确认本章状态。"
                           : "当前还没有一致性审稿。可以先审稿，也可以先确认台账，之后仍能重新审稿。"}
                       </span>
                     </div>
@@ -997,16 +1143,20 @@ export default async function ProjectWritingPage({
                     ) : null}
 
                     <div className="hero-actions">
-                      <ApiButton
-                        endpoint={`/api/projects/${projectId}/writing`}
-                        body={{ action: "confirm_chapter_closure", draftId: activeDraft.id }}
-                        label={activeLedgerConfirmed ? "重新确认本章状态" : "确认本章状态"}
-                        className={activeLedgerConfirmed ? "button" : "button primary"}
-                        confirmMessage={closureConfirmMessage}
-                        successMessage="本章状态已确认"
-                        pendingTitle="正在确认章节状态"
-                        pendingDescription="正在标记本章台账、任务卡和长期记忆确认状态。"
-                      />
+                      {activeLedgerConfirmed ? (
+                        <span className="pill success">已自动确认，无需操作</span>
+                      ) : (
+                        <ApiButton
+                          endpoint={`/api/projects/${projectId}/writing`}
+                          body={{ action: "confirm_chapter_closure", draftId: activeDraft.id }}
+                          label="手动确认本章状态"
+                          className={highRiskIssues.length > 0 ? "button" : "button primary"}
+                          confirmMessage={closureConfirmMessage}
+                          successMessage="本章状态已确认"
+                          pendingTitle="正在确认章节状态"
+                          pendingDescription="正在标记本章台账、任务卡和长期记忆确认状态。"
+                        />
+                      )}
                       <Link className="button" href={`/projects/${projectId}/state`}>
                         去状态页细修
                       </Link>

@@ -17,7 +17,8 @@ import {
   generateWritingTaskCard,
   regenerateChapterDraftContent,
   getProjectWritingState,
-  reviewChapterDraft
+  reviewChapterDraft,
+  updateWritingTaskCard
 } from "@/lib/projects";
 
 export const runtime = "nodejs";
@@ -123,6 +124,28 @@ export async function POST(
 
     if (action === "delete_task_card") {
       const result = await deleteWritingTaskCard(projectId, String(body.taskCardId ?? ""));
+      return Response.json(result);
+    }
+
+    if (action === "update_task_card") {
+      const listFromBody = (value: unknown) =>
+        Array.isArray(value)
+          ? value.map((item) => String(item).trim()).filter(Boolean)
+          : String(value ?? "")
+              .split(/\r?\n|；|;/)
+              .map((item) => item.trim())
+              .filter(Boolean);
+      const result = await updateWritingTaskCard(projectId, String(body.taskCardId ?? ""), {
+        title: String(body.title ?? ""),
+        chapterGoal: String(body.chapterGoal ?? ""),
+        continuity: String(body.continuity ?? ""),
+        mainPlotProgress: String(body.mainPlotProgress ?? ""),
+        requiredCharacters: listFromBody(body.requiredCharacters),
+        pleasurePoint: String(body.pleasurePoint ?? ""),
+        foreshadowingTasks: listFromBody(body.foreshadowingTasks),
+        rulesNotToBreak: listFromBody(body.rulesNotToBreak),
+        endingHook: String(body.endingHook ?? "")
+      });
       return Response.json(result);
     }
 

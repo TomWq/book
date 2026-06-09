@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ApiButton } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
 import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { Panel } from "@/components/panel";
@@ -125,6 +126,24 @@ export default async function ChapterDraftReaderPage({
                   {review ? <span className="chip">审稿</span> : null}
                 </div>
               </div>
+              <div className="task-block">
+                <div className="task-title">章节台账</div>
+                <div className="muted">
+                  {ledger ? "重新提取本章事件、线索、人物变化和未完成任务。" : "为本章生成台账，让后续章节读取这章的长期记忆。"}
+                </div>
+                <div className="hero-actions">
+                  <ApiButton
+                    endpoint={`/api/projects/${projectId}/writing`}
+                    body={{ action: "create_ledger", draftId: draft.id }}
+                    label={ledger ? "重新生成台账" : "生成章节台账"}
+                    className="button small-button"
+                    confirmMessage={ledger ? `确定重新生成第 ${draft.chapterNumber} 章台账吗？旧台账会被新台账覆盖。` : undefined}
+                    successMessage={ledger ? "章节台账已重新生成" : "章节台账已生成"}
+                    pendingTitle={ledger ? "正在重新生成章节台账" : "正在生成章节台账"}
+                    pendingDescription="正在提取本章事件、人物变化、伏笔、章末钩子和滚入下一章任务。"
+                  />
+                </div>
+              </div>
               {ledger ? (
                 <div className="task-block">
                   <div className="task-title">章末钩子</div>
@@ -136,6 +155,12 @@ export default async function ChapterDraftReaderPage({
                   <span>回到创作台后，可以给本章生成台账，让后续章节能读取这章的长期记忆。</span>
                 </div>
               )}
+              {ledger?.carryOverTasks?.length ? (
+                <div className="task-block">
+                  <div className="task-title">滚入下一章</div>
+                  <div className="muted">{ledger.carryOverTasks.slice(0, 4).join("；")}</div>
+                </div>
+              ) : null}
               {review ? (
                 <div className="task-block">
                   <div className="task-title">审稿结论</div>

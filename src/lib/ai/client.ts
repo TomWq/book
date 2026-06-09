@@ -31,6 +31,7 @@ export type WithAiTokenUsage<T> = T & {
 
 export type AiTextStreamRequest = AiJsonRequest & {
   onUsage?: (usage: AiTokenUsage) => void;
+  allowLengthFinish?: boolean;
 };
 
 function numberValue(value: unknown) {
@@ -462,7 +463,7 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
     }
   } catch (error) {
     if (isAbortError(error)) {
-      throw new Error("AI 请求超时或被中止，请稍后重试；如果这是长篇规划，请适当提高 AI 超时时间。");
+      throw new Error("AI 请求超时或被中止，请稍后重试；如果当前任务上下文较长，请适当提高 AI 超时时间或减少上下文。");
     }
 
     throw error;
@@ -475,7 +476,7 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
   const config = await getAiProviderConfig();
   assertAiProviderConfigured(config);
 
-  const timeout = withTimeout(config.timeoutMs);
+  const timeout = withTimeout(Math.max(config.timeoutMs, request.timeoutMs ?? 0));
 
   try {
     const requestBody: Record<string, unknown> = {
@@ -552,6 +553,10 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
 
         if (finishReason && finishReason !== "stop") {
           if (finishReason === "length") {
+            if (request.allowLengthFinish) {
+              return;
+            }
+
             throw new Error("AI 输出被长度限制截断，请减少输入内容或提高本次请求的输出长度上限");
           }
 
@@ -572,6 +577,12 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
         }
       }
     }
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("AI 请求超时或被中止，请稍后重试；如果当前任务上下文较长，请适当提高 AI 超时时间或减少上下文。");
+    }
+
+    throw error;
   } finally {
     timeout.clear();
   }

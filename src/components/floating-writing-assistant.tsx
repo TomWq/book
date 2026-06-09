@@ -15,6 +15,7 @@ function getProjectId(pathname: string) {
 const introDismissedKey = "writing-assistant:intro-dismissed";
 const routeTipDismissedPrefix = "writing-assistant:route-tip-dismissed:";
 const launcherPositionKey = "writing-assistant:launcher-position";
+const launcherHiddenKey = "writing-assistant:launcher-hidden";
 const launcherWidth = 86;
 const launcherHeight = 96;
 const launcherMargin = 12;
@@ -381,6 +382,7 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
   const [open, setOpen] = useState(false);
   const [visibleTip, setVisibleTip] = useState<MoLanTip | null>(null);
   const [launcherPosition, setLauncherPosition] = useState<LauncherPosition | null>(null);
+  const [launcherHidden, setLauncherHidden] = useState(false);
   const launcherRef = useRef<HTMLDivElement | null>(null);
   const launcherAnchorRef = useRef<LauncherAnchor | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -398,6 +400,7 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
 
   useEffect(() => {
     try {
+      setLauncherHidden(window.localStorage.getItem(launcherHiddenKey) === "1");
       const rawPosition = window.localStorage.getItem(launcherPositionKey);
       const parsed = rawPosition ? JSON.parse(rawPosition) as StoredLauncherPosition : null;
 
@@ -420,7 +423,7 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
   }, []);
 
   useEffect(() => {
-    if (pathname === "/assistant" || open) {
+    if (pathname === "/assistant" || open || launcherHidden) {
       setVisibleTip(null);
       return;
     }
@@ -458,7 +461,7 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
         window.clearTimeout(autoHideTipRef.current);
       }
     };
-  }, [assistantDisplayName, contextualTips, open, pathname]);
+  }, [assistantDisplayName, contextualTips, launcherHidden, open, pathname]);
 
   useEffect(() => {
     function handleResize() {
@@ -503,6 +506,18 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     setVisibleTip(null);
     window.localStorage.setItem(introDismissedKey, "1");
     window.sessionStorage.setItem(routeTipKey(pathname), "1");
+  }
+
+  function hideLauncher() {
+    setOpen(false);
+    setLauncherHidden(true);
+    dismissTip();
+    window.localStorage.setItem(launcherHiddenKey, "1");
+  }
+
+  function restoreLauncher() {
+    setLauncherHidden(false);
+    window.localStorage.removeItem(launcherHiddenKey);
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -656,10 +671,33 @@ export function FloatingWritingAssistant({ authorName, assistantName }: { author
     return null;
   }
 
+  if (launcherHidden && !open) {
+    return (
+      <button
+        type="button"
+        className="floating-ai-restore-button"
+        aria-label={`显示${assistantDisplayName}小助手`}
+        onClick={restoreLauncher}
+      >
+        助手
+      </button>
+    );
+  }
+
   return (
     <>
       {!open ? (
         <div className="floating-ai-launcher" style={launcherStyle} ref={launcherRef}>
+          <button
+            type="button"
+            className="floating-ai-hide-button"
+            aria-label={`隐藏${assistantDisplayName}小助手`}
+            title="隐藏小助手"
+            onClick={hideLauncher}
+          >
+            ×
+          </button>
+
           {visibleTip ? (
             <div className="floating-ai-greeting" role="status" data-side={tipSide}>
               <button type="button" aria-label={`关闭${assistantDisplayName}提示`} onClick={dismissTip}>

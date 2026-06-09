@@ -689,6 +689,7 @@ export function ProjectForm() {
     return {
       name,
       genre,
+      categoryDescription: currentCategory?.description ?? "",
       targetReader,
       titleNamingStyle,
       tagTaxonomyStyle,

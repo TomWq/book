@@ -18,6 +18,7 @@ import {
   updateCustomRelationGraph,
   updateCustomRelationGraphNode,
   updateForeshadowing,
+  updateLongFormPlan,
   resolveLongFormOpenQuestion,
   updatePlotState,
   updateProjectMetadata,
@@ -31,6 +32,15 @@ function list(value: unknown) {
     ? value.map((item) => String(item).trim()).filter(Boolean)
     : String(value ?? "")
         .split(/\r?\n|，|、/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function lineList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean)
+    : String(value ?? "")
+        .split(/\r?\n/)
         .map((item) => item.trim())
         .filter(Boolean);
 }
@@ -112,6 +122,35 @@ function replaceListItem(current: string[], previous: string, next: string) {
 
 function removeListItem(current: string[], previous: string) {
   return current.filter((item) => item !== previous);
+}
+
+function cleanText(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function subplotThreadLine(body: Record<string, unknown>) {
+  const name = cleanText(body.name);
+  const character = cleanText(body.character);
+  const goal = cleanText(body.goal);
+  const hidden = cleanText(body.hidden);
+  const mainPlotLink = cleanText(body.mainPlotLink);
+  const nextBeat = cleanText(body.nextBeat);
+  const boundary = cleanText(body.boundary);
+  const title = name || character;
+
+  if (!title) {
+    throw new Error("支线名称或关联人物不能为空");
+  }
+
+  return [
+    `配角弧线：${title}`,
+    character ? `人物：${character}` : "",
+    goal ? `小目标：${goal}` : "",
+    hidden ? `秘密/误判/亏欠：${hidden}` : "",
+    mainPlotLink ? `回扣主线：${mainPlotLink}` : "",
+    nextBeat ? `下次节拍：${nextBeat}` : "",
+    boundary ? `边界/收束：${boundary}` : ""
+  ].filter(Boolean).join("｜");
 }
 
 async function updatePlotStateFromCurrent(projectId: string, mutate: (state: NonNullable<Awaited<ReturnType<typeof getProjectWritingState>>>["plotState"]) => void) {
@@ -213,15 +252,43 @@ export async function POST(
         shortTermGoal: String(body.shortTermGoal ?? ""),
         currentStage: String(body.currentStage ?? ""),
         currentEnemy: String(body.currentEnemy ?? ""),
-        unresolvedQuestions: list(body.unresolvedQuestions),
-        openThreads: list(body.openThreads),
-        resolvedThreads: list(body.resolvedThreads),
-        nextMilestones: list(body.nextMilestones),
+        unresolvedQuestions: lineList(body.unresolvedQuestions),
+        openThreads: lineList(body.openThreads),
+        resolvedThreads: lineList(body.resolvedThreads),
+        nextMilestones: lineList(body.nextMilestones),
         nextStageGoal: String(body.nextStageGoal ?? ""),
         powerSystemState: String(body.powerSystemState ?? ""),
         mapAndForces: String(body.mapAndForces ?? ""),
         resourceState: String(body.resourceState ?? ""),
-        relationshipChanges: list(body.relationshipChanges)
+        relationshipChanges: lineList(body.relationshipChanges)
+      });
+
+      return Response.json({ plotState });
+    }
+
+    if (action === "create_subplot_thread") {
+      const line = subplotThreadLine(body);
+      const plotState = await updatePlotStateFromCurrent(projectId, (plotState) => {
+        plotState.openThreads = Array.from(new Set([...plotState.openThreads, line]));
+      });
+
+      return Response.json({ plotState }, { status: 201 });
+    }
+
+    if (action === "update_subplot_thread") {
+      const previousLine = String(body.previousLine ?? "").trim();
+      const line = subplotThreadLine(body);
+      const plotState = await updatePlotStateFromCurrent(projectId, (plotState) => {
+        plotState.openThreads = replaceListItem(plotState.openThreads, previousLine, line);
+      });
+
+      return Response.json({ plotState });
+    }
+
+    if (action === "delete_subplot_thread") {
+      const previousLine = String(body.previousLine ?? "").trim();
+      const plotState = await updatePlotStateFromCurrent(projectId, (plotState) => {
+        plotState.openThreads = removeListItem(plotState.openThreads, previousLine);
       });
 
       return Response.json({ plotState });
@@ -239,6 +306,27 @@ export async function POST(
       });
 
       return Response.json(result);
+    }
+
+    if (action === "update_long_form_plan") {
+      const longFormPlan = await updateLongFormPlan(projectId, {
+        planningBasis: String(body.planningBasis ?? ""),
+        corePromise: String(body.corePromise ?? ""),
+        volumePlan: lineList(body.volumePlan),
+        progressionPacing: lineList(body.progressionPacing),
+        rewardPacing: lineList(body.rewardPacing),
+        confirmedFacts: lineList(body.confirmedFacts),
+        openQuestions: lineList(body.openQuestions),
+        doNotChange: lineList(body.doNotChange),
+        doNotRevealEarly: lineList(body.doNotRevealEarly),
+        tagPromises: lineList(body.tagPromises),
+        first10Chapters: lineList(body.first10Chapters),
+        first100Pacing: String(body.first100Pacing ?? ""),
+        post100Pacing: String(body.post100Pacing ?? ""),
+        progressionRules: lineList(body.progressionRules)
+      });
+
+      return Response.json({ longFormPlan });
     }
 
     if (action === "review_long_form_plan") {

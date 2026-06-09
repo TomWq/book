@@ -42,7 +42,7 @@ export function StreamDraftButton({
     const initialCount = initialContent.replace(/\s/g, "").length;
 
     if (mode === "regenerate" && initialCount > 0) {
-      return Math.min(3000, Math.max(800, Math.round(initialCount / 100) * 100));
+      return Math.min(3000, Math.max(1200, Math.round(initialCount / 100) * 100));
     }
 
     return 1500;
@@ -60,11 +60,11 @@ export function StreamDraftButton({
   const isRegenerating = mode === "regenerate";
   const runningStatusText = isSavingStreamDraft
     ? isRegenerating
-      ? "新正文已生成，正在替换当前正文并保留章节台账，请稍候。"
-      : "正文已生成，正在保存草稿并更新章节台账，请稍候。"
+      ? "新正文已生成，正在整理并替换当前正文，请稍候。"
+      : "正文已生成，正在整理、保存草稿并更新章节台账，请稍候。"
     : "正在生成正文，实时内容会持续出现在下方。";
   const normalizedPreviewTarget = normalizedTargetWordCount();
-  const targetRangeText = `${Math.floor(normalizedPreviewTarget * 0.7)}-${Math.ceil(normalizedPreviewTarget * 1.25)}`;
+  const targetRangeText = `${Math.floor(normalizedPreviewTarget * 0.82)}-${Math.ceil(normalizedPreviewTarget * 1.25)}`;
   const previewOverlay = (
     <div className="draft-preview-overlay" role="dialog" aria-modal="true" aria-label="正文全屏预览">
       <div className="draft-preview-panel">
@@ -144,7 +144,7 @@ export function StreamDraftButton({
         ""
       )
       .replace(
-        /\n*\[(?:正文需要补足|结尾仍疑似被截断|AI 流式生成提前结束)[^\]]*]\n*/g,
+        /\n*\[(?:正文需要补足|正文已达到可保存长度|正文超过目标范围|正文接近字数上限|正文漏掉任务卡|结尾仍疑似被截断|结尾仍未完整|结尾不完整|结尾补写仍不完整|输出已达到可保存长度|AI 流式生成提前结束)[^\]]*]\n*/g,
         "\n\n"
       );
   }
@@ -179,7 +179,7 @@ export function StreamDraftButton({
       !(await confirm({
         title: "流式重写正文",
         message: "确定清空当前正文并流式重写吗？",
-        detail: "保存成功后会替换原正文，章节台账会保留，旧审稿会清空。",
+        detail: "保存成功后会替换原正文，旧台账和旧审稿会清空，请重新生成章节台账。",
         confirmLabel: "开始重写",
         tone: "danger"
       }))
@@ -231,6 +231,11 @@ export function StreamDraftButton({
       if (visible.error) {
         content = visible.content;
         throw new Error(visible.error);
+      }
+
+      if (!content.includes(streamDraftFinalMarker)) {
+        content = visible.content;
+        throw new Error("流式正文已结束，但没有收到最终保存版正文。请刷新页面确认是否保存成功。");
       }
 
       setState({ status: "done", content: visible.content });
@@ -286,7 +291,7 @@ export function StreamDraftButton({
       {isSavingStreamDraft ? (
         <ActionLoadingOverlay
           title={isRegenerating ? "正在保存重写正文" : "正在保存章节草稿"}
-          description={isRegenerating ? "新正文已经生成，正在替换当前正文并保留章节台账，请不要刷新页面。" : "正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"}
+          description={isRegenerating ? "新正文已经生成，正在替换当前正文并清空旧台账，请不要刷新页面。" : "正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"}
         />
       ) : null}
       <div className="field">
@@ -367,7 +372,7 @@ export function StreamDraftButton({
           {state.status === "running" ? <div className="pill form-status">{runningStatusText}</div> : null}
           {state.status === "done" ? (
             <div className="pill success">
-              {isRegenerating ? "正文已重写，台账已保留，请重新审稿。" : "草稿已保存，台账已更新，可以继续审稿。"}
+              {isRegenerating ? "正文已重写，旧台账已清空，请重新生成章节台账。" : "草稿已保存，台账已更新，可以继续审稿。"}
             </div>
           ) : null}
           <textarea className="stream-draft-textarea" value={state.content} readOnly />

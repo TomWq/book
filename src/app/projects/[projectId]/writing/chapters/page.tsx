@@ -152,6 +152,16 @@ export default async function WritingChapterDirectoryPage({
                       />
                       <ApiButton
                         endpoint={`/api/projects/${projectId}/writing`}
+                        body={{ action: "create_ledger", draftId: draft.id }}
+                        label={ledger ? "重跑台账" : "生成台账"}
+                        className="button small-button"
+                        confirmMessage={ledger ? `确定重新生成第 ${draft.chapterNumber} 章台账吗？旧台账会被新台账覆盖。` : undefined}
+                        successMessage={ledger ? "章节台账已重新生成" : "章节台账已生成"}
+                        pendingTitle={ledger ? "正在重新生成章节台账" : "正在生成章节台账"}
+                        pendingDescription="正在提取本章事件、人物变化、伏笔、章末钩子和滚入下一章任务。"
+                      />
+                      <ApiButton
+                        endpoint={`/api/projects/${projectId}/writing`}
                         body={{ action: "delete_chapters_from", chapterNumber: draft.chapterNumber }}
                         label="从本章起重写"
                         className="button danger small-button"

@@ -10,7 +10,14 @@ type Method = "POST" | "PUT" | "PATCH" | "DELETE";
 
 function splitList(value: FormDataEntryValue | null) {
   return String(value ?? "")
-    .split(/\r?\n|，|、/)
+    .split(/\r?\n|，|、|；|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitLineList(value: FormDataEntryValue | null) {
+  return String(value ?? "")
+    .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -148,6 +155,7 @@ export function ApiForm({
   method = "POST",
   body,
   arrayFields = [],
+  lineArrayFields = [],
   booleanFields = [],
   redirectTo,
   redirectDataPath,
@@ -165,6 +173,7 @@ export function ApiForm({
   method?: Method;
   body?: Record<string, unknown>;
   arrayFields?: string[];
+  lineArrayFields?: string[];
   booleanFields?: string[];
   redirectTo?: string;
   redirectDataPath?: string;
@@ -200,6 +209,10 @@ export function ApiForm({
 
     for (const field of arrayFields) {
       payload[field] = splitList(formData.get(field));
+    }
+
+    for (const field of lineArrayFields) {
+      payload[field] = splitLineList(formData.get(field));
     }
 
     for (const field of booleanFields) {

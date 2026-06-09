@@ -1,5 +1,6 @@
 import { assistProjectCreation } from "@/lib/projects";
 import type { ProjectCreationCharacterInput, ProjectCreationCharacterRole } from "@/lib/ai/project-creation";
+import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
 
 export const runtime = "nodejs";
 const maxProjectCharacters = 20;
@@ -55,6 +56,29 @@ function readTargetTotalWords(value: unknown) {
   return Math.min(5000000, Math.max(50000, Math.round(numberValue * 10000)));
 }
 
+function readTargetReader(value: unknown): TargetReader {
+  return readerOptions.includes(value as TargetReader) ? value as TargetReader : "男频";
+}
+
+function readCategoryDescription(input: {
+  targetReader: TargetReader;
+  genre: string;
+  tagTaxonomyStyle: "fanqie" | "qidian";
+  categoryDescription?: string;
+}) {
+  const explicitDescription = String(input.categoryDescription ?? "").trim();
+
+  if (explicitDescription) {
+    return explicitDescription;
+  }
+
+  if (input.tagTaxonomyStyle === "qidian") {
+    return qidianTaxonomyByReader[input.targetReader].find((category) => category.name === input.genre)?.description ?? "";
+  }
+
+  return novelTaxonomy[input.targetReader].mainCategories.find((category) => category.name === input.genre)?.description ?? "";
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const rawAction = String(body.action ?? "");
@@ -63,14 +87,23 @@ export async function POST(request: Request) {
       ? rawAction
       : "titles";
   const titleConcept = String(body.titleConcept ?? "");
+  const targetReader = readTargetReader(body.targetReader);
+  const tagTaxonomyStyle = body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie";
+  const genre = String(body.genre ?? "");
 
   try {
     const result = await assistProjectCreation({
       action,
       name: action === "titles" && titleConcept.trim() ? "" : String(body.name ?? ""),
       titleConcept,
-      genre: String(body.genre ?? ""),
-      targetReader: String(body.targetReader ?? ""),
+      genre,
+      categoryDescription: readCategoryDescription({
+        targetReader,
+        genre,
+        tagTaxonomyStyle,
+        categoryDescription: String(body.categoryDescription ?? "")
+      }),
+      targetReader,
       tags: list(body.tags),
       protagonistNames: list(body.protagonistNames),
       protagonistCharacters: characterList(body.protagonistCharacters),
@@ -82,7 +115,7 @@ export async function POST(request: Request) {
       description: String(body.description ?? ""),
       descriptionAssistMode: body.descriptionAssistMode === "polish" ? "polish" : "generate",
       titleNamingStyle: body.titleNamingStyle === "qidian" ? "qidian" : "fanqie",
-      tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",
+      tagTaxonomyStyle,
       descriptionWritingStyle: body.descriptionWritingStyle === "qidian" ? "qidian" : "fanqie",
       avoidTitles: list(body.avoidTitles)
     });

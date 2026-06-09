@@ -236,6 +236,19 @@
   background: rgba(255, 255, 255, 0.07);
 }
 
+:root[data-theme="dark"] .floating-ai-hide-button,
+:root[data-theme="dark"] .floating-ai-restore-button {
+  border-color: rgba(77, 190, 208, 0.22);
+  background: rgba(31, 39, 50, 0.9);
+  color: var(--accent);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+:root[data-theme="dark"] .floating-ai-hide-button:hover,
+:root[data-theme="dark"] .floating-ai-restore-button:hover {
+  background: rgba(36, 46, 59, 0.98);
+}
+
 :root[data-theme="dark"] .project-step-link {
   border-color: var(--line);
   background: #202732;
@@ -1191,6 +1204,61 @@ button {
   pointer-events: auto;
   user-select: none;
   transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.floating-ai-hide-button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 4;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(31, 94, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(88, 99, 122, 0.86);
+  box-shadow: 0 8px 18px rgba(18, 26, 44, 0.1);
+  cursor: pointer;
+  pointer-events: auto;
+  line-height: 1;
+  font-size: 16px;
+  font-weight: 800;
+  transition: transform 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.floating-ai-hide-button:hover {
+  transform: translateY(-1px);
+  background: #fff;
+  color: var(--accent);
+}
+
+.floating-ai-restore-button {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 800;
+  min-width: 52px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(31, 94, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--accent);
+  box-shadow: 0 10px 24px rgba(18, 26, 44, 0.12);
+  backdrop-filter: blur(16px);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.floating-ai-restore-button:hover {
+  transform: translateY(-1px);
+  background: #fff;
+  box-shadow: 0 14px 28px rgba(18, 26, 44, 0.16);
 }
 
 body.floating-ai-dragging {
@@ -7609,6 +7677,45 @@ body.update-prompt-open .floating-ai-launcher {
   padding-top: 0;
   padding-bottom: 2px;
   border-top: 0;
+}
+
+.long-form-plan-edit-form {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 14px !important;
+}
+
+.long-form-plan-edit-form .writing-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.long-form-plan-edit-form .field {
+  min-width: 0;
+}
+
+.long-form-plan-edit-form .field:nth-child(1),
+.long-form-plan-edit-form .field:nth-child(2),
+.long-form-plan-edit-form .field:nth-child(n + 11) {
+  grid-column: 1 / -1;
+}
+
+.long-form-plan-edit-form textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.long-form-plan-edit-form .field:nth-child(11) textarea,
+.long-form-plan-edit-form .field:nth-child(12) textarea,
+.long-form-plan-edit-form .field:nth-child(13) textarea,
+.long-form-plan-edit-form .field:nth-child(14) textarea {
+  min-height: 220px;
+}
+
+.long-form-plan-edit-form .state-form-actions {
+  align-self: stretch;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
 .compact-context-card {
@@ -15974,6 +16081,21 @@ body.update-prompt-open .floating-ai-launcher {
     width: 76px;
     height: 86px;
     border-radius: 22px;
+  }
+
+  .floating-ai-hide-button {
+    top: 2px;
+    right: 2px;
+    width: 22px;
+    height: 22px;
+    font-size: 15px;
+  }
+
+  .floating-ai-restore-button {
+    right: 14px;
+    bottom: 14px;
+    height: 30px;
+    min-width: 48px;
   }
 
   .floating-ai-mascot {

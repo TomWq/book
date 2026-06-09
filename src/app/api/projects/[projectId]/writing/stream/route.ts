@@ -1,8 +1,11 @@
 import {
   countDraftCharacters,
   isChapterDraftEndingIncomplete,
+  maximumDraftCharacters,
   minimumDraftExpansionCharacters,
   minimumSavableDraftCharacters,
+  prepareChapterDraftContentForFastSave,
+  prepareChapterDraftContentForForcedCompleteSave,
   prepareChapterDraftContentForSave,
   streamChapterDraftClosingTextWithAi,
   streamChapterDraftExpansionTextWithAi,
@@ -11,6 +14,7 @@ import {
 } from "@/lib/ai/writing";
 import { combineAiTokenUsages, type AiTokenUsage } from "@/lib/ai/client";
 import {
+  failStreamedWritingJob,
   prepareChapterDraftStream,
   prepareEditDraftTextStream,
   prepareRegenerateChapterDraftContentStream,
@@ -67,6 +71,75 @@ function hasUsableDraftContent(content: string, targetWordCount?: number) {
   return countDraftCharacters(content) >= minimumSavableDraftCharacters(targetWordCount);
 }
 
+function listText(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? "")).join("\n")
+    : String(value ?? "");
+}
+
+function taskCardPsychologyRequirementText(
+  taskCard: Awaited<ReturnType<typeof prepareChapterDraftStream>>["context"]["taskCard"]
+) {
+  return [
+    taskCard.chapterGoal,
+    taskCard.mainPlotProgress,
+    taskCard.pleasurePoint,
+    listText(taskCard.foreshadowingTasks),
+    listText(taskCard.rulesNotToBreak),
+    taskCard.endingHook
+  ].join("\n");
+}
+
+function requiresVisiblePsychologyBeat(
+  taskCard: Awaited<ReturnType<typeof prepareChapterDraftStream>>["context"]["taskCard"]
+) {
+  const requirement = taskCardPsychologyRequirementText(taskCard);
+
+  return /本章必须[^。；\n]*(心理裂缝|心理适应|身体反应|现实记忆|现实回响|现实混淆|梦境真实性|梦太长|醒不过来|被困|害怕|恐惧|反胃|手抖|发抖|迟疑)|必须[^。；\n]*(本章[^。；\n]*)?(心理裂缝|心理适应|身体反应|现实记忆|现实回响|梦境真实性)/.test(requirement);
+}
+
+function hasVisiblePsychologyBeat(
+  content: string,
+  taskCard: Awaited<ReturnType<typeof prepareChapterDraftStream>>["context"]["taskCard"]
+) {
+  const requirement = taskCardPsychologyRequirementText(taskCard);
+  const requiresDreamFear = /心理裂缝|现实记忆|现实回响|现实混淆|梦境真实性|梦太长|醒不过来|被困/.test(requirement);
+
+  if (requiresDreamFear) {
+    return /(梦|醒来|醒不过来|现实|格子间|代码|电脑|主管|被困|太长|不确定|分不清)/.test(content) &&
+      /(怕|恐惧|冷汗|发冷|手抖|发抖|反胃|心慌|喘不上|呼吸停|喉头发紧|胃里)/.test(content);
+  }
+
+  return /(反胃|手抖|发抖|冷汗|害怕|恐惧|迟疑|现实|格子间|代码|电脑|主管|醒来|梦)/.test(content);
+}
+
+function missesRequiredPsychologyBeat(
+  content: string,
+  taskCard: Awaited<ReturnType<typeof prepareChapterDraftStream>>["context"]["taskCard"]
+) {
+  return requiresVisiblePsychologyBeat(taskCard) && !hasVisiblePsychologyBeat(content, taskCard);
+}
+
+function sliceByDraftCharacters(value: string, maxCharacters: number) {
+  if (maxCharacters <= 0) {
+    return "";
+  }
+
+  let count = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (!/\s/.test(value[index])) {
+      count += 1;
+    }
+
+    if (count > maxCharacters) {
+      return value.slice(0, index);
+    }
+  }
+
+  return value;
+}
+
 async function streamGeneratedChapterDraft(input: {
   context: Awaited<ReturnType<typeof prepareChapterDraftStream>>["context"];
   useAi: boolean;
@@ -77,8 +150,53 @@ async function streamGeneratedChapterDraft(input: {
   let usedAi = false;
   const tokenUsages: AiTokenUsage[] = [];
   const targetWordCount = input.context.targetWordCount;
-  const appendExpansion = async (message: string) => {
-    input.enqueue(`\n\n[${message}]\n\n`);
+  const maxCharacters = targetWordCount ? maximumDraftCharacters(targetWordCount) : undefined;
+  const closingReserveCharacters = maxCharacters
+    ? Math.min(420, Math.max(220, Math.floor(maxCharacters * 0.18)))
+    : 0;
+  const mainStreamMaxCharacters = maxCharacters
+    ? Math.max(minimumSavableDraftCharacters(targetWordCount), maxCharacters - closingReserveCharacters)
+    : undefined;
+  let stoppedAtTargetLimit = false;
+  let stoppedAtMainLimit = false;
+  const appendChunk = (chunk: string, options?: { reserveClosingSpace?: boolean }) => {
+    if (!chunk || !maxCharacters) {
+      content += chunk;
+      input.enqueue(chunk);
+      return;
+    }
+
+    const limitCharacters = options?.reserveClosingSpace ? (mainStreamMaxCharacters ?? maxCharacters) : maxCharacters;
+    const remainingCharacters = limitCharacters - countDraftCharacters(content);
+
+    if (remainingCharacters <= 0) {
+      if (options?.reserveClosingSpace) {
+        stoppedAtMainLimit = true;
+      } else {
+        stoppedAtTargetLimit = true;
+      }
+      return;
+    }
+
+    const acceptedChunk = sliceByDraftCharacters(chunk, remainingCharacters);
+
+    if (acceptedChunk) {
+      content += acceptedChunk;
+      input.enqueue(acceptedChunk);
+    }
+
+    if (acceptedChunk.length < chunk.length || countDraftCharacters(content) >= limitCharacters) {
+      if (options?.reserveClosingSpace) {
+        stoppedAtMainLimit = true;
+      } else {
+        stoppedAtTargetLimit = true;
+      }
+    }
+  };
+  const appendExpansion = async (_message: string) => {
+    if (stoppedAtTargetLimit) {
+      return;
+    }
 
     for await (const chunk of streamChapterDraftExpansionTextWithAi(
       input.context,
@@ -87,12 +205,16 @@ async function streamGeneratedChapterDraft(input: {
         tokenUsages.push(usage);
       }
     )) {
-      content += chunk;
-      input.enqueue(chunk);
+      appendChunk(chunk);
+      if (stoppedAtTargetLimit) {
+        break;
+      }
     }
   };
-  const appendClosing = async (message: string) => {
-    input.enqueue(`\n\n[${message}]\n\n`);
+  const appendClosing = async (_message: string) => {
+    if (stoppedAtTargetLimit) {
+      return;
+    }
 
     for await (const chunk of streamChapterDraftClosingTextWithAi(
       input.context,
@@ -101,8 +223,10 @@ async function streamGeneratedChapterDraft(input: {
         tokenUsages.push(usage);
       }
     )) {
-      content += chunk;
-      input.enqueue(chunk);
+      appendChunk(chunk);
+      if (stoppedAtTargetLimit) {
+        break;
+      }
     }
   };
 
@@ -112,31 +236,68 @@ async function streamGeneratedChapterDraft(input: {
         tokenUsages.push(usage);
       })) {
         usedAi = true;
-        content += chunk;
-        input.enqueue(chunk);
+        appendChunk(chunk, { reserveClosingSpace: true });
+        if (stoppedAtMainLimit || stoppedAtTargetLimit) {
+          break;
+        }
+      }
+
+      if (stoppedAtMainLimit || stoppedAtTargetLimit) {
+        const preparedAtLimit = prepareChapterDraftContentForSave(content, targetWordCount);
+
+        if (
+          hasUsableDraftContent(preparedAtLimit, targetWordCount) &&
+          !isChapterDraftEndingIncomplete(preparedAtLimit)
+        ) {
+          content = preparedAtLimit;
+        } else if (!stoppedAtTargetLimit) {
+          for await (const chunk of streamChapterDraftClosingTextWithAi(
+            input.context,
+            content,
+            (usage) => {
+              tokenUsages.push(usage);
+            }
+          )) {
+            appendChunk(chunk);
+            if (stoppedAtTargetLimit) {
+              break;
+            }
+          }
+        }
       }
 
       if (
         usedAi &&
+        !stoppedAtTargetLimit &&
+        !stoppedAtMainLimit &&
         (countDraftCharacters(content) < minimumDraftExpansionCharacters(targetWordCount) ||
           isChapterDraftEndingIncomplete(content))
       ) {
-        await appendExpansion(
-          `正文需要补足，正在续写完整结尾：当前 ${countDraftCharacters(content)} 字，目标参考 ${minimumDraftExpansionCharacters(targetWordCount)} 字`
-        );
+        if (
+          hasUsableDraftContent(content, targetWordCount) &&
+          !isChapterDraftEndingIncomplete(content)
+        ) {
+          content = prepareChapterDraftContentForSave(content, targetWordCount);
+        } else {
+          await appendExpansion(
+            `正文需要补足完整结尾，正在续写收束：当前 ${countDraftCharacters(content)} 字，目标参考 ${minimumDraftExpansionCharacters(targetWordCount)} 字`
+          );
+        }
       }
 
-      if (usedAi && isChapterDraftEndingIncomplete(content)) {
-        await appendExpansion("结尾仍疑似被截断，正在二次补尾");
+      if (usedAi && !stoppedAtTargetLimit && !stoppedAtMainLimit && isChapterDraftEndingIncomplete(content)) {
+        await appendExpansion("结尾仍未完整，正在二次补尾");
+      }
+
+      if (usedAi && !stoppedAtTargetLimit && !hasUsableDraftContent(content, targetWordCount) && missesRequiredPsychologyBeat(content, input.context.taskCard)) {
+        await appendExpansion("正文漏掉任务卡心理适应/现实回响硬要求，正在补写这一处");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式生成失败";
       const isLengthLimit = message.includes("长度限制") || message.toLowerCase().includes("length");
 
       if (content.trim()) {
-        let closingErrorMessage = "";
-
-        if (isLengthLimit || isChapterDraftEndingIncomplete(content)) {
+        if ((isLengthLimit || isChapterDraftEndingIncomplete(content)) && !hasUsableDraftContent(content, targetWordCount)) {
           try {
             await appendClosing(`AI 输出被长度限制截断，正在补完整句结尾：当前 ${countDraftCharacters(content)} 字`);
 
@@ -144,29 +305,19 @@ async function streamGeneratedChapterDraft(input: {
               await appendClosing("补尾后结尾仍不完整，正在最后一次补完整句");
             }
           } catch (expansionError) {
-            closingErrorMessage = expansionError instanceof Error ? expansionError.message : "补写失败";
+            console.warn("Failed to complete streamed draft ending", expansionError);
           }
         }
 
         if (isChapterDraftEndingIncomplete(content)) {
-          const completedContent = prepareChapterDraftContentForSave(content, targetWordCount);
+          const completedContent = prepareChapterDraftContentForForcedCompleteSave(content, targetWordCount);
 
           if (
             completedContent &&
-            hasUsableDraftContent(completedContent, targetWordCount) &&
-            !isChapterDraftEndingIncomplete(completedContent)
+            hasUsableDraftContent(completedContent, targetWordCount)
+            && !isChapterDraftEndingIncomplete(completedContent)
           ) {
-            const trimmedForSave = completedContent !== content;
             content = completedContent;
-            if (trimmedForSave) {
-              input.enqueue("\n\n[补尾仍不稳定，已保留到最后一个完整句保存]\n\n");
-            }
-          } else {
-            throw new Error(
-              closingErrorMessage
-                ? `${message}；尝试补写结尾失败：${closingErrorMessage}，正文结尾仍然不完整，未保存为章节草稿。`
-                : `${message}；正文结尾仍然不完整，未保存为章节草稿。`
-            );
           }
         }
 
@@ -176,9 +327,6 @@ async function streamGeneratedChapterDraft(input: {
           );
         }
 
-        if (!isLengthLimit) {
-          input.enqueue(`\n\n[AI 流式生成提前结束，已保存已经完整的正文：${message}]\n\n`);
-        }
       } else {
         throw new Error(`${message}；AI 没有返回正文，未保存为章节草稿。`);
       }
@@ -188,6 +336,28 @@ async function streamGeneratedChapterDraft(input: {
   }
 
   input.enqueue(`\n\n${streamDraftSavingMarker}\n\n`);
+  content = prepareChapterDraftContentForSave(content, targetWordCount);
+
+  if (targetWordCount && countDraftCharacters(content) > maximumDraftCharacters(targetWordCount)) {
+    const trimmedContent = prepareChapterDraftContentForFastSave(content, input.context, targetWordCount);
+
+    if (hasUsableDraftContent(trimmedContent, targetWordCount)) {
+      content = trimmedContent;
+    }
+  }
+
+  if (usedAi && isChapterDraftEndingIncomplete(content)) {
+    const forcedCompleteContent = prepareChapterDraftContentForForcedCompleteSave(content, targetWordCount);
+
+    if (
+      forcedCompleteContent &&
+      forcedCompleteContent !== content &&
+      hasUsableDraftContent(forcedCompleteContent, targetWordCount) &&
+      !isChapterDraftEndingIncomplete(forcedCompleteContent)
+    ) {
+      content = forcedCompleteContent;
+    }
+  }
 
   const draft = await input.save({
     content,
@@ -195,9 +365,7 @@ async function streamGeneratedChapterDraft(input: {
     tokenUsage: combineAiTokenUsages(tokenUsages)
   });
 
-  if (draft.content.trim() !== content.trim()) {
-    input.enqueue(`\n\n${streamDraftFinalMarker}\n${draft.content}`);
-  }
+  input.enqueue(`\n\n${streamDraftFinalMarker}\n${draft.content}`);
 }
 
 export async function POST(
@@ -214,19 +382,28 @@ export async function POST(
     });
 
     return streamText(async (enqueue) => {
-      await streamGeneratedChapterDraft({
-        context: prepared.context,
-        useAi: prepared.useAi,
-        enqueue,
-        save: ({ content, usedAi, tokenUsage }) => saveStreamedChapterDraft({
+      try {
+        await streamGeneratedChapterDraft({
+          context: prepared.context,
+          useAi: prepared.useAi,
+          enqueue,
+          save: ({ content, usedAi, tokenUsage }) => saveStreamedChapterDraft({
+            projectId: prepared.projectId,
+            taskCardId: prepared.taskCard.id,
+            jobId: prepared.jobId,
+            content,
+            usedAi,
+            tokenUsage
+          })
+        });
+      } catch (error) {
+        await failStreamedWritingJob({
           projectId: prepared.projectId,
-          taskCardId: prepared.taskCard.id,
           jobId: prepared.jobId,
-          content,
-          usedAi,
-          tokenUsage
-        })
-      });
+          message: error instanceof Error ? error.message : "流式正文生成失败"
+        });
+        throw error;
+      }
     });
   }
 
@@ -236,19 +413,28 @@ export async function POST(
     });
 
     return streamText(async (enqueue) => {
-      await streamGeneratedChapterDraft({
-        context: prepared.context,
-        useAi: prepared.useAi,
-        enqueue,
-        save: ({ content, usedAi, tokenUsage }) => saveStreamedRegeneratedChapterDraftContent({
+      try {
+        await streamGeneratedChapterDraft({
+          context: prepared.context,
+          useAi: prepared.useAi,
+          enqueue,
+          save: ({ content, usedAi, tokenUsage }) => saveStreamedRegeneratedChapterDraftContent({
+            projectId: prepared.projectId,
+            draftId: prepared.draftId,
+            jobId: prepared.jobId,
+            content,
+            usedAi,
+            tokenUsage
+          })
+        });
+      } catch (error) {
+        await failStreamedWritingJob({
           projectId: prepared.projectId,
-          draftId: prepared.draftId,
           jobId: prepared.jobId,
-          content,
-          usedAi,
-          tokenUsage
-        })
-      });
+          message: error instanceof Error ? error.message : "流式正文重写失败"
+        });
+        throw error;
+      }
     });
   }
 

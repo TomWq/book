@@ -538,6 +538,7 @@ export type StoredChapterLedger = {
   payoff: string;
   cliffhanger: string;
   stateChanges: string[];
+  carryOverTasks?: string[];
   closureStatus?: "pending" | "confirmed";
   closureConfirmedAt?: string;
   closureDecisions?: Array<{

@@ -22,6 +22,7 @@ export type ProjectCreationAssistInput = {
   name?: string;
   titleConcept?: string;
   genre?: string;
+  categoryDescription?: string;
   targetReader?: string;
   tags?: string[];
   protagonistNames?: string[];
@@ -824,6 +825,12 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     input.action === "description"
       ? "简介要先让读者知道主角是谁、被什么压住、靠什么翻盘、后面有什么更大期待。"
       : "本次只处理当前任务，不要顺手补充其他字段。",
+    input.action === "description" && input.genre?.trim()
+      ? `主分类「${input.genre.trim()}」是简介的故事发动机，不是可忽略标签；生成简介必须体现这个主分类的核心机制${input.categoryDescription?.trim() ? `：${input.categoryDescription.trim()}` : ""}。如果主题/角色标签和主分类争夺表达空间，以主分类框架为准，标签只作为口味叠加。`
+      : null,
+    input.action === "description" && input.categoryDescription?.trim()
+      ? "不能只写标签氛围、人物性格或单一场景；必须让读者在简介里看出主分类承诺的基础故事形态。"
+      : null,
     input.action === "titleConcept"
       ? [
           "本次只润色 titleConcept，不生成书名、不生成简介、不改人物名。",
@@ -875,6 +882,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
               name: titleSeedName,
               titleConcept: input.titleConcept,
               genre: input.genre,
+              categoryDescription: input.categoryDescription,
               targetReader: input.targetReader,
               tags: input.tags ?? [],
               protagonistNames: input.protagonistNames ?? [],
