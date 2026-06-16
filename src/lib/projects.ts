@@ -11652,6 +11652,7 @@ export async function createProject(input: {
   genre?: string;
   description?: string;
   coverImageUrl?: string;
+  relatedInspirationIds?: string[];
   initialState?: InitialProjectStateInput;
 }) {
   const store = await readStore();
@@ -11662,8 +11663,26 @@ export async function createProject(input: {
   if (currentUsage.projects + 1 > currentLimits.projects) {
     throw new Error("当前套餐项目数量已达到上限");
   }
-  const project = createDomainWriteRepository(store).createProject(currentUser.id, input);
+  const writeRepo = createDomainWriteRepository(store);
+  const project = writeRepo.createProject(currentUser.id, input);
   applyInitialProjectState(store, project, input.initialState);
+  const relatedInspirationIds = Array.from(new Set(input.relatedInspirationIds ?? []))
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+
+  relatedInspirationIds.forEach((inspirationId) => {
+    const inspiration = createDomainReadRepository(store).getInspirationForUser(inspirationId, currentUser.id);
+
+    if (!inspiration) {
+      return;
+    }
+
+    inspiration.projectId = project.id;
+    inspiration.linkedEntityType = "project";
+    inspiration.linkedEntityId = project.id;
+    inspiration.updatedAt = now();
+  });
   await writeStore(store);
   return project;
 }
@@ -11672,7 +11691,10 @@ export async function assistProjectCreation(input: ProjectCreationAssistInput) {
   const store = await readStore();
   const currentUser = await requireCurrentUser(store);
   const action: ProjectCreationAssistAction =
-    input.action === "protagonists" || input.action === "description" || input.action === "titleConcept"
+    input.action === "protagonists" ||
+    input.action === "description" ||
+    input.action === "titleConcept" ||
+    input.action === "storyDesign"
       ? input.action
       : "titles";
   const payload = {

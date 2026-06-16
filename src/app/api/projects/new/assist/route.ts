@@ -14,7 +14,19 @@ function list(value: unknown) {
         .filter(Boolean);
 }
 
-function characterList(value: unknown): ProjectCreationCharacterInput[] {
+function defaultCharacterRoleForReader(index: number, targetReader?: TargetReader | ""): ProjectCreationCharacterRole {
+  return targetReader === "女频"
+    ? index === 0
+      ? "女主"
+      : index === 1
+        ? "男主"
+        : "女配"
+    : index === 1
+      ? "女主"
+      : "男主";
+}
+
+function characterList(value: unknown, targetReader?: TargetReader | ""): ProjectCreationCharacterInput[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -30,9 +42,7 @@ function characterList(value: unknown): ProjectCreationCharacterInput[] {
       const normalizedRole: ProjectCreationCharacterRole =
         role === "男主" || role === "女主" || role === "男配" || role === "女配"
           ? role
-          : index === 1
-            ? "女主"
-            : "男主";
+          : defaultCharacterRoleForReader(index, targetReader);
 
       return [{
         role: normalizedRole,
@@ -60,6 +70,10 @@ function readTargetReader(value: unknown): TargetReader {
   return readerOptions.includes(value as TargetReader) ? value as TargetReader : "男频";
 }
 
+function readOptionalTargetReader(value: unknown): TargetReader | "" {
+  return readerOptions.includes(value as TargetReader) ? value as TargetReader : "";
+}
+
 function readCategoryDescription(input: {
   targetReader: TargetReader;
   genre: string;
@@ -83,11 +97,16 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const rawAction = String(body.action ?? "");
   const action =
-    rawAction === "protagonists" || rawAction === "description" || rawAction === "titles" || rawAction === "titleConcept"
+    rawAction === "protagonists" ||
+    rawAction === "description" ||
+    rawAction === "titles" ||
+    rawAction === "titleConcept" ||
+    rawAction === "storyDesign"
       ? rawAction
       : "titles";
   const titleConcept = String(body.titleConcept ?? "");
-  const targetReader = readTargetReader(body.targetReader);
+  const explicitTargetReader = readOptionalTargetReader(body.targetReader);
+  const targetReader = action === "storyDesign" ? explicitTargetReader : readTargetReader(body.targetReader);
   const tagTaxonomyStyle = body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie";
   const genre = String(body.genre ?? "");
 
@@ -95,18 +114,21 @@ export async function POST(request: Request) {
     const result = await assistProjectCreation({
       action,
       name: action === "titles" && titleConcept.trim() ? "" : String(body.name ?? ""),
+      storyIdea: String(body.storyIdea ?? ""),
       titleConcept,
       genre,
-      categoryDescription: readCategoryDescription({
-        targetReader,
-        genre,
-        tagTaxonomyStyle,
-        categoryDescription: String(body.categoryDescription ?? "")
-      }),
+      categoryDescription: targetReader
+        ? readCategoryDescription({
+            targetReader,
+            genre,
+            tagTaxonomyStyle,
+            categoryDescription: String(body.categoryDescription ?? "")
+          })
+        : "",
       targetReader,
       tags: list(body.tags),
       protagonistNames: list(body.protagonistNames),
-      protagonistCharacters: characterList(body.protagonistCharacters),
+      protagonistCharacters: characterList(body.protagonistCharacters, targetReader),
       coreSellingPoint: String(body.coreSellingPoint ?? ""),
       goldenFinger: String(body.goldenFinger ?? ""),
       openingHook: String(body.openingHook ?? ""),

@@ -1,11 +1,12 @@
 import {
   attachAiTokenUsage,
+  combineAiTokenUsages,
   getAiTokenUsage,
   requestAiJson
 } from "@/lib/ai/client";
 import { randomUUID } from "node:crypto";
 
-export type ProjectCreationAssistAction = "titles" | "protagonists" | "description" | "titleConcept";
+export type ProjectCreationAssistAction = "titles" | "protagonists" | "description" | "titleConcept" | "storyDesign";
 export type TitleNamingStyle = "fanqie" | "qidian";
 export type TagTaxonomyStyle = "fanqie" | "qidian";
 export type DescriptionWritingStyle = "fanqie" | "qidian";
@@ -20,6 +21,7 @@ export type ProjectCreationCharacterInput = {
 export type ProjectCreationAssistInput = {
   action: ProjectCreationAssistAction;
   name?: string;
+  storyIdea?: string;
   titleConcept?: string;
   genre?: string;
   categoryDescription?: string;
@@ -40,12 +42,33 @@ export type ProjectCreationAssistInput = {
   avoidTitles?: string[];
 };
 
+export type ProjectCreationStoryDesign = {
+  titleOptions: string[];
+  logline: string;
+  intro: string;
+  coreSellingPoint: string;
+  coreConflict: string;
+  protagonistDesign: string;
+  goldenFinger: string;
+  openingHook: string;
+  mainLoop: string;
+  worldSetting: string;
+  characterSuggestions: ProjectCreationCharacterInput[];
+  first10Chapters: string[];
+  pleasurePoints: string[];
+  foreshadowing: string[];
+  risksToAvoid: string[];
+  recommendedGenre: string;
+  recommendedTags: string[];
+};
+
 export type ProjectCreationAssistResult = {
   titles: string[];
   protagonistNames: string[];
   protagonistCharacters: ProjectCreationCharacterInput[];
   description: string;
   titleConcept: string;
+  storyDesign: ProjectCreationStoryDesign | null;
 };
 
 const maxProjectCharacters = 20;
@@ -72,6 +95,23 @@ function list(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => String(item).trim()).filter(Boolean)
     : [];
+}
+
+function compactText(value: unknown, maxLength: number) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function textList(value: unknown, limit: number, maxLength: number) {
+  const items = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n|；|;/)
+      : [];
+
+  return items
+    .map((item) => compactText(item, maxLength))
+    .filter(Boolean)
+    .slice(0, limit);
 }
 
 function cleanTitleText(value: string) {
@@ -400,20 +440,81 @@ function normalizeTitlesWithFallback(
   return selectDiverseTitles(scoredTitles, limit).map((item) => item.title);
 }
 
+function normalizeStoryDesign(
+  value: unknown,
+  avoidTitles: string[] = [],
+  titleQualityOptions?: TitleQualityOptions,
+  targetReader?: string
+): ProjectCreationStoryDesign | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const raw = "storyDesign" in value && (value as Record<string, unknown>).storyDesign
+    ? (value as Record<string, unknown>).storyDesign
+    : value;
+
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const titleOptions = normalizeTitles(
+    textList(record.titleOptions ?? record.titles, 10, 80),
+    avoidTitles,
+    titleQualityOptions
+  ).slice(0, 6);
+  const characterSuggestions = normalizeCharacters(
+    record.characterSuggestions ?? record.characters ?? record.protagonistCharacters,
+    targetReader
+  ).slice(0, 8);
+  const design: ProjectCreationStoryDesign = {
+    titleOptions,
+    logline: compactText(stringField(record, ["logline", "oneSentence", "pitch"]), 220),
+    intro: compactText(stringField(record, ["intro", "description", "summary"]), 700),
+    coreSellingPoint: compactText(stringField(record, ["coreSellingPoint", "sellingPoint"]), 320),
+    coreConflict: compactText(stringField(record, ["coreConflict", "conflict"]), 360),
+    protagonistDesign: compactText(stringField(record, ["protagonistDesign", "protagonist", "protagonistModel"]), 360),
+    goldenFinger: compactText(stringField(record, ["goldenFinger", "goldenFingerMechanism", "keyMechanism"]), 360),
+    openingHook: compactText(stringField(record, ["openingHook", "hook"]), 360),
+    mainLoop: compactText(stringField(record, ["mainLoop", "storyLoop", "coreLoop"]), 360),
+    worldSetting: compactText(stringField(record, ["worldSetting", "world", "setting"]), 520),
+    characterSuggestions,
+    first10Chapters: textList(record.first10Chapters ?? record.chapters, 10, 320),
+    pleasurePoints: textList(record.pleasurePoints ?? record.payoffs ?? record.sellingPoints, 10, 320),
+    foreshadowing: textList(record.foreshadowing ?? record.foreshadowingPlan, 8, 300),
+    risksToAvoid: textList(record.risksToAvoid ?? record.avoidCopying ?? record.risks, 8, 300),
+    recommendedGenre: compactText(stringField(record, ["recommendedGenre", "genre"]), 40),
+    recommendedTags: textList(record.recommendedTags ?? record.tags, 6, 40)
+  };
+  const hasContent =
+    design.titleOptions.length > 0 ||
+    design.logline ||
+    design.intro ||
+    design.coreSellingPoint ||
+    design.coreConflict ||
+    design.goldenFinger ||
+    design.first10Chapters.length > 0;
+
+  return hasContent ? design : null;
+}
+
 function normalizeResult(
   value: Partial<ProjectCreationAssistResult>,
   avoidTitles: string[] = [],
-  titleQualityOptions?: TitleQualityOptions
+  titleQualityOptions?: TitleQualityOptions,
+  targetReader?: string
 ) {
   return attachAiTokenUsage({
     titles: normalizeTitles(list(value.titles), avoidTitles, titleQualityOptions),
     protagonistNames: list(value.protagonistNames).slice(0, maxProjectCharacters),
-    protagonistCharacters: normalizeCharacters(value.protagonistCharacters),
+    protagonistCharacters: normalizeCharacters(value.protagonistCharacters, targetReader),
     description: String(value.description ?? "").trim(),
     titleConcept: stringField(value, ["titleConcept", "polishedTitleConcept", "titleDirection", "directionMaterial", "content"])
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 500)
+      .slice(0, 500),
+    storyDesign: normalizeStoryDesign(value, avoidTitles, titleQualityOptions, targetReader)
   }, getAiTokenUsage(value));
 }
 
@@ -528,7 +629,8 @@ async function generateSimpleTitlesWithAi(input: ProjectCreationAssistInput, tit
     protagonistNames: [],
     protagonistCharacters: [],
     description: "",
-    titleConcept: ""
+    titleConcept: "",
+    storyDesign: null
   }, usage);
 }
 
@@ -536,7 +638,19 @@ function normalizeCharacterRole(value: unknown, fallback: ProjectCreationCharact
   return value === "男主" || value === "女主" || value === "男配" || value === "女配" ? value : fallback;
 }
 
-function normalizeCharacters(value: unknown): ProjectCreationCharacterInput[] {
+function defaultCharacterRoleForReader(index: number, targetReader?: string): ProjectCreationCharacterRole {
+  return targetReader === "女频"
+    ? index === 0
+      ? "女主"
+      : index === 1
+        ? "男主"
+        : "女配"
+    : index === 1
+      ? "女主"
+      : "男主";
+}
+
+function normalizeCharacters(value: unknown, targetReader?: string): ProjectCreationCharacterInput[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -554,8 +668,10 @@ function normalizeCharacters(value: unknown): ProjectCreationCharacterInput[] {
         return [];
       }
 
+      const role = normalizeCharacterRole(raw.role, defaultCharacterRoleForReader(index, targetReader));
+
       return [{
-        role: normalizeCharacterRole(raw.role, index === 1 ? "女主" : "男主"),
+        role,
         name
       }];
     })
@@ -640,6 +756,27 @@ function titleConceptTask() {
   ].join("");
 }
 
+function storyDesignTask(descriptionWritingStyle: DescriptionWritingStyle) {
+  const introStyle = descriptionWritingStyle === "qidian"
+    ? "简介偏起点：设定可信、悬念稳、长期目标清楚，少用口号。"
+    : "简介偏番茄：冲突前置、爽点清楚、压制和反击明显，读者一眼能看懂卖点。";
+
+  return [
+    "根据作者给出的小说大概思路、方向或零散设定，生成一份原创新书整体设计。",
+    "用户可能只给一句方向，也可能给多个点。请先保留用户确定的核心，不确定处用商业网文结构补齐，但不能把补齐内容伪装成用户原话。",
+    "必须输出 storyDesign 对象，不要输出 Markdown、解释或额外字段。",
+    "设计重点不是写正文，而是帮作者完成立项：书名方向、简介、核心冲突、主角模型、金手指/关键机制、开局钩子、主循环、前 10 章推进、爽点、伏笔和避坑。",
+    introStyle,
+    "书名必须原创，不要照搬已有作品名、角色名、专有世界观名词或标志性设定。",
+    "金手指要有边界、代价或触发条件，不能只是无上限外挂；要能支撑长篇状态管理。",
+    "核心冲突必须包含压制来源、主角反击方式、升级敌人或新地图的入口。",
+    "前 10 章不是流水账，要体现：开局压力、第一次反击、第一次收益、信息差、章末钩子和主线目标建立。",
+    "risksToAvoid 必须提醒哪些地方容易跑偏、容易抄袭感强、容易金手指失控或爽点重复。",
+    "如果 currentProject.targetReader 为空或未明确，请根据 storyIdea 自行判断更适合男频、女频或泛读者方向；不要默认按男频设计。",
+    "如果用户提到某本现有作品，只能抽象其通用结构，不得复制人物、桥段、专有设定和章节顺序。"
+  ].join("");
+}
+
 function descriptionStyleRules(descriptionWritingStyle: DescriptionWritingStyle) {
   return descriptionWritingStyle === "qidian"
     ? [
@@ -652,6 +789,304 @@ function descriptionStyleRules(descriptionWritingStyle: DescriptionWritingStyle)
         "可以使用更强的情绪词和节奏句，但不要低俗擦边或夸张到失真。",
         "读完第一屏要知道主角为什么被压、靠什么翻盘、后面还有什么更大的爽点。"
       ];
+}
+
+type StoryDesignSegmentResponse = {
+  storyDesign?: Record<string, unknown> | null;
+};
+
+function isLengthLimitError(error: unknown) {
+  return error instanceof Error && /长度限制截断|未正常结束：length|finish_reason.*length|\blength\b/i.test(error.message);
+}
+
+function storyDesignSegmentRecord(response: StoryDesignSegmentResponse) {
+  return response.storyDesign && typeof response.storyDesign === "object" ? response.storyDesign : {};
+}
+
+async function generateSegmentedStoryDesignWithAi(input: {
+  project: ProjectCreationAssistInput;
+  titleNamingStyle: TitleNamingStyle;
+  tagTaxonomyStyle: TagTaxonomyStyle;
+  descriptionWritingStyle: DescriptionWritingStyle;
+  characterSlots: ProjectCreationCharacterInput[];
+  requestedCharacterSlots: ProjectCreationCharacterInput[];
+  avoidTitles: string[];
+  directLabelTerms: string[];
+  titleFactualSources: string;
+  hasConcreteTitleFactInputs: boolean;
+  titleDirectionGuide: Record<string, string>;
+}) {
+  const {
+    project,
+    titleNamingStyle,
+    tagTaxonomyStyle,
+    descriptionWritingStyle,
+    characterSlots,
+    requestedCharacterSlots,
+    avoidTitles,
+    directLabelTerms,
+    titleFactualSources,
+    hasConcreteTitleFactInputs,
+    titleDirectionGuide
+  } = input;
+  const currentProject = {
+    name: "",
+    storyIdea: project.storyIdea,
+    titleConcept: project.titleConcept,
+    genre: project.genre,
+    categoryDescription: project.categoryDescription,
+    targetReader: project.targetReader,
+    tags: project.tags ?? [],
+    protagonistNames: project.protagonistNames ?? [],
+    characterSlots,
+    requestedCharacterSlots,
+    coreSellingPoint: project.coreSellingPoint,
+    goldenFinger: project.goldenFinger,
+    openingHook: project.openingHook,
+    workLengthType: project.workLengthType,
+    targetTotalWords: project.targetTotalWords,
+    description: project.description,
+    titleNamingStyle,
+    tagTaxonomyStyle,
+    descriptionWritingStyle,
+    directLabelTerms,
+    titleFactualSources,
+    hasConcreteTitleFactInputs,
+    titleDirectionGuide,
+    previousTitlesInCurrentContext: avoidTitles
+  };
+  const readerRules = [
+    project.targetReader?.trim()
+      ? `当前 targetReader「${project.targetReader.trim()}」是用户明确选择的频道，整体设计必须尊重它。`
+      : "当前未指定 targetReader。必须先从 storyIdea 判断目标读者，不要默认男频；若构思更适合女频，可以按女频人物关系、情绪补偿、成长线和关系张力设计。",
+    project.targetReader === "女频"
+      ? "女频整体设计默认第一主角是女主。characterSuggestions 第一项必须是 role=女主，姓名要有明确女性气质；不要给女主、女配使用明显男性名或偏男性的中性名。男主是关系张力或对手/搭档功能，不要把故事主视角写成男主升级流。"
+      : null,
+    project.targetReader === "男频"
+      ? "男频整体设计默认第一主角是男主。characterSuggestions 第一项通常应是 role=男主，姓名要有男性气质；女主/女配不能使用明显男性名。"
+      : null
+  ].filter((item): item is string => Boolean(item));
+  const commonRules = [
+    storyDesignTask(descriptionWritingStyle),
+    "这是分段生成：每次只输出本段 outputSchema 中列出的字段，但每段都要保持足够信息量，不要写成精简版、占位符或泛泛模板话。",
+    "三段内容最终会被系统合并成一份 storyDesign，因此本段必须和已有上下文保持同一本书、同一主角、同一核心机制。",
+    project.targetTotalWords
+      ? `整体设计需要符合当前作品体量：${project.workLengthType ?? "medium"}，目标约 ${Math.round(project.targetTotalWords / 10000)} 万字；主循环、前 10 章和伏笔要能支撑这个体量。`
+      : null,
+    "storyIdea 是作者真实想法，是本次最重要输入。必须围绕它扩展，不要改成另一本完全不同的书。",
+    "titleConcept、coreSellingPoint、goldenFinger、openingHook、description 是已有表单草稿；如果它们与 storyIdea 不冲突，可以吸收进设计。",
+    "genre、targetReader、tags 是市场坐标，只用来判断平台口味和读者期待，不要机械堆进结果。",
+    "characterSlots 在 storyDesign 中主要表示角色顺序和角色性别，不代表必须沿用旧名字；characterSuggestions 必须重新给出匹配 role 的姓名。",
+    "输出必须能被回填到新书创建表单，所以 titleOptions、intro、coreSellingPoint、goldenFinger、openingHook 不能空泛。",
+    "不要写成纯设定百科。每个关键机制都要落到冲突、爽点、章节推进或状态管理里。",
+    "版权边界：可以借鉴通用类型结构，不能复刻原文表达、角色名称、标志性人设、独特世界观和具体桥段。",
+    ...readerRules
+  ].filter((item): item is string => Boolean(item));
+  const buildPartMessages = (part: {
+    partName: string;
+    task: string;
+    outputSchema: Record<string, unknown>;
+    context?: Record<string, unknown>;
+  }) => [
+      {
+        role: "system" as const,
+        content:
+          "你是中文网文平台的新书立项编辑，擅长把作者的零散脑洞扩展成可连载、可管理、可避坑的原创网文方案。请严格输出 JSON，不要输出解释、Markdown 或代码块。"
+      },
+      {
+        role: "user" as const,
+        content: JSON.stringify(
+          {
+            task: part.task,
+            partName: part.partName,
+            currentProject,
+            existingDesignContext: part.context ?? {},
+            styleRules: commonRules,
+            outputSchema: {
+              storyDesign: part.outputSchema
+            }
+          },
+          null,
+          2
+        )
+      }
+    ];
+  const requestPart = async (part: {
+    partName: string;
+    task: string;
+    outputSchema: Record<string, unknown>;
+    context?: Record<string, unknown>;
+    temperature: number;
+    maxTokens: number;
+  }) => {
+    try {
+      return await requestAiJson<StoryDesignSegmentResponse>({
+        messages: buildPartMessages(part),
+        temperature: part.temperature,
+        maxTokens: part.maxTokens,
+        timeoutMs: 120000
+      });
+    } catch (error) {
+      if (!isLengthLimitError(error)) {
+        throw error;
+      }
+
+      try {
+        return await requestAiJson<StoryDesignSegmentResponse>({
+          messages: buildPartMessages({
+            ...part,
+            task: [
+              part.task,
+              "本次是长度/JSON 完整性重试。不要改成精简版，必须保留本段字段数量和关键设计点；每个字段或数组项按 outputSchema 的建议长度写完整，避免超长句和重复解释，确保 JSON 正常闭合。"
+            ].join("\n")
+          }),
+          temperature: Math.max(0.2, part.temperature - 0.05),
+          maxTokens: Math.max(part.maxTokens + 1800, 5200),
+          timeoutMs: 150000
+        });
+      } catch (retryError) {
+        if (isLengthLimitError(retryError)) {
+          throw new Error(`AI 分段生成「${part.partName}」仍被长度限制截断，请稍后重试。系统会保留完整方案结构，不会降级为精简版。`);
+        }
+
+        throw retryError;
+      }
+    }
+  };
+
+  const foundationResponse = await requestPart({
+    partName: "立项骨架",
+    task:
+      "生成新书整体设计的立项骨架。本段负责书名方向、简介、核心卖点、核心冲突、主角模型、金手指/关键机制、开局钩子、主循环、世界观简表、主要角色建议和推荐分类标签。",
+    outputSchema: {
+      titleOptions: "string[]，6 个候选书名，原创、可上架、不同卖点方向，避开 previousTitlesInCurrentContext",
+      logline: "string，一句话卖点，必须点出主角处境、核心反差和追读期待",
+      intro: "string，180-320 字作品简介，冲突前置但不剧透全书",
+      coreSellingPoint: "string，2-3 句，说明商业卖点、目标读者为什么会追、和同题材的差异",
+      coreConflict: "string，2-3 句，包含压制来源、主角反击方式、升级敌人或新地图入口",
+      protagonistDesign: "string，2-3 句，主角身份、底层欲望、短期目标、长期目标和人物弱点",
+      goldenFinger: "string，2-3 句，金手指或关键机制，必须包含限制、代价、触发条件或反噬边界",
+      openingHook: "string，2-3 句，第一章可用开局钩子，包含危机、误判、选择压力和章末钩子",
+      mainLoop: "string，2-3 句，可持续循环，说明每轮压制、反击、收益、信息差和升级入口",
+      worldSetting: "string，2-3 句，世界观简表，突出规则、势力/地图、资源体系和题材差异",
+      characterSuggestions: "Array<{ role: '男主' | '女主' | '男配' | '女配'; name: string }>，4-6 个主要人物，姓名必须匹配 role，说明顺序以主视角和剧情功能为准",
+      recommendedGenre: "string，最适合回填到主分类的题材方向",
+      recommendedTags: "string[]，4-6 个标签，覆盖题材、人物、机制和爽点口味"
+    },
+    temperature: 0.72,
+    maxTokens: 4200
+  });
+  const foundationRecord = storyDesignSegmentRecord(foundationResponse);
+  const foundationDesign = normalizeStoryDesign(
+    { storyDesign: foundationRecord },
+    avoidTitles,
+    undefined,
+    project.targetReader
+  );
+
+  if (!foundationDesign) {
+    throw new Error("AI 没有生成可用的新书整体设计骨架，请补充一点主角处境、冲突或题材方向后重试。");
+  }
+
+  const chapterResponse = await requestPart({
+    partName: "前 10 章推进",
+    task:
+      "基于立项骨架，生成前 10 章推进。本段只输出 first10Chapters，但要写得可执行：每章都要有章节任务、冲突压力、爽点或收益、信息差/伏笔、章末钩子。",
+    context: {
+      foundation: {
+        logline: foundationDesign.logline,
+        coreConflict: foundationDesign.coreConflict,
+        protagonistDesign: foundationDesign.protagonistDesign,
+        goldenFinger: foundationDesign.goldenFinger,
+        openingHook: foundationDesign.openingHook,
+        mainLoop: foundationDesign.mainLoop,
+        worldSetting: foundationDesign.worldSetting,
+        characterSuggestions: foundationDesign.characterSuggestions
+      }
+    },
+    outputSchema: {
+      first10Chapters:
+        "string[]，必须正好 10 条。每条建议 120-220 字，格式自然即可，但必须包含：本章剧情任务、主要冲突、主角行动、爽点/收益、留下的钩子。不要流水账，不要只写章节标题。"
+    },
+    temperature: 0.66,
+    maxTokens: 4200
+  });
+  const chapterRecord = storyDesignSegmentRecord(chapterResponse);
+  const first10Chapters = textList(chapterRecord.first10Chapters, 10, 260);
+  const detailContext = {
+    foundation: {
+      logline: foundationDesign.logline,
+      coreConflict: foundationDesign.coreConflict,
+      protagonistDesign: foundationDesign.protagonistDesign,
+      goldenFinger: foundationDesign.goldenFinger,
+      mainLoop: foundationDesign.mainLoop,
+      worldSetting: foundationDesign.worldSetting
+    },
+    first10Chapters
+  };
+  const [pleasureResponse, foreshadowingResponse, riskResponse] = await Promise.all([
+    requestPart({
+      partName: "爽点设计",
+      task:
+        "基于立项骨架和前 10 章推进，生成爽点设计。本段只输出 pleasurePoints，每一条都要能指导后续长篇创作。",
+      context: detailContext,
+      outputSchema: {
+        pleasurePoints:
+          "string[]，8-10 条。每条必须说明：爽点前的压制、释放位置、为什么有效、是否推动主线。不要只写爽点名称。"
+      },
+      temperature: 0.62,
+      maxTokens: 3000
+    }),
+    requestPart({
+      partName: "伏笔安排",
+      task:
+        "基于立项骨架和前 10 章推进，生成伏笔安排。本段只输出 foreshadowing，每一条都要能直接进入后续伏笔管理。",
+      context: detailContext,
+      outputSchema: {
+        foreshadowing:
+          "string[]，6-8 条。每条必须说明：埋设章节或位置、关联人物/物品/规则、预计回收方式、不能提前透露的信息。"
+      },
+      temperature: 0.58,
+      maxTokens: 2600
+    }),
+    requestPart({
+      partName: "避坑清单",
+      task:
+        "基于立项骨架和前 10 章推进，生成避坑清单。本段只输出 risksToAvoid，每一条都要指出风险和具体规避办法。",
+      context: detailContext,
+      outputSchema: {
+        risksToAvoid:
+          "string[]，6-8 条。每条必须说明：容易跑偏或像抄袭/金手指失控/爽点重复的风险，以及具体规避办法。"
+      },
+      temperature: 0.56,
+      maxTokens: 2600
+    })
+  ]);
+  const mergedResponse = {
+    storyDesign: {
+      ...foundationRecord,
+      ...chapterRecord,
+      ...storyDesignSegmentRecord(pleasureResponse),
+      ...storyDesignSegmentRecord(foreshadowingResponse),
+      ...storyDesignSegmentRecord(riskResponse)
+    }
+  };
+  const normalized = normalizeResult(mergedResponse as Partial<ProjectCreationAssistResult>, avoidTitles, undefined, project.targetReader);
+
+  if (!normalized.storyDesign) {
+    throw new Error("AI 没有生成可用的新书整体设计，请补充一点主角处境、冲突或题材方向后重试。");
+  }
+
+  return attachAiTokenUsage(
+    normalized,
+    combineAiTokenUsages([
+      getAiTokenUsage(foundationResponse),
+      getAiTokenUsage(chapterResponse),
+      getAiTokenUsage(pleasureResponse),
+      getAiTokenUsage(foreshadowingResponse),
+      getAiTokenUsage(riskResponse)
+    ])
+  );
 }
 
 function isTitlesAssistAction(action: ProjectCreationAssistAction) {
@@ -668,29 +1103,41 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     return generateSimpleTitlesWithAi(input, titleNamingStyle);
   }
 
+  if (input.action === "storyDesign" && !compactText(input.storyIdea, 2000)) {
+    throw new Error("请先写一点小说思路或方向，再让 AI 做整体设计。");
+  }
+
   const requestedAction: ProjectCreationAssistAction = input.action;
   const legacyTitleFlow: boolean = false;
   const titleGenerationBatchId = legacyTitleFlow ? randomUUID().slice(0, 8) : "";
   const characterSlots = (input.protagonistCharacters?.length
     ? input.protagonistCharacters
-    : (input.protagonistNames ?? []).map((name, index) => ({ role: normalizeCharacterRole(index === 1 ? "女主" : "男主"), name }))
+    : (input.protagonistNames ?? []).map((name, index) => ({
+        role: defaultCharacterRoleForReader(index, input.targetReader),
+        name
+      }))
   )
     .map((item, index) => ({
-      role: normalizeCharacterRole(item.role, index === 1 ? "女主" : "男主"),
+      role: normalizeCharacterRole(item.role, defaultCharacterRoleForReader(index, input.targetReader)),
       name: String(item.name ?? "").trim()
     }))
     .slice(0, maxProjectCharacters);
   const requestedCharacterSlots = characterSlots.length > 0
     ? characterSlots
-    : [
-        { role: "男主" as const, name: "" },
-        { role: "女主" as const, name: "" }
-      ];
+    : input.targetReader === "女频"
+      ? [
+          { role: "女主" as const, name: "" },
+          { role: "男主" as const, name: "" }
+        ]
+      : [
+          { role: "男主" as const, name: "" },
+          { role: "女主" as const, name: "" }
+        ];
   const actionConfig: Record<
     ProjectCreationAssistAction,
     {
       task: string;
-      outputSchema: Record<string, string>;
+      outputSchema: Record<string, unknown>;
       temperature: number;
       maxTokens: number;
     }
@@ -731,6 +1178,32 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       },
       temperature: 0.55,
       maxTokens: 520
+    },
+    storyDesign: {
+      task: storyDesignTask(descriptionWritingStyle),
+      outputSchema: {
+        storyDesign: {
+          titleOptions: "string[]，4-6 个候选书名",
+          logline: "string，一句话卖点",
+          intro: "string，120-260 字作品简介",
+          coreSellingPoint: "string，核心商业卖点",
+          coreConflict: "string，压制来源 + 反击方式 + 升级入口",
+          protagonistDesign: "string，主角身份、底层欲望、短期目标和长期目标",
+          goldenFinger: "string，金手指或关键机制，包含限制、代价或触发条件",
+          openingHook: "string，第一章可用开局钩子",
+          mainLoop: "string，可持续循环，例如被误判 → 被挑衅 → 反击 → 获益 → 引出更高层敌人",
+          worldSetting: "string，世界观简表，突出规则和题材差异",
+          characterSuggestions: "Array<{ role: '男主' | '女主' | '男配' | '女配'; name: string }>",
+          first10Chapters: "string[]，10 条，每条说明章节任务和钩子",
+          pleasurePoints: "string[]，爽点设计，说明压制、释放和主线作用",
+          foreshadowing: "string[]，伏笔安排",
+          risksToAvoid: "string[]，版权、设定、节奏和金手指避坑",
+          recommendedGenre: "string",
+          recommendedTags: "string[]"
+        }
+      },
+      temperature: 0.72,
+      maxTokens: 2600
     }
   };
   const currentTask = actionConfig[input.action];
@@ -743,6 +1216,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       : [];
   const titleFactualSources = joinPromptSignals([
     input.titleConcept,
+    input.storyIdea,
     input.coreSellingPoint,
     input.openingHook,
     input.description,
@@ -752,6 +1226,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
   ]);
   const hasConcreteTitleFactInputs = hasConcreteTitleFacts([
     input.titleConcept,
+    input.storyIdea,
     input.coreSellingPoint,
     input.openingHook,
     input.description,
@@ -824,7 +1299,9 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       : null,
     input.action === "description"
       ? "简介要先让读者知道主角是谁、被什么压住、靠什么翻盘、后面有什么更大期待。"
-      : "本次只处理当前任务，不要顺手补充其他字段。",
+      : input.action === "storyDesign"
+        ? "本次要输出完整新书整体设计，但仍然只返回 outputSchema 要求的 JSON 字段。"
+        : "本次只处理当前任务，不要顺手补充其他字段。",
     input.action === "description" && input.genre?.trim()
       ? `主分类「${input.genre.trim()}」是简介的故事发动机，不是可忽略标签；生成简介必须体现这个主分类的核心机制${input.categoryDescription?.trim() ? `：${input.categoryDescription.trim()}` : ""}。如果主题/角色标签和主分类争夺表达空间，以主分类框架为准，标签只作为口味叠加。`
       : null,
@@ -842,6 +1319,29 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
       : null,
     input.action === "description" && input.targetTotalWords
       ? `简介需要符合当前作品体量：${input.workLengthType ?? "medium"}，目标约 ${Math.round(input.targetTotalWords / 10000)} 万字；不要把短篇写成长篇无限升级，也不要把长篇写成很快收尾。`
+      : null,
+    input.action === "storyDesign" && input.targetTotalWords
+      ? `整体设计需要符合当前作品体量：${input.workLengthType ?? "medium"}，目标约 ${Math.round(input.targetTotalWords / 10000)} 万字；请给出能支撑该体量的主循环、阶段升级和前 10 章节奏。`
+      : null,
+    input.action === "storyDesign"
+      ? [
+          "storyIdea 是作者真实想法，是本次最重要输入。必须围绕它扩展，不要改成另一本完全不同的书。",
+          "titleConcept、coreSellingPoint、goldenFinger、openingHook、description 是已有表单草稿；如果它们与 storyIdea 不冲突，可以吸收进设计。",
+          "genre、targetReader、tags 是市场坐标，只用来判断平台口味和读者期待，不要机械堆进结果。",
+          input.targetReader?.trim()
+            ? `当前 targetReader「${input.targetReader.trim()}」是用户明确选择的频道，整体设计必须尊重它。`
+            : "当前未指定 targetReader。必须先从 storyIdea 判断目标读者，不要默认男频；若构思更适合女频，可以按女频人物关系、情绪补偿、成长线和关系张力设计。",
+          input.targetReader === "女频"
+            ? "女频整体设计默认第一主角是女主。characterSuggestions 第一项必须是 role=女主，姓名要有明确女性气质；不要给女主、女配使用明显男性名或偏男性的中性名。男主是关系张力或对手/搭档功能，不要把故事主视角写成男主升级流。"
+            : null,
+          input.targetReader === "男频"
+            ? "男频整体设计默认第一主角是男主。characterSuggestions 第一项通常应是 role=男主，姓名要有男性气质；女主/女配不能使用明显男性名。"
+            : null,
+          "characterSlots 在 storyDesign 中主要表示角色顺序和角色性别，不代表必须沿用旧名字；characterSuggestions 必须重新给出匹配 role 的姓名。",
+          "输出必须能被回填到新书创建表单，所以 titleOptions、intro、coreSellingPoint、goldenFinger、openingHook 不能空泛。",
+          "不要写成纯设定百科。每个关键机制都要落到冲突、爽点、章节推进或状态管理里。",
+          "版权边界：可以借鉴通用类型结构，不能复刻原文表达、角色名称、标志性人设、独特世界观和具体桥段。"
+        ].join("")
       : null,
     input.action === "protagonists"
       ? [
@@ -867,6 +1367,23 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     hasConcreteTitleFacts: hasConcreteTitleFactInputs,
     strict: true
   };
+
+  if (input.action === "storyDesign") {
+    return generateSegmentedStoryDesignWithAi({
+      project: input,
+      titleNamingStyle,
+      tagTaxonomyStyle,
+      descriptionWritingStyle,
+      characterSlots,
+      requestedCharacterSlots,
+      avoidTitles: mergedAvoidTitles(),
+      directLabelTerms,
+      titleFactualSources,
+      hasConcreteTitleFactInputs,
+      titleDirectionGuide
+    });
+  }
+
   const buildMessages = (compact = false, extraAvoidTitles: string[] = []) => [
       {
         role: "system" as const,
@@ -880,6 +1397,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
             task: currentTask.task,
             currentProject: {
               name: titleSeedName,
+              storyIdea: input.storyIdea,
               titleConcept: input.titleConcept,
               genre: input.genre,
               categoryDescription: input.categoryDescription,
@@ -1048,7 +1566,8 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
     const normalized = normalizeResult(
       response,
       mergedAvoidTitles(),
-      legacyTitleFlow ? titleQualityOptions : undefined
+      legacyTitleFlow ? titleQualityOptions : undefined,
+      input.targetReader
     );
     const generatedTitles = list(response.titles).map(cleanTitleText).filter(Boolean);
     const rejectedTitles = false
@@ -1067,7 +1586,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
           maxTokens: 900
         });
 
-        const compactNormalized = normalizeResult(compactResponse, mergedAvoidTitles(rejectedTitles), titleQualityOptions);
+        const compactNormalized = normalizeResult(compactResponse, mergedAvoidTitles(rejectedTitles), titleQualityOptions, input.targetReader);
         const compactShortTitles = compactNormalized.titles.filter((title) => titleCharacterLength(title) <= 24);
 
         if (compactNormalized.titles.length === 0) {
@@ -1080,7 +1599,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
           const conservativeNormalized = normalizeResult(conservativeResponse, mergedAvoidTitles(rejectedTitles), {
             ...titleQualityOptions,
             strict: false
-          });
+          }, input.targetReader);
           const conservativeTitles = normalizeTitlesWithFallback(
             list(conservativeResponse.titles),
             mergedAvoidTitles(rejectedTitles),
@@ -1088,7 +1607,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
           );
 
           if (conservativeTitles.length === 0) {
-            return normalizeResult({ titles: [] }, mergedAvoidTitles(rejectedTitles), titleQualityOptions);
+            return normalizeResult({ titles: [] }, mergedAvoidTitles(rejectedTitles), titleQualityOptions, input.targetReader);
           }
 
           return attachAiTokenUsage({
@@ -1118,7 +1637,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
         maxTokens: 900
       });
 
-      const retryNormalized = normalizeResult(retryResponse, mergedAvoidTitles(rejectedTitles), titleQualityOptions);
+      const retryNormalized = normalizeResult(retryResponse, mergedAvoidTitles(rejectedTitles), titleQualityOptions, input.targetReader);
 
       if (retryNormalized.titles.length === 0) {
         const conservativeResponse = await requestAiJson<Partial<ProjectCreationAssistResult>>({
@@ -1130,7 +1649,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
         const conservativeNormalized = normalizeResult(conservativeResponse, mergedAvoidTitles(rejectedTitles), {
           ...titleQualityOptions,
           strict: false
-        });
+        }, input.targetReader);
         const conservativeTitles = normalizeTitlesWithFallback(
           list(conservativeResponse.titles),
           mergedAvoidTitles(rejectedTitles),
@@ -1138,7 +1657,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
         );
 
         if (conservativeTitles.length === 0) {
-          return normalizeResult({ titles: [] }, mergedAvoidTitles(rejectedTitles), titleQualityOptions);
+          return normalizeResult({ titles: [] }, mergedAvoidTitles(rejectedTitles), titleQualityOptions, input.targetReader);
         }
 
         return attachAiTokenUsage({
@@ -1160,7 +1679,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
           maxTokens: 700
         });
 
-        const normalized = normalizeResult(response, mergedAvoidTitles(), titleQualityOptions);
+        const normalized = normalizeResult(response, mergedAvoidTitles(), titleQualityOptions, input.targetReader);
 
         if (normalized.titles.length > 0) {
           return normalized;
@@ -1169,7 +1688,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
         const fallbackTitles = normalizeTitlesWithFallback(list(response.titles), mergedAvoidTitles(), titleQualityOptions);
 
         if (fallbackTitles.length === 0) {
-          return normalizeResult({ titles: [] }, mergedAvoidTitles(), titleQualityOptions);
+          return normalizeResult({ titles: [] }, mergedAvoidTitles(), titleQualityOptions, input.targetReader);
         }
 
         return attachAiTokenUsage({
@@ -1177,7 +1696,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
           titles: fallbackTitles
         }, getAiTokenUsage(response));
       } catch {
-        return normalizeResult({ titles: [] }, mergedAvoidTitles(), titleQualityOptions);
+        return normalizeResult({ titles: [] }, mergedAvoidTitles(), titleQualityOptions, input.targetReader);
       }
     }
 

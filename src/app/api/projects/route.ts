@@ -70,6 +70,7 @@ export async function POST(request: Request) {
     genre: String(body.genre ?? ""),
     description: String(body.description ?? ""),
     coverImageUrl: String(body.coverImageUrl ?? ""),
+    relatedInspirationIds: list(body.relatedInspirationIds),
     initialState: {
       targetReader: String(body.targetReader ?? ""),
       tagTaxonomyStyle: body.tagTaxonomyStyle === "qidian" ? "qidian" : "fanqie",

@@ -6,6 +6,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import { createPortal } from "react-dom";
 import { AiCoverGeneratorDialog } from "@/components/ai-cover-generator-dialog";
 import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
+import type { InspirationStatus, InspirationType } from "@/lib/project-types";
 
 const fanqieTagSections = [
   { key: "mainCategories", label: "主分类" },
@@ -26,7 +27,10 @@ const creationSteps = [
 
 const maxSelectedTagsPerGroup = 2;
 const maxProjectCharacters = 20;
-const draftStorageKey = "ai-novel-workbench:new-writing-project-draft:v1";
+const maxStoryInspirations = 20;
+const maxStoryIdeaLength = 8000;
+const maxStoryInspirationContentLength = 6000;
+const draftStorageKey = "ai-novel-workbench:new-writing-project-draft:v3";
 
 type TitleNamingStyle = "fanqie" | "qidian";
 type TagTaxonomyStyle = "fanqie" | "qidian";
@@ -34,7 +38,25 @@ type DescriptionWritingStyle = "fanqie" | "qidian";
 type CreationStepId = (typeof creationSteps)[number]["id"];
 type TagSectionKey = (typeof fanqieTagSections)[number]["key"] | (typeof qidianTagSections)[number]["key"];
 type WorkLengthType = "short" | "medium" | "long" | "epic";
+type StoryDesignReaderMode = "auto" | TargetReader;
 const characterRoleOptions = ["男主", "女主", "男配", "女配"] as const;
+const storyDesignReaderModes: Array<{ value: StoryDesignReaderMode; label: string }> = [
+  { value: "auto", label: "AI 自判" },
+  ...readerOptions.map((reader) => ({ value: reader, label: reader }))
+];
+const storyInspirationTypeOptions: Array<{ value: InspirationType | ""; label: string }> = [
+  { value: "", label: "全部类型" },
+  { value: "plot", label: "情节" },
+  { value: "character", label: "人物" },
+  { value: "worldbuilding", label: "世界观" },
+  { value: "pleasure_point", label: "爽点" },
+  { value: "foreshadowing", label: "伏笔" },
+  { value: "setting", label: "设定" },
+  { value: "line", label: "台词" },
+  { value: "topic", label: "选题" },
+  { value: "title", label: "书名" },
+  { value: "other", label: "其他" }
+];
 const workLengthOptions: Array<{ value: WorkLengthType; label: string; hint: string; defaultWords: string }> = [
   { value: "short", label: "短篇", hint: "适合 10-30 万字，节奏更紧，结局提前规划", defaultWords: "20" },
   { value: "medium", label: "中篇", hint: "适合 30-80 万字，主线完整，支线克制", defaultWords: "50" },
@@ -59,8 +81,42 @@ type TitleSuggestionBatch = {
   titles: string[];
 };
 
+type StoryDesignResult = {
+  titleOptions: string[];
+  logline: string;
+  intro: string;
+  coreSellingPoint: string;
+  coreConflict: string;
+  protagonistDesign: string;
+  goldenFinger: string;
+  openingHook: string;
+  mainLoop: string;
+  worldSetting: string;
+  characterSuggestions: CharacterNameSuggestion[];
+  first10Chapters: string[];
+  pleasurePoints: string[];
+  foreshadowing: string[];
+  risksToAvoid: string[];
+  recommendedGenre: string;
+  recommendedTags: string[];
+};
+
+type StoryInspirationOption = {
+  id: string;
+  title: string;
+  content: string;
+  type: InspirationType;
+  status: InspirationStatus;
+  tags: string[];
+  projectId?: string;
+  updatedAt: string;
+};
+
 type ProjectFormDraft = {
   name: string;
+  storyIdea: string;
+  storyInspirations: StoryInspirationOption[];
+  storyDesignReaderMode: StoryDesignReaderMode;
   titleConcept: string;
   authorName: string;
   coverImageUrl: string;
@@ -84,15 +140,23 @@ type ProjectFormDraft = {
   targetTotalWords: string;
 };
 
-function defaultCharacters(): CharacterDraft[] {
-  return [
-    { id: "lead-male", role: "男主", name: "" },
-    { id: "lead-female", role: "女主", name: "" }
-  ];
+function defaultCharacters(targetReader: TargetReader = "男频"): CharacterDraft[] {
+  return targetReader === "女频"
+    ? [
+        { id: "lead-female", role: "女主", name: "" },
+        { id: "lead-male", role: "男主", name: "" }
+      ]
+    : [
+        { id: "lead-male", role: "男主", name: "" },
+        { id: "lead-female", role: "女主", name: "" }
+      ];
 }
 
 const defaultDraft: ProjectFormDraft = {
   name: "",
+  storyIdea: "",
+  storyInspirations: [],
+  storyDesignReaderMode: "auto",
   titleConcept: "",
   authorName: "",
   coverImageUrl: "",
@@ -150,8 +214,69 @@ function isWorkLengthType(value: unknown): value is WorkLengthType {
   return workLengthOptions.some((option) => option.value === value);
 }
 
+function isStoryDesignReaderMode(value: unknown): value is StoryDesignReaderMode {
+  return value === "auto" || isTargetReader(value);
+}
+
+function isInspirationType(value: unknown): value is InspirationType {
+  return (
+    value === "plot" ||
+    value === "character" ||
+    value === "worldbuilding" ||
+    value === "pleasure_point" ||
+    value === "foreshadowing" ||
+    value === "setting" ||
+    value === "line" ||
+    value === "topic" ||
+    value === "title" ||
+    value === "other"
+  );
+}
+
+function isInspirationStatus(value: unknown): value is InspirationStatus {
+  return value === "raw" || value === "polished" || value === "used" || value === "archived";
+}
+
+function inspirationTypeLabel(value: InspirationType) {
+  const labels: Record<InspirationType, string> = {
+    plot: "情节",
+    character: "人物",
+    worldbuilding: "世界观",
+    pleasure_point: "爽点",
+    foreshadowing: "伏笔",
+    setting: "设定",
+    line: "台词",
+    topic: "选题",
+    title: "书名",
+    other: "其他"
+  };
+
+  return labels[value] ?? value;
+}
+
+function inspirationStatusLabel(value: InspirationStatus) {
+  const labels: Record<InspirationStatus, string> = {
+    raw: "原始",
+    polished: "已润色",
+    used: "已使用",
+    archived: "已归档"
+  };
+
+  return labels[value] ?? value;
+}
+
 function stringValue(value: unknown, maxLength = 1000) {
   return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function compactStringValue(value: unknown, maxLength = 1000) {
+  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function stringListValue(value: unknown, limit: number, maxLength = 120) {
+  return Array.isArray(value)
+    ? value.map((item) => compactStringValue(item, maxLength)).filter(Boolean).slice(0, limit)
+    : [];
 }
 
 function normalizeTargetTotalWords(value: unknown) {
@@ -231,7 +356,11 @@ function buildTitleSuggestionContextKey(input: {
   });
 }
 
-function normalizeCharacters(rawCharacters: unknown, legacyNames: string[]): CharacterDraft[] {
+function normalizeCharacters(
+  rawCharacters: unknown,
+  legacyNames: string[],
+  targetReader: TargetReader = "男频"
+): CharacterDraft[] {
   if (Array.isArray(rawCharacters)) {
     const characters = rawCharacters
       .map((item, index) => {
@@ -240,7 +369,7 @@ function normalizeCharacters(rawCharacters: unknown, legacyNames: string[]): Cha
         }
 
         const raw = item as Partial<Record<keyof CharacterDraft, unknown>>;
-        const role = isCharacterRole(raw.role) ? raw.role : index === 1 ? "女主" : "男主";
+        const role = isCharacterRole(raw.role) ? raw.role : defaultRoleForReader(index, targetReader);
 
         return {
           id: stringValue(raw.id, 60) || `character-${index}`,
@@ -261,14 +390,143 @@ function normalizeCharacters(rawCharacters: unknown, legacyNames: string[]): Cha
       name.trim()
         ? {
             id: `legacy-${index}`,
-            role: index === 1 ? "女主" : "男主",
+            role: defaultRoleForReader(index, targetReader),
             name: name.slice(0, 12)
           }
         : null
     )
     .filter((item): item is CharacterDraft => Boolean(item));
 
-  return legacyCharacters.length > 0 ? legacyCharacters : defaultCharacters();
+  return legacyCharacters.length > 0 ? legacyCharacters : defaultCharacters(targetReader);
+}
+
+function alignLeadCharactersForReader(characters: CharacterDraft[], targetReader: TargetReader) {
+  const shouldAlign =
+    characters.length === 0 ||
+    (characters.length === 2 &&
+      characters.every((character) => !character.name.trim()) &&
+      characters.every((character) => character.role === "男主" || character.role === "女主"));
+
+  if (!shouldAlign) {
+    return characters;
+  }
+
+  const defaults = defaultCharacters(targetReader);
+
+  return defaults.map((character, index) => ({
+    ...character,
+    id: characters[index]?.id ?? character.id
+  }));
+}
+
+function defaultRoleForReader(index: number, targetReader: TargetReader = "男频"): CharacterRole {
+  return targetReader === "女频"
+    ? index === 0
+      ? "女主"
+      : index === 1
+        ? "男主"
+        : "女配"
+    : index === 1
+      ? "女主"
+      : "男主";
+}
+
+function normalizeStoryDesign(rawValue: unknown, targetReader: TargetReader = "男频"): StoryDesignResult | null {
+  if (!rawValue || typeof rawValue !== "object") {
+    return null;
+  }
+
+  const raw = rawValue as Record<string, unknown>;
+  const characterSuggestions: CharacterNameSuggestion[] = Array.isArray(raw.characterSuggestions)
+    ? raw.characterSuggestions
+        .map((item, index): CharacterNameSuggestion | null => {
+          if (!item || typeof item !== "object") {
+            return null;
+          }
+
+          const record = item as { role?: unknown; name?: unknown };
+          const rawRole = isCharacterRole(record.role) ? record.role : defaultRoleForReader(index, targetReader);
+          const role = targetReader === "女频" && index === 0 && rawRole === "男主" ? "女主" : rawRole;
+          const name = compactStringValue(record.name, 12);
+
+          return name ? { role, name } : null;
+        })
+        .filter((item): item is CharacterNameSuggestion => Boolean(item))
+        .slice(0, maxProjectCharacters)
+    : [];
+  const design: StoryDesignResult = {
+    titleOptions: stringListValue(raw.titleOptions, 6, 60),
+    logline: compactStringValue(raw.logline, 220),
+    intro: compactStringValue(raw.intro, 700),
+    coreSellingPoint: compactStringValue(raw.coreSellingPoint, 320),
+    coreConflict: compactStringValue(raw.coreConflict, 360),
+    protagonistDesign: compactStringValue(raw.protagonistDesign, 360),
+    goldenFinger: compactStringValue(raw.goldenFinger, 360),
+    openingHook: compactStringValue(raw.openingHook, 360),
+    mainLoop: compactStringValue(raw.mainLoop, 360),
+    worldSetting: compactStringValue(raw.worldSetting, 520),
+    characterSuggestions,
+    first10Chapters: stringListValue(raw.first10Chapters, 10, 320),
+    pleasurePoints: stringListValue(raw.pleasurePoints, 10, 320),
+    foreshadowing: stringListValue(raw.foreshadowing, 8, 300),
+    risksToAvoid: stringListValue(raw.risksToAvoid, 8, 300),
+    recommendedGenre: compactStringValue(raw.recommendedGenre, 40),
+    recommendedTags: stringListValue(raw.recommendedTags, 6, 40)
+  };
+  const hasContent = [
+    design.logline,
+    design.intro,
+    design.coreSellingPoint,
+    design.coreConflict,
+    design.goldenFinger,
+    design.openingHook,
+    design.mainLoop
+  ].some(Boolean);
+
+  return hasContent || design.titleOptions.length > 0 || design.first10Chapters.length > 0 ? design : null;
+}
+
+function normalizeStoryInspiration(rawValue: unknown): StoryInspirationOption | null {
+  if (!rawValue || typeof rawValue !== "object") {
+    return null;
+  }
+
+  const raw = rawValue as Record<string, unknown>;
+  const id = compactStringValue(raw.id, 80);
+  const content = stringValue(raw.content, maxStoryInspirationContentLength).trim();
+
+  if (!id || !content) {
+    return null;
+  }
+
+  return {
+    id,
+    title: compactStringValue(raw.title, 80) || content.slice(0, 24) || "未命名灵感",
+    content,
+    type: isInspirationType(raw.type) ? raw.type : "other",
+    status: isInspirationStatus(raw.status) ? raw.status : "raw",
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.map((item) => compactStringValue(item, 24)).filter(Boolean).slice(0, 8)
+      : [],
+    projectId: compactStringValue(raw.projectId, 80) || undefined,
+    updatedAt: compactStringValue(raw.updatedAt, 40)
+  };
+}
+
+function normalizeStoryInspirations(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map(normalizeStoryInspiration)
+        .filter((item): item is StoryInspirationOption => Boolean(item))
+        .slice(0, maxStoryInspirations)
+    : [];
+}
+
+function formatStoryInspiration(inspiration: StoryInspirationOption, contentLength = maxStoryInspirationContentLength) {
+  const content = stringValue(inspiration.content, contentLength).trim();
+  const tags = inspiration.tags.length > 0 ? `\n标签：${inspiration.tags.join("、")}` : "";
+
+  return `灵感「${inspiration.title}」\n类型：${inspirationTypeLabel(inspiration.type)}\n内容：${content}${tags}`;
 }
 
 function normalizeDraft(value: unknown): ProjectFormDraft {
@@ -278,9 +536,20 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
 
   const raw = value as Partial<Record<keyof ProjectFormDraft, unknown>>;
   const legacyProtagonists = [stringValue(raw.protagonist1, 12), stringValue(raw.protagonist2, 12)];
+  const storyDesignReaderMode = isStoryDesignReaderMode(raw.storyDesignReaderMode)
+    ? raw.storyDesignReaderMode
+    : defaultDraft.storyDesignReaderMode;
+  const targetReader = storyDesignReaderMode !== "auto"
+    ? storyDesignReaderMode
+    : isTargetReader(raw.targetReader)
+      ? raw.targetReader
+      : defaultDraft.targetReader;
 
   return {
     name: stringValue(raw.name, 60),
+    storyIdea: stringValue(raw.storyIdea, maxStoryIdeaLength),
+    storyInspirations: normalizeStoryInspirations(raw.storyInspirations),
+    storyDesignReaderMode,
     titleConcept: stringValue(raw.titleConcept, 500),
     authorName: stringValue(raw.authorName, 20),
     coverImageUrl: stringValue(raw.coverImageUrl, 1_200_000),
@@ -290,10 +559,13 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
       ? raw.descriptionWritingStyle
       : defaultDraft.descriptionWritingStyle,
     description: stringValue(raw.description, 500),
-    characters: normalizeCharacters(raw.characters, legacyProtagonists),
+    characters: alignLeadCharactersForReader(
+      normalizeCharacters(raw.characters, legacyProtagonists, targetReader),
+      targetReader
+    ),
     protagonist1: legacyProtagonists[0],
     protagonist2: legacyProtagonists[1],
-    targetReader: isTargetReader(raw.targetReader) ? raw.targetReader : defaultDraft.targetReader,
+    targetReader,
     genre: stringValue(raw.genre, 40),
     selectedTags: Array.isArray(raw.selectedTags)
       ? raw.selectedTags.map((item) => stringValue(item, 40)).filter(Boolean).slice(0, 4)
@@ -317,11 +589,16 @@ export function ProjectForm() {
   const formRef = useRef<HTMLFormElement>(null);
   const draftRestoredRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [assistLoading, setAssistLoading] = useState<"" | "titles" | "protagonists" | "description" | "titleConcept">("");
+  const [assistLoading, setAssistLoading] = useState<"" | "titles" | "protagonists" | "description" | "titleConcept" | "storyDesign">("");
   const [error, setError] = useState("");
   const [assistError, setAssistError] = useState("");
+  const [storyDesignError, setStoryDesignError] = useState("");
   const [titleAssistError, setTitleAssistError] = useState("");
   const [name, setName] = useState("");
+  const [storyIdea, setStoryIdea] = useState("");
+  const [storyInspirations, setStoryInspirations] = useState<StoryInspirationOption[]>([]);
+  const [storyDesignReaderMode, setStoryDesignReaderMode] = useState<StoryDesignReaderMode>("auto");
+  const [storyDesign, setStoryDesign] = useState<StoryDesignResult | null>(null);
   const [titleConcept, setTitleConcept] = useState("");
   const [authorName, setAuthorName] = useState("");
   const [coverImageUrl, setCoverImageUrl] = useState("");
@@ -335,7 +612,13 @@ export function ProjectForm() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isMounted, setIsMounted] = useState(false);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
+  const [isInspirationPickerOpen, setIsInspirationPickerOpen] = useState(false);
   const [isAiCoverDialogOpen, setIsAiCoverDialogOpen] = useState(false);
+  const [availableInspirations, setAvailableInspirations] = useState<StoryInspirationOption[]>([]);
+  const [inspirationSearch, setInspirationSearch] = useState("");
+  const [inspirationTypeFilter, setInspirationTypeFilter] = useState<InspirationType | "">("");
+  const [isLoadingInspirations, setIsLoadingInspirations] = useState(false);
+  const [inspirationPickerError, setInspirationPickerError] = useState("");
   const [coverPreviewError, setCoverPreviewError] = useState("");
   const [activeTagSection, setActiveTagSection] = useState<TagSectionKey>("mainCategories");
   const [titleSuggestionBatch, setTitleSuggestionBatch] = useState<TitleSuggestionBatch | null>(null);
@@ -367,6 +650,35 @@ export function ProjectForm() {
   const selectedRoleCount = selectedTags.filter((tag) => roleTagSet.has(tag)).length;
   const currentSubCategories = currentQidianCategory?.subCategories ?? [];
   const selectedSubCategory = selectedTags.find((tag) => currentSubCategories.includes(tag)) ?? "";
+  const selectedStoryInspirationIdSet = useMemo(
+    () => new Set(storyInspirations.map((inspiration) => inspiration.id)),
+    [storyInspirations]
+  );
+  const filteredInspirations = useMemo(() => {
+    const query = inspirationSearch.trim().toLowerCase();
+
+    return availableInspirations.filter((inspiration) => {
+      if (inspirationTypeFilter && inspiration.type !== inspirationTypeFilter) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      const haystack = [
+        inspiration.title,
+        inspiration.content,
+        inspirationTypeLabel(inspiration.type),
+        inspirationStatusLabel(inspiration.status),
+        ...inspiration.tags
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(query);
+    });
+  }, [availableInspirations, inspirationSearch, inspirationTypeFilter]);
   const titleSuggestionContextKey = useMemo(
     () => buildTitleSuggestionContextKey({
       titleNamingStyle,
@@ -403,7 +715,9 @@ export function ProjectForm() {
   }, []);
 
   useEffect(() => {
-    if (!isTagDialogOpen) {
+    const hasOpenDialog = isTagDialogOpen || isInspirationPickerOpen;
+
+    if (!hasOpenDialog) {
       return;
     }
 
@@ -417,6 +731,7 @@ export function ProjectForm() {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsTagDialogOpen(false);
+        setIsInspirationPickerOpen(false);
       }
     };
 
@@ -427,7 +742,7 @@ export function ProjectForm() {
       documentElement.style.overflow = previousDocumentOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [isTagDialogOpen]);
+  }, [isInspirationPickerOpen, isTagDialogOpen]);
 
   useEffect(() => {
     try {
@@ -437,6 +752,9 @@ export function ProjectForm() {
         const draft = normalizeDraft(JSON.parse(stored));
 
         setName(draft.name);
+        setStoryIdea(draft.storyIdea);
+        setStoryInspirations(draft.storyInspirations);
+        setStoryDesignReaderMode(draft.storyDesignReaderMode);
         setTitleConcept(draft.titleConcept);
         setAuthorName(draft.authorName);
         setCoverImageUrl(draft.coverImageUrl);
@@ -472,6 +790,9 @@ export function ProjectForm() {
 
     const draft: ProjectFormDraft = {
       name,
+      storyIdea,
+      storyInspirations,
+      storyDesignReaderMode,
       titleConcept,
       authorName,
       coverImageUrl,
@@ -514,6 +835,9 @@ export function ProjectForm() {
     genre,
     goldenFinger,
     name,
+    storyIdea,
+    storyInspirations,
+    storyDesignReaderMode,
     openingHook,
     selectedTags,
     tagTaxonomyStyle,
@@ -536,8 +860,21 @@ export function ProjectForm() {
     const nextTaxonomy = novelTaxonomy[nextReader];
     const nextThemeTags = new Set(nextTaxonomy.themes);
     const nextRoleTags = new Set(nextTaxonomy.roles);
+    const aiSuggestedNameSet = new Set(protagonistSuggestions.map((item) => item.name.trim()).filter(Boolean));
 
+    setStoryDesignReaderMode(nextReader);
     setTargetReader(nextReader);
+    setStoryDesign(null);
+    setStoryDesignError("");
+    setProtagonistSuggestions([]);
+    setCharacters((current) =>
+      alignLeadCharactersForReader(
+        current.map((character) =>
+          aiSuggestedNameSet.has(character.name.trim()) ? { ...character, name: "" } : character
+        ),
+        nextReader
+      )
+    );
     if (tagTaxonomyStyle === "fanqie") {
       setGenre("");
       setSelectedTags((current) => {
@@ -550,6 +887,17 @@ export function ProjectForm() {
       setSelectedTags([]);
     }
     setActiveTagSection("mainCategories");
+  }
+
+  function updateStoryDesignReaderMode(nextMode: StoryDesignReaderMode) {
+    setStoryDesignReaderMode(nextMode);
+    setStoryDesign(null);
+    setStoryDesignError("");
+    if (nextMode !== "auto" && nextMode !== targetReader) {
+      updateTargetReader(nextMode);
+    } else if (nextMode !== "auto") {
+      setCharacters((current) => alignLeadCharactersForReader(current, nextMode));
+    }
   }
 
   function updateGenre(nextGenre: string) {
@@ -685,9 +1033,27 @@ export function ProjectForm() {
       .slice(0, maxProjectCharacters);
   }
 
-  function getCurrentContext(options: { descriptionAssistMode?: "generate" | "polish" } = {}) {
+  function getCurrentContext(options: { descriptionAssistMode?: "generate" | "polish"; forStoryDesign?: boolean } = {}) {
+    const cleanStoryDesignNames = (items: CharacterDraft[]) =>
+      items.map((character) =>
+        options.forStoryDesign
+          ? { ...character, name: "" }
+          : character
+      );
+    const baseContextCharacters =
+      options.forStoryDesign && storyDesignReaderMode === "女频"
+        ? alignLeadCharactersForReader(cleanStoryDesignNames(characters), "女频")
+        : options.forStoryDesign && storyDesignReaderMode === "男频"
+          ? alignLeadCharactersForReader(cleanStoryDesignNames(characters), "男频")
+          : cleanStoryDesignNames(characters);
+    const contextCharacters =
+      options.forStoryDesign && storyDesignReaderMode === "auto"
+        ? baseContextCharacters.filter((character) => character.name.trim())
+        : baseContextCharacters;
+
     return {
       name,
+      storyIdea,
       genre,
       categoryDescription: currentCategory?.description ?? "",
       targetReader,
@@ -697,8 +1063,8 @@ export function ProjectForm() {
       titleConcept,
       avoidTitles: currentTitleSuggestions,
       tags: selectedTags,
-      protagonistNames: getFilledCharacters().map((character) => character.name),
-      protagonistCharacters: characters.map((character) => ({
+      protagonistNames: contextCharacters.map((character) => character.name.trim()).filter(Boolean),
+      protagonistCharacters: contextCharacters.map((character) => ({
         role: character.role,
         name: character.name.trim()
       })),
@@ -712,12 +1078,148 @@ export function ProjectForm() {
     };
   }
 
+  async function loadInspirations() {
+    if (availableInspirations.length > 0 || isLoadingInspirations) {
+      return;
+    }
+
+    setIsLoadingInspirations(true);
+    setInspirationPickerError("");
+
+    try {
+      const response = await fetch("/api/inspirations");
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "读取灵感失败");
+      }
+
+      const inspirations: StoryInspirationOption[] = Array.isArray(payload?.inspirations)
+        ? payload.inspirations
+            .map(normalizeStoryInspiration)
+            .filter((item: StoryInspirationOption | null): item is StoryInspirationOption => Boolean(item))
+        : [];
+
+      inspirations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      setAvailableInspirations(inspirations);
+    } catch (loadError) {
+      setInspirationPickerError(loadError instanceof Error ? loadError.message : "读取灵感失败");
+    } finally {
+      setIsLoadingInspirations(false);
+    }
+  }
+
+  function openInspirationPicker() {
+    setIsInspirationPickerOpen(true);
+    void loadInspirations();
+  }
+
+  function addStoryInspiration(inspiration: StoryInspirationOption) {
+    if (selectedStoryInspirationIdSet.has(inspiration.id)) {
+      return;
+    }
+
+    setStoryInspirations((current) => {
+      if (current.some((item) => item.id === inspiration.id)) {
+        return current;
+      }
+
+      return [...current, inspiration].slice(0, maxStoryInspirations);
+    });
+    setStoryIdea((current) => {
+      const block = formatStoryInspiration(inspiration);
+      if (current.includes(block)) {
+        return current;
+      }
+
+      const separator = current.trim() ? "\n\n" : "";
+      return `${current.trimEnd()}${separator}${block}`.slice(0, maxStoryIdeaLength);
+    });
+    setStoryDesignError("");
+  }
+
+  function removeStoryInspiration(inspirationId: string) {
+    const inspiration = storyInspirations.find((item) => item.id === inspirationId);
+
+    setStoryInspirations((current) => current.filter((inspiration) => inspiration.id !== inspirationId));
+    if (inspiration) {
+      const block = formatStoryInspiration(inspiration);
+      setStoryIdea((current) => current.replace(block, "").replace(/\n{3,}/g, "\n\n").trim());
+    }
+  }
+
+  function toggleStoryInspiration(inspiration: StoryInspirationOption) {
+    if (selectedStoryInspirationIdSet.has(inspiration.id)) {
+      removeStoryInspiration(inspiration.id);
+      return;
+    }
+
+    addStoryInspiration(inspiration);
+  }
+
+  function applyStoryDesign(design: StoryDesignResult) {
+    if (design.titleOptions[0]) {
+      setName(design.titleOptions[0].slice(0, 60));
+    }
+    if (design.intro) {
+      setDescription(design.intro.slice(0, 500));
+    }
+    if (design.coreSellingPoint) {
+      setCoreSellingPoint(design.coreSellingPoint.slice(0, 160));
+    }
+    if (design.goldenFinger) {
+      setGoldenFinger(design.goldenFinger.slice(0, 160));
+    }
+    if (design.openingHook) {
+      setOpeningHook(design.openingHook.slice(0, 160));
+    }
+    if (design.logline || design.protagonistDesign || design.coreConflict) {
+      setTitleConcept(
+        [design.logline, design.protagonistDesign, design.coreConflict, design.mainLoop]
+          .filter(Boolean)
+          .join(" ")
+          .slice(0, 500)
+      );
+    }
+    if (design.characterSuggestions.length > 0) {
+      setProtagonistSuggestions(design.characterSuggestions);
+      setCharacters((current) => {
+        const baseCharacters =
+          storyDesignReaderMode === "女频"
+            ? alignLeadCharactersForReader(current, "女频")
+            : storyDesignReaderMode === "男频"
+              ? alignLeadCharactersForReader(current, "男频")
+              : current;
+        const next = baseCharacters.length > 0
+          ? [...baseCharacters]
+          : defaultCharacters(storyDesignReaderMode === "女频" ? "女频" : "男频");
+
+        design.characterSuggestions.forEach((item, index) => {
+          const role = storyDesignReaderMode === "女频" && index === 0 ? "女主" : item.role;
+          const existing = next[index] ?? createCharacterDraft(role);
+
+          next[index] = {
+            ...existing,
+            role,
+            name: item.name.slice(0, 12)
+          };
+        });
+
+        return next.slice(0, maxProjectCharacters);
+      });
+    }
+  }
+
   async function runAssist(
-    action: "titles" | "protagonists" | "description" | "titleConcept",
+    action: "titles" | "protagonists" | "description" | "titleConcept" | "storyDesign",
     options: { descriptionAssistMode?: "generate" | "polish" } = {}
   ) {
     setAssistLoading(action);
     setAssistError("");
+    if (action === "storyDesign") {
+      setStoryDesignError("");
+      setStoryDesign(null);
+    }
     if (action === "titles" || action === "titleConcept") {
       setTitleAssistError("");
     }
@@ -741,6 +1243,12 @@ export function ProjectForm() {
       }
     }
 
+    if (action === "storyDesign" && !storyIdea.trim()) {
+      setAssistLoading("");
+      setStoryDesignError("先写一点小说大概思路或方向，再让 AI 做整体设计。");
+      return;
+    }
+
     if (action === "titles") {
       if (!titleConcept.trim()) {
         setAssistLoading("");
@@ -750,12 +1258,17 @@ export function ProjectForm() {
     }
 
     try {
+      const context = getCurrentContext({ ...options, forStoryDesign: action === "storyDesign" });
+      const isAutoStoryDesignReader = action === "storyDesign" && storyDesignReaderMode === "auto";
       const response = await fetch("/api/projects/new/assist", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action,
-          ...getCurrentContext(options)
+          ...context,
+          targetReader: isAutoStoryDesignReader ? "" : context.targetReader,
+          categoryDescription: isAutoStoryDesignReader ? "" : context.categoryDescription,
+          storyDesignReaderMode
         })
       });
       const payload = await response.json().catch((e) => ({ error: String(e) }));
@@ -795,7 +1308,7 @@ export function ProjectForm() {
                 }
 
                 const raw = item as { role?: unknown; name?: unknown };
-                const role = isCharacterRole(raw.role) ? raw.role : characters[index]?.role ?? (index === 1 ? "女主" : "男主");
+                const role = isCharacterRole(raw.role) ? raw.role : characters[index]?.role ?? defaultRoleForReader(index, targetReader);
                 const name = String(raw.name ?? "").trim();
 
                 return name ? { role, name } : null;
@@ -803,7 +1316,7 @@ export function ProjectForm() {
               .filter((item: CharacterNameSuggestion | null): item is CharacterNameSuggestion => Boolean(item))
           : [];
         const fallbackSuggestions = names.map((item, index) => ({
-          role: characters[index]?.role ?? (index === 1 ? "女主" : "男主"),
+          role: characters[index]?.role ?? defaultRoleForReader(index, targetReader),
           name: item
         }));
         const suggestions = (suggestedCharacters.length > 0 ? suggestedCharacters : fallbackSuggestions).slice(0, maxProjectCharacters);
@@ -811,7 +1324,7 @@ export function ProjectForm() {
         setProtagonistSuggestions(suggestions);
         if (suggestions.length > 0) {
           setCharacters((current) => {
-            const next = current.length > 0 ? [...current] : defaultCharacters();
+            const next = current.length > 0 ? [...current] : defaultCharacters(targetReader);
 
             next.forEach((character, index) => {
               const item = suggestions[index];
@@ -856,11 +1369,32 @@ export function ProjectForm() {
           setTitleAssistError("AI 没有整理出可用的起名方向，请先补一点主角处境、目标或读者期待。");
         }
       }
+
+      if (action === "storyDesign") {
+        const nextStoryDesign = normalizeStoryDesign(
+          result.storyDesign,
+          storyDesignReaderMode === "女频" ? "女频" : "男频"
+        );
+
+        if (!nextStoryDesign) {
+          setStoryDesignError("AI 没有生成可用的新书整体设计，请补充一点主角处境、冲突或题材方向后重试。");
+          return;
+        }
+
+        setStoryDesign(nextStoryDesign);
+        setTitleSuggestionBatch({
+          contextKey: titleSuggestionContextKey,
+          titles: nextStoryDesign.titleOptions
+        });
+        applyStoryDesign(nextStoryDesign);
+      }
     } catch (assistError) {
       const message = assistError instanceof Error ? assistError.message : "AI 辅助生成失败";
 
       if (action === "titles" || action === "titleConcept") {
         setTitleAssistError(message);
+      } else if (action === "storyDesign") {
+        setStoryDesignError(message);
       } else {
         setAssistError(message);
       }
@@ -912,6 +1446,15 @@ export function ProjectForm() {
           coreSellingPoint: asText(formData.get("coreSellingPoint")),
           openingHook: asText(formData.get("openingHook")),
           goldenFinger: asText(formData.get("goldenFinger")),
+          writingGoal: storyDesign
+            ? [storyDesign.logline, storyDesign.coreConflict, storyDesign.mainLoop].filter(Boolean).join("\n")
+            : "",
+          outlineLogline: storyDesign?.logline ?? "",
+          worldSetting: storyDesign?.worldSetting ?? "",
+          outlineChapters: storyDesign?.first10Chapters ?? [],
+          foreshadowingPlan: storyDesign?.foreshadowing ?? [],
+          pleasureDistribution: storyDesign?.pleasurePoints.join("\n") ?? "",
+          relatedInspirationIds: storyInspirations.map((inspiration) => inspiration.id),
           autoGenerateLongFormPlan
         })
       });
@@ -1067,6 +1610,109 @@ export function ProjectForm() {
     </div>
   ) : null;
 
+  const inspirationPickerDialog = isInspirationPickerOpen ? (
+    <div className="tag-dialog-backdrop" role="presentation" onMouseDown={() => setIsInspirationPickerOpen(false)}>
+      <div
+        className="tag-dialog inspiration-picker-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="inspiration-picker-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="tag-dialog-head">
+          <h3 id="inspiration-picker-title">选择灵感</h3>
+          <button
+            className="tag-dialog-close"
+            type="button"
+            onClick={() => setIsInspirationPickerOpen(false)}
+            aria-label="关闭灵感选择"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="inspiration-picker-body">
+          <div className="inspiration-picker-toolbar">
+            <input
+              value={inspirationSearch}
+              onChange={(event) => setInspirationSearch(event.target.value)}
+              placeholder="搜索标题、内容、标签"
+              aria-label="搜索灵感"
+            />
+            <select
+              value={inspirationTypeFilter}
+              onChange={(event) => setInspirationTypeFilter(event.target.value as InspirationType | "")}
+              aria-label="按灵感类型筛选"
+            >
+              {storyInspirationTypeOptions.map((option) => (
+                <option key={option.value || "all"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {inspirationPickerError ? <div className="taxonomy-empty">{inspirationPickerError}</div> : null}
+
+          <div className="inspiration-picker-list">
+            {isLoadingInspirations ? (
+              <div className="taxonomy-empty">
+                <strong>正在读取灵感</strong>
+                <span>稍等一下，正在从灵感中心取素材。</span>
+              </div>
+            ) : filteredInspirations.length > 0 ? (
+              filteredInspirations.map((inspiration) => {
+                const isSelected = selectedStoryInspirationIdSet.has(inspiration.id);
+
+                return (
+                  <button
+                    key={inspiration.id}
+                    className={`inspiration-picker-item ${isSelected ? "selected" : ""}`}
+                    type="button"
+                    onClick={() => toggleStoryInspiration(inspiration)}
+                    aria-pressed={isSelected}
+                  >
+                    <span className="inspiration-picker-item-head">
+                      <strong>{inspiration.title}</strong>
+                      <span>
+                        {inspirationTypeLabel(inspiration.type)} · {inspirationStatusLabel(inspiration.status)}
+                      </span>
+                    </span>
+                    <span className="inspiration-picker-state">
+                      {isSelected ? "已选择，点击取消" : "点击选择"}
+                    </span>
+                    <span className="inspiration-picker-content">{inspiration.content}</span>
+                    {inspiration.tags.length > 0 ? (
+                      <span className="inspiration-picker-tags">
+                        {inspiration.tags.slice(0, 4).map((tag) => (
+                          <em key={tag}>{tag}</em>
+                        ))}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="taxonomy-empty">
+                <strong>没有匹配的灵感</strong>
+                <span>可以换个关键词，或先去灵感中心记录一条新构思。</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="tag-dialog-foot">
+          <span>已选择 {storyInspirations.length} 条灵感，创建作品后会关联到新项目。</span>
+          <div className="hero-actions">
+            <button className="button primary create-work-button" type="button" onClick={() => setIsInspirationPickerOpen(false)}>
+              完成
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <>
     <form ref={formRef} className="book-create-form" onSubmit={handleSubmit} aria-busy={isSubmitting}>
@@ -1129,6 +1775,178 @@ export function ProjectForm() {
               <h3>作品身份</h3>
             </div>
             <span className="chip">创作项目</span>
+          </div>
+
+          <div className="story-design-card">
+            <div className="story-design-head">
+              <div>
+                <div className="mini-label">新书整体设计</div>
+                <strong>先把粗略想法变成可开书方案</strong>
+                <p>输入一句方向、几个设定点或一段脑洞，AI 会整理出书名、简介、核心冲突、金手指、主循环和前 10 章推进。</p>
+              </div>
+              <div className="story-design-actions">
+                <button className="button story-design-button" type="button" onClick={openInspirationPicker}>
+                  选择灵感
+                </button>
+                <button
+                  className="button primary story-design-button"
+                  type="button"
+                  onClick={() => runAssist("storyDesign")}
+                  disabled={Boolean(assistLoading)}
+                >
+                  {assistLoading === "storyDesign" ? "设计中..." : "AI 设计新书"}
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={storyIdea}
+              onChange={(event) => {
+                setStoryIdea(event.target.value);
+                if (storyDesignError) {
+                  setStoryDesignError("");
+                }
+              }}
+              placeholder="例如：想写一个末世直播文，主角不是战斗型，而是靠规则解读和信息差带队活下去；希望有强反转、群像，但金手指不能太无敌。"
+              maxLength={maxStoryIdeaLength}
+            />
+            <div className="story-design-reader-row">
+              <span>设计频道</span>
+              <div className="story-design-reader-options">
+                {storyDesignReaderModes.map((mode) => (
+                  <label key={mode.value}>
+                    <input
+                      type="radio"
+                      name="storyDesignReaderMode"
+                      value={mode.value}
+                      checked={storyDesignReaderMode === mode.value}
+                      onChange={() => updateStoryDesignReaderMode(mode.value)}
+                    />
+                    <span>{mode.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {storyInspirations.length > 0 ? (
+              <div className="story-inspiration-picked" aria-label="已选择的灵感">
+                {storyInspirations.map((inspiration) => (
+                  <details className="story-inspiration-chip" key={inspiration.id}>
+                    <summary>
+                      <span>
+                        <strong>{inspiration.title}</strong>
+                        <small>
+                          {inspirationTypeLabel(inspiration.type)} · {inspirationStatusLabel(inspiration.status)}
+                        </small>
+                      </span>
+                    </summary>
+                    <p>{inspiration.content}</p>
+                    {inspiration.tags.length > 0 ? (
+                      <div className="story-inspiration-chip-tags">
+                        {inspiration.tags.map((tag) => (
+                          <em key={tag}>{tag}</em>
+                        ))}
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => removeStoryInspiration(inspiration.id)}
+                      aria-label={`取消关联灵感：${inspiration.title}`}
+                      title="取消关联"
+                    >
+                      ×
+                    </button>
+                  </details>
+                ))}
+              </div>
+            ) : null}
+            <div className="field-hint">{storyIdea.length}/{maxStoryIdeaLength}</div>
+            {storyDesignError ? <div className="field-hint story-design-error">{storyDesignError}</div> : null}
+
+            {storyDesign ? (
+              <div className="story-design-result">
+                <div className="story-design-result-head">
+                  <strong>{storyDesign.logline || "新书方案已生成"}</strong>
+                  <button className="mini-action-button" type="button" onClick={() => applyStoryDesign(storyDesign)}>
+                    采用到表单
+                  </button>
+                </div>
+                <div className="story-design-grid">
+                  <div>
+                    <span>核心冲突</span>
+                    <p>{storyDesign.coreConflict || "暂未生成"}</p>
+                  </div>
+                  <div>
+                    <span>金手指 / 机制</span>
+                    <p>{storyDesign.goldenFinger || "暂未生成"}</p>
+                  </div>
+                  <div>
+                    <span>主角模型</span>
+                    <p>{storyDesign.protagonistDesign || "暂未生成"}</p>
+                  </div>
+                  <div>
+                    <span>主循环</span>
+                    <p>{storyDesign.mainLoop || "暂未生成"}</p>
+                  </div>
+                </div>
+                {storyDesign.titleOptions.length > 0 ? (
+                  <div className="assist-suggestion-list">
+                    {storyDesign.titleOptions.map((title) => (
+                      <button
+                        key={title}
+                        className="assist-suggestion"
+                        type="button"
+                        onClick={() => setName(title.slice(0, 60))}
+                      >
+                        {title}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {storyDesign.first10Chapters.length > 0 ? (
+                  <details className="story-design-details">
+                    <summary>前 10 章推进</summary>
+                    <ol>
+                      {storyDesign.first10Chapters.map((chapter, index) => (
+                        <li key={`${chapter}-${index}`}>{chapter}</li>
+                      ))}
+                    </ol>
+                  </details>
+                ) : null}
+                {storyDesign.pleasurePoints.length > 0 || storyDesign.foreshadowing.length > 0 || storyDesign.risksToAvoid.length > 0 ? (
+                  <div className="story-design-long-lists">
+                    {storyDesign.pleasurePoints.length > 0 ? (
+                      <details className="story-design-details">
+                        <summary>爽点设计</summary>
+                        <ul>
+                          {storyDesign.pleasurePoints.map((item, index) => (
+                            <li key={`pleasure-${item}-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                    {storyDesign.foreshadowing.length > 0 ? (
+                      <details className="story-design-details">
+                        <summary>伏笔安排</summary>
+                        <ul>
+                          {storyDesign.foreshadowing.map((item, index) => (
+                            <li key={`foreshadowing-${item}-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                    {storyDesign.risksToAvoid.length > 0 ? (
+                      <details className="story-design-details">
+                        <summary>避坑清单</summary>
+                        <ul>
+                          {storyDesign.risksToAvoid.map((item, index) => (
+                            <li key={`risk-${item}-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="field">
@@ -1369,7 +2187,7 @@ export function ProjectForm() {
                 {assistLoading === "protagonists" ? "生成中..." : "AI 取名"}
               </button>
             </div>
-            <div className="character-builder-hint">可先只填男主；多女主、男配、女配都可以继续添加。</div>
+            <div className="character-builder-hint">可先只填第一主角；男主、女主、男配、女配都可以继续添加。</div>
             <div className="character-list">
               {characters.map((character) => (
                 <div className="character-row" key={character.id}>
@@ -1610,6 +2428,7 @@ export function ProjectForm() {
       </aside>
     </form>
     {isMounted && tagDialog ? createPortal(tagDialog, document.body) : null}
+    {isMounted && inspirationPickerDialog ? createPortal(inspirationPickerDialog, document.body) : null}
     </>
   );
 }
