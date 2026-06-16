@@ -8,6 +8,9 @@ import {
 } from "@/lib/store-persistence";
 
 export const initialStore: AppStore = {
+  accessPolicy: {
+    requireActivation: true
+  },
   users: [],
   sessions: [],
   projects: [],

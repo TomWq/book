@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
+import { ActivationModeSettingsForm } from "@/components/activation-mode-settings-form";
 import { CopyButton } from "@/components/copy-button";
 import { CoverImageSettingsForm } from "@/components/cover-image-settings-form";
 import { LicenseCodeGenerator } from "@/components/license-code-generator";
@@ -272,7 +273,22 @@ export default async function AdminPage({
             <span>不可用</span>
           </div>
         </div>
+
+        <div className="admin-policy-summary">
+          <span className={`pill ${licenseCenter.accessPolicy.requireActivation ? "warning" : "success"}`}>
+            {licenseCenter.accessPolicy.requireActivation ? "当前需要激活码" : "当前直接可用"}
+          </span>
+          <span className="muted">
+            {licenseCenter.accessPolicy.requireActivation
+              ? "关闭开关后，体验期间用户可以直接进入工作台。"
+              : "打开开关后，免费直用用户会重新进入激活模式。"}
+          </span>
+        </div>
       </section>
+
+      <Panel title="访问模式开关" description="控制客户端是必须输入激活码，还是体验期间直接可用。">
+        <ActivationModeSettingsForm accessPolicy={licenseCenter.accessPolicy} />
+      </Panel>
 
       <Panel title="版本发布中心" description="管理客户端安装包发布信息。安装包地址、大小和校验码由上传脚本生成，版本号和发布说明可在这里调整。">
         <div className="release-admin-grid">

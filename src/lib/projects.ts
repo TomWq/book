@@ -106,6 +106,9 @@ import {
   activateLicenseWithCenter,
   buildAdminLicenseCenter,
   createActivationCode,
+  clearAccessPolicyCache,
+  getAccessPolicyFromStore,
+  getAccessPolicyViaRemoteCenter,
   getDesktopLicenseCandidate,
   getLicenseServerUrl,
   getTrialLicenseCodeHash,
@@ -118,6 +121,7 @@ import {
   requestTrialLicenseViaRemoteCenter,
   requestTrialLicenseWithCenter,
   resolveDesktopLicenseState,
+  setAccessPolicyInStore,
   syncLegacyConfiguredCodes,
   syncLocalLicenseSnapshot,
   verifyLicenseViaRemoteCenter,
@@ -341,6 +345,24 @@ async function getCurrentUserFromStore(store: AppStore) {
 
   if (!user) {
     return null;
+  }
+
+  if (isDesktopRuntime()) {
+    const accessPolicy = await resolveRuntimeAccessPolicy(store);
+
+    if (!accessPolicy.requireActivation) {
+      if (repairDesktopWorkspaceOwnership(store, user)) {
+        await writeStore(store);
+      }
+      session.lastSeenAt = now();
+      return user;
+    }
+
+    if (user.licenseCustomerId === "free-access") {
+      store.sessions = store.sessions.filter((item) => item.userId !== user.id);
+      await writeStore(store);
+      return null;
+    }
   }
 
   const licenseState = resolveDesktopLicenseState(store, user);
@@ -631,10 +653,103 @@ function repairDesktopWorkspaceOwnership(store: AppStore, user: StoredUser) {
   return transferUserWorkspaceOwnership(store, sourceUser.id, user.id);
 }
 
+async function resolveRuntimeAccessPolicy(store: AppStore) {
+  const remotePolicy = isDesktopRuntime() ? await getAccessPolicyViaRemoteCenter() : null;
+
+  if (remotePolicy) {
+    const localPolicy = getAccessPolicyFromStore(store);
+    const changed =
+      localPolicy.requireActivation !== remotePolicy.requireActivation ||
+      (remotePolicy.updatedAt && localPolicy.updatedAt !== remotePolicy.updatedAt);
+
+    if (changed) {
+      store.accessPolicy = {
+        requireActivation: remotePolicy.requireActivation,
+        updatedAt: remotePolicy.updatedAt
+      };
+      await writeStore(store);
+    }
+
+    return getAccessPolicyFromStore(store);
+  }
+
+  return getAccessPolicyFromStore(store);
+}
+
 function createAuthServiceHooks(): AuthServiceHooks {
   return {
     claimLegacyWorkspace
   };
+}
+
+function freeAccessEmail(machineHash: string) {
+  const safeMachine = createHash("sha256")
+    .update(normalizeMachineHash(machineHash) || "local")
+    .digest("hex")
+    .slice(0, 20);
+  return `free-${safeMachine}@license.local`;
+}
+
+async function activateFreeAccessSession(store: AppStore, input: { machineHash: string; clientName?: string }) {
+  const timestamp = now();
+  const machineHash = normalizeMachineHash(input.machineHash) || "local-free-access";
+  let user = store.users.find((item) =>
+    item.licenseCodePurpose === "desktop" &&
+      item.licenseCustomerId === "free-access" &&
+      (!item.licenseMachineHash || item.licenseMachineHash === machineHash)
+  ) ?? store.users.find((item) => item.email === freeAccessEmail(machineHash));
+
+  if (!user) {
+    user = findReusableDesktopWorkspaceUser(store, machineHash);
+  }
+
+  if (!user) {
+    const { salt, hash } = hashPassword(randomUUID());
+    user = {
+      id: randomUUID(),
+      email: freeAccessEmail(machineHash),
+      name: "免费体验用户",
+      passwordSalt: salt,
+      passwordHash: hash,
+      role: "user",
+      plan: "studio",
+      creditsBalance: 0,
+      licenseCustomerId: "free-access",
+      licenseCodePurpose: "desktop",
+      licenseMachineHash: machineHash,
+      licenseActivatedAt: timestamp,
+      onboardingCompletedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    store.users.push(user);
+  } else {
+    user.licenseSignedOutAt = undefined;
+    user.plan = "studio";
+    user.updatedAt = timestamp;
+  }
+
+  if (store.projects.every((item) => !item.ownerUserId)) {
+    claimLegacyWorkspace(store, user.id);
+  } else {
+    repairDesktopWorkspaceOwnership(store, user);
+  }
+
+  const token = randomUUID();
+  store.sessions = store.sessions.filter((item) => item.userId !== user.id || item.expiresAt > timestamp);
+  store.sessions.push({
+    id: randomUUID(),
+    userId: user.id,
+    token,
+    createdAt: timestamp,
+    expiresAt: sessionExpiresAt(),
+    lastSeenAt: timestamp
+  });
+
+  await writeStore(store);
+  await setSessionCookie(token);
+  clearDesktopActivationStatusCache();
+  return toAuthUser(user);
 }
 
 function normalizeTitleCandidate(value: unknown) {
@@ -689,6 +804,29 @@ export async function restoreSubscriptionSession() {
   }
 
   const store = await readStore();
+  const accessPolicy = await resolveRuntimeAccessPolicy(store);
+
+  if (!accessPolicy.requireActivation) {
+    const session = await getActiveSession(store);
+    const currentUser = session
+      ? store.users.find((item) => item.id === session.userId) ?? null
+      : null;
+
+    if (currentUser) {
+      session!.lastSeenAt = now();
+      await writeStore(store);
+      return { user: toAuthUser(currentUser) };
+    }
+
+    const machineHash = getDesktopMachineHash();
+    const user = await activateFreeAccessSession(store, {
+      machineHash,
+      clientName: "客户端免激活直用"
+    });
+
+    return { user };
+  }
+
   const currentUser = await getCurrentUserFromStore(store);
 
   if (currentUser) {
@@ -2662,6 +2800,20 @@ export async function getAdminLicenseCenter(options?: { recentLogLimit?: number;
   return center;
 }
 
+export async function updateAdminAccessPolicy(input: { requireActivation: boolean }) {
+  const store = await readStore();
+  const admin = await requireAdminUser(store);
+  const accessPolicy = setAccessPolicyInStore(store, {
+    requireActivation: input.requireActivation,
+    updatedBy: admin.email
+  });
+
+  await writeStore(store);
+  clearAccessPolicyCache();
+
+  return { accessPolicy: getAccessPolicyFromStore({ ...store, accessPolicy }) };
+}
+
 export async function generateAdminLicenseCodes(input: {
   quantity: number;
   customerName?: string;
@@ -3507,6 +3659,244 @@ type StageClosureGuard = {
   rules: string[];
 };
 
+type PostClosureCooldownGuard = {
+  active: boolean;
+  reason: string;
+  sourceChapter?: number;
+  rules: string[];
+};
+
+type LayerReturnGuard = {
+  active: boolean;
+  reason: string;
+  sourceChapters: number[];
+  rules: string[];
+};
+
+function getLedgerClosureSignalText(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return "";
+  }
+
+  return [
+    ledger.title,
+    ledger.payoff,
+    ledger.cliffhanger,
+    ...(ledger.events ?? []),
+    ...(ledger.newClues ?? []),
+    ...(ledger.stateChanges ?? []),
+    ...(ledger.carryOverTasks ?? [])
+  ].join("\n");
+}
+
+function projectUsesLayerSwitching(input: {
+  project?: StoredProject | null;
+  bible?: StoredWritingBible | null;
+  longFormPlan?: StoredLongFormPlan | null;
+}) {
+  const text = [
+    input.project?.description,
+    input.bible?.worldRules,
+    input.bible?.goldenFingerRules,
+    input.bible?.immutableSettings,
+    input.longFormPlan?.corePromise,
+    input.longFormPlan?.planningBasis,
+    input.longFormPlan?.first100Pacing,
+    input.longFormPlan?.progressionRules?.join("\n")
+  ].filter(Boolean).join("\n");
+
+  return /现实|原本生活|现世|梦境|入梦|穿越|重生|异世|多穿|快穿|副本|主世界|另一层|另一个世界/.test(text);
+}
+
+function ledgerSignalsOriginLayerInterlude(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return false;
+  }
+
+  const text = getLedgerClosureSignalText(ledger);
+  const originLayerSignal = /现实|原本生活|现世|醒来|工作|上班|办公|工位|电脑|系统|客户|需求|上线|迭代|日志|报错|公司|学校|家庭|同事|上级|主管|老板|作业|课堂|出租屋|家里|通勤/.test(text);
+  const interludeFunction = /现实回响|阶段结算|阶段冷却|休整|过渡|余波|状态整理|身体代价|生活压力|工作压力|情绪缓冲|低成本自检|暂时压下/.test(text);
+  const lowCommitmentResidue = [
+    ledger.cliffhanger,
+    ...ledger.newClues,
+    ...ledger.stateChanges,
+    ...ledger.events
+  ].some(isLowCommitmentAnomalyResidueText);
+  const activePlotQueue = cleanPlotQueueEntries([
+    ledger.cliffhanger,
+    ...ledger.newClues,
+    ...ledger.stateChanges,
+    ...(ledger.carryOverTasks ?? [])
+  ], 2, 110);
+
+  return originLayerSignal && (interludeFunction || lowCommitmentResidue) && activePlotQueue.length === 0;
+}
+
+function getRecentChapterLedgersBefore(
+  store: AppStore,
+  projectId: string,
+  beforeChapterNumber: number,
+  limit = 4
+) {
+  return store.chapterLedgers
+    .filter((item) => item.projectId === projectId && item.chapterNumber < beforeChapterNumber)
+    .sort((a, b) => b.chapterNumber - a.chapterNumber || b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, limit);
+}
+
+function getLayerReturnGuard(input: {
+  project: StoredProject;
+  bible: StoredWritingBible;
+  longFormPlan: StoredLongFormPlan | null | undefined;
+  recentLedgers: StoredChapterLedger[];
+}): LayerReturnGuard {
+  if (!projectUsesLayerSwitching(input)) {
+    return { active: false, reason: "", sourceChapters: [], rules: [] };
+  }
+
+  const consecutiveInterludes: StoredChapterLedger[] = [];
+
+  for (const ledger of input.recentLedgers) {
+    if (!ledgerSignalsOriginLayerInterlude(ledger)) {
+      break;
+    }
+    consecutiveInterludes.push(ledger);
+  }
+
+  if (consecutiveInterludes.length < 2) {
+    return { active: false, reason: "", sourceChapters: [], rules: [] };
+  }
+
+  const sourceChapters = consecutiveInterludes.map((ledger) => ledger.chapterNumber).sort((a, b) => a - b);
+  const reason = `最近第 ${sourceChapters.join("、")} 章连续停留在原本生活层的回响/自检功能，下一章需要回到核心行动层或新阶段行动。`;
+
+  return {
+    active: true,
+    reason,
+    sourceChapters,
+    rules: [
+      reason,
+      "双层/多层叙事的原本生活层回响已达到缓冲上限：本章不得继续把低成本异常、自检、生活压力或技术细节扩成新的多章支线。",
+      "本章开头可以用少量篇幅收束原本生活层压力，但必须在前 20%-35% 之内给出明确转向：返回核心行动层、进入下一阶段场面、接到主任务触发，或让主角做出与核心承诺相关的行动选择。",
+      "如果保留异常残留，只能作为进入下一层行动前的心理扰动或身体代价，不得继续做坐标式、文件式、日志式、截图式验证链。",
+      "章末钩子必须指向核心行动层的下一步压力，而不是继续留在原本生活层检查同一个异常。"
+    ]
+  };
+}
+
+function ledgerSignalsCooldownOnly(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return false;
+  }
+
+  const text = getLedgerClosureSignalText(ledger);
+  const cooldownSignal = /阶段(?:交接|缓冲|冷却|结算)|休整|过渡|余波|状态整理|轻钩子|暂不(?:深挖|解释|展开)|不展开/.test(text);
+  const closureSignal = /阶段(?:收束|落点|完成|结束)|任务链(?:收束|完成|结束)|主线(?:收束|完成)|进入下一阶段|当前阶段已(?:完成|结束)/.test(text);
+
+  return cooldownSignal && !closureSignal;
+}
+
+function ledgerSignalsStageClosure(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return false;
+  }
+
+  const text = getLedgerClosureSignalText(ledger);
+  const explicitClosure =
+    /阶段(?:收束|落点|完成|结束|结算)|任务链(?:收束|完成|结束)|主线(?:收束|完成)|当前(?:阶段|任务|主线)[^。！？；\n]{0,40}(?:完成|结束|收束|落定)|进入下一阶段|转入下一阶段|告一段落|暂告一段落/.test(text);
+  const resultLanding =
+    /(?:结果|责任|归属|真相|矛盾|冲突|目标)[^。！？；\n]{0,60}(?:落定|明确|完成|解决|收束)/.test(text) ||
+    /(?:落定|明确|完成|解决|收束)[^。！？；\n]{0,60}(?:结果|责任|归属|真相|矛盾|冲突|目标)/.test(text);
+
+  return explicitClosure || resultLanding;
+}
+
+function userInputRequestsPostClosureCooldown(input?: Partial<
+  Pick<
+    StoredWritingTaskCard,
+    "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+  >
+> | null) {
+  const text = [
+    input?.title,
+    input?.chapterGoal,
+    input?.continuity,
+    input?.mainPlotProgress,
+    input?.pleasurePoint,
+    input?.endingHook
+  ].filter(Boolean).join("\n");
+
+  if (!text.trim()) {
+    return false;
+  }
+
+  const cooldownIntent = /结案后|案后|休整|冷却|结算|过渡|奖励|报酬|资源收益|身份小收益|小收益|现实回响|情绪缓冲|状态整理|轻钩子/.test(text);
+  const noInvestigationIntent =
+    /(不允许|不得|不能|禁止|只允许|只留|轻钩子|不查|不去查|不决定去查)[^。！？\n]*(旧案|新案|调查|追查|查证|查|对比|比对|走访|证人|物证|卷宗|档案|组织|势力|线索)/.test(text) ||
+    /(旧案|新案|调查|追查|查证|查|对比|比对|走访|证人|物证|卷宗|档案|组织|势力|线索)[^。！？\n]*(不允许|不得|不能|禁止|只允许|只留|轻钩子|不查|不去查|不决定去查)/.test(text);
+
+  return cooldownIntent && (noInvestigationIntent || /结案后|案后|冷却|休整/.test(text));
+}
+
+function extractChapterClosureConfidence(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return 0;
+  }
+
+  let score = 0;
+  const text = getLedgerClosureSignalText(ledger);
+
+  if (/阶段(?:收束|落点|完成|结束|结算)|任务链(?:收束|完成|结束)|主线(?:收束|完成)|进入下一阶段|转入下一阶段/.test(text)) {
+    score += 3;
+  }
+  if (/告一段落|暂告一段落|结果落定|状态整理|不再深究|以后再说/.test(text)) {
+    score += 2;
+  }
+  if (/只留一处|轻钩子|不展开|不深究|暂不深挖/.test(text)) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function getPostClosureCooldownGuard(
+  lastLedger: StoredChapterLedger | null | undefined,
+  targetChapterNumber: number,
+  stageClosureGuard: StageClosureGuard,
+  options?: { force?: boolean; reason?: string }
+): PostClosureCooldownGuard {
+  if (!Number.isFinite(targetChapterNumber) || targetChapterNumber <= 0) {
+    return { active: false, reason: "", rules: [] };
+  }
+
+  const isForced = options?.force === true;
+  const isImmediateNextChapter = lastLedger ? targetChapterNumber === lastLedger.chapterNumber + 1 : false;
+  const isRecentClosure = ledgerSignalsStageClosure(lastLedger) || extractChapterClosureConfidence(lastLedger) >= 3;
+  const isOnlyCooldownEcho = ledgerSignalsCooldownOnly(lastLedger);
+
+  if (!isForced && (!isImmediateNextChapter || !isRecentClosure || isOnlyCooldownEcho)) {
+    return { active: false, reason: "", rules: [] };
+  }
+
+  const reason = options?.reason ?? "上一章台账已显示阶段刚结案，下一章进入冷却结算，不能被长篇规划的下一阶段章号直接接管。";
+  const stageText = stageClosureGuard.stage?.text ? `长篇规划当前阶段：${compactStateText(stageClosureGuard.stage.text, 160)}。` : "";
+
+  return {
+    active: true,
+    reason,
+    sourceChapter: lastLedger?.chapterNumber,
+    rules: [
+      stageText,
+      "本章是阶段冷却/结算章，不得把上一阶段残留信息继续扩成新的多章行动链、对照链或信息池。",
+      "本章只允许写：阶段结果后的现实回响、身份/关系的小收益、情绪余波、短暂休整、状态整理、轻钩子；不得新增需要持续追踪的新目标、新角色、新地点、新物件、新组织或新资料。",
+      "现实回响/异常切换必须写人物认知链：先否认或现实归因，再被具体感官细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定、判定真相或开启新行动链。",
+      "如存在现实/梦境或双层空间切换，现实段必须是有效场面：至少包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的两项，不能一句醒来又一句入睡。",
+      "如果需要承接长篇规划中的下一阶段，只能放到下章及之后；本章的 chapterGoal、mainPlotProgress 和 foreshadowingTasks 不得以推进下一阶段主任务为中心。",
+      "章末钩子只能是轻量过渡钩子，不能变成新的主动行动起点。"
+    ].filter(Boolean)
+  };
+}
+
 function getStageClosureGuard(plan: StoredLongFormPlan | null | undefined, chapterNumber: number): StageClosureGuard {
   if (!plan) {
     return { active: false, reason: "", rules: [] };
@@ -3521,9 +3911,11 @@ function getStageClosureGuard(plan: StoredLongFormPlan | null | undefined, chapt
   }
 
   const isNearStageEnd = chapterNumber >= stage.end - 2;
-  const hasClosureSignal = /收束|结案|完成|回收|进入下一阶段|返回|公开审理|破获|解决/.test(stage.text);
+  const hasImmediateClosureSignal =
+    /(?:本章|当前章节|当前应|当前要|这一章|此章|本阶段尾声|阶段尾声|最后\s*\d*\s*章|末尾)[^。！？\n]{0,80}(?:收束|完成|回收|返回|进入下一阶段|阶段落点|阶段结算)/.test(stage.text) ||
+    /(?:收束|完成|回收|返回|进入下一阶段|阶段落点|阶段结算)[^。！？\n]{0,80}(?:本章|当前章节|当前应|当前要|这一章|此章|本阶段尾声|阶段尾声|最后\s*\d*\s*章|末尾)/.test(stage.text);
 
-  if (!isNearStageEnd && !hasClosureSignal) {
+  if (!isNearStageEnd && !hasImmediateClosureSignal) {
     return { active: false, reason: "", stage, rules: [] };
   }
 
@@ -3533,11 +3925,11 @@ function getStageClosureGuard(plan: StoredLongFormPlan | null | undefined, chapt
   const rules = [
     `阶段收束压力：当前位于长篇规划第${stage.start}-${stage.end}章，规划要求为「${compactStateText(stage.text, 260)}」。`,
     isNearStageEnd
-      ? "当前已接近或到达本阶段尾声，任务卡必须优先收束当前案件/当前任务链；不得再新增需要多章验证的新嫌疑人、新地点、新物证或新组织。"
+      ? "当前已接近或到达本阶段尾声，任务卡必须优先收束当前任务链；不得再新增需要多章验证的新目标、新地点、新物件、新角色或新组织。"
       : "如果本阶段规划已经写明收束、结案、完成、回收或进入下一阶段，任务卡必须让本章朝该收束动作推进，而不是继续扩写旁支细节。",
-    "悬疑/案件类章节到阶段末尾时，优先安排：关键证据对上、嫌疑人正面对质、公开审理、阶段性定罪、现实返回或进入下一案；细枝线索只能压缩成一两句或滚入后续案外暗线。",
-    "伏笔在收束章只能作为案后钩子或后续暗线保留，不得在本章继续深挖成新案件、新地图或新调查链。",
-    "收束章不得新增需要走访、查证、比对或跨场景追踪的证人、地点、记录、物证、嫌疑对象或势力节点；如果需要保留，只能用案后一两句疑点压住。"
+    "阶段末尾优先安排：关键冲突对上、关键人物正面回应、阶段性结果、状态更新、返回或进入下一阶段；细枝信息只能压缩成一两句或滚入后续暗线。",
+    "伏笔在收束章只能作为阶段后钩子或后续暗线保留，不得在本章继续深挖成新的多章任务链、新地图或新行动链。",
+    "收束章不得新增需要走访、查证、比对或跨场景追踪的人物、地点、资料、物件、目标或势力节点；如果需要保留，只能用一两句疑点压住。"
   ];
 
   return { active: true, reason, stage, rules };
@@ -3552,16 +3944,18 @@ function hasStageClosureTaskSignal(taskCard?: StoredWritingTaskCard | null) {
     return false;
   }
 
-  return /阶段收束|收束当前|不得再新增|结案|公开审理|阶段性定罪|现实返回|合并证据|证据链/.test(
-    [
-      taskCard.chapterGoal,
-      taskCard.mainPlotProgress,
-      taskCard.pleasurePoint,
-      taskCard.endingHook,
-      taskCard.foreshadowingTasks.join("\n"),
-      taskCard.rulesNotToBreak.join("\n")
-    ].join("\n")
-  );
+  const text = [
+    taskCard.chapterGoal,
+    taskCard.mainPlotProgress,
+    taskCard.pleasurePoint,
+    taskCard.endingHook,
+    taskCard.foreshadowingTasks.join("\n")
+  ].join("\n");
+
+  const explicitClosure = /阶段收束|收束当前|阶段落点|阶段完成|任务链(?:收束|完成)|不得再新增|合并信息|信息闭环|封闭信息池/.test(text);
+  const closureReturn = /(?:收束|结束|完成|落点|结算|结果|定责|结案|告一段落|暂告一段落)[^。！？；\n]{0,40}返回|返回[^。！？；\n]{0,40}(?:收束|结束|完成|落点|结算|结果|定责|结案|告一段落|暂告一段落)/.test(text);
+
+  return explicitClosure || closureReturn;
 }
 
 function isExpansionThreadText(value: string) {
@@ -3569,22 +3963,417 @@ function isExpansionThreadText(value: string) {
 }
 
 function isClosureActionText(value: string) {
-  return /合并|汇总|证据链|对质|审理|定罪|认罪|供认|交代|回收|收束|结案|返回|压缩|只作为钩子|案后/.test(value);
+  return /合并|汇总|闭环|对质|审理|裁定|定责|承认|交代|无话可说|抵赖|回收|收束|完成|结束|返回|压缩|只作为钩子|余波|过渡/.test(value);
+}
+
+function isAftermathHookText(value: string) {
+  return /阶段后钩子|后续钩子|后续暗线|后续压力|后续伏笔|暂不深挖|不在本章深挖|暂不揭示|不揭示|暂不解释|不解释|保留[^。！？；\n]*(悬念|伏笔|钩子|暗线)|仅展示|只展示|暗示[^。！？；\n]*(后续|下一阶段|下一卷|新阶段)|现实钩子|现实.*出现|梦境.*现实|跨世界|后续世界|为后续.*铺垫|为下一阶段.*铺垫/.test(value);
+}
+
+function isLowCommitmentAnomalyResidueText(value: string) {
+  const text = stripCarryOverPrefix(value).trim();
+
+  if (!text) {
+    return false;
+  }
+
+  const dislocationFrame =
+    /现实|醒来|梦境|梦里|现世|异世|主世界|副本|另一个世界|原本生活|切回/.test(text);
+  const perceptionFrame =
+    /看到|听到|闻到|摸到|感觉|觉得|记得|想起|残留|错觉|幻觉|倒影|影子|声音|气味|触感|细节|记忆/.test(text);
+  const technicalShape =
+    /(?:\d+\s*[,，:：]\s*\d+|[A-Za-z]+[_-]?\d{3,}|\.(?:jpg|jpeg|png|webp|txt|log|json|md|csv)\b|error\s*\d+|0x[0-9a-f]+|[A-Z]{2,}-\d+)/i.test(text);
+  const lowCostArtifact =
+    /记录|记下|备忘|画下|写下|存下|删掉|关掉|放下|收起|按灭|合上/.test(text) || technicalShape;
+  const lowCommitment =
+    /好像|像|仿佛|似乎|可能|疑似|约|大约|错觉|幻觉|疲惫|太累|暂时|暂不|压下|没再|没有|不去|不查|只是|先|记录|备忘|自检|轻钩子|回响|残留/.test(text);
+  const hardAction =
+    /决定|必须|立刻|马上|查明|查清|追查|调查|验证|核实|寻找|前往|联系|调取|锁定|确认[^。！？；\n]{0,20}并非偶然|确定|肯定|真相|开启|进入下一案|进入下一阶段/.test(text);
+
+  return (dislocationFrame || perceptionFrame || lowCostArtifact) && lowCommitment && !hardAction;
+}
+
+function isPuzzleFragmentTitle(value: string) {
+  const title = cleanChapterTitleText(value);
+
+  if (!title) {
+    return false;
+  }
+
+  const hasNarrativeAction = /之后|以前|回到|离开|留下|压下|放下|醒来|休整|整理|交接|选择|决定|拒绝|等待|面对/.test(title);
+  const isShortNounPhrase =
+    title.length <= 8 &&
+    !hasNarrativeAction &&
+    !/[动走跑回离入出醒想问答说看听拿放收交接拒等改修救杀斗赢输败认选]/.test(title);
+  const technicalFragment =
+    /(?:\d+\s*[,，:：]\s*\d+|[A-Za-z]+[_-]?\d{3,}|\.(?:jpg|jpeg|png|webp|txt|log|json|md|csv)$|error\s*\d+|0x[0-9a-f]+|[A-Z]{2,}-\d+)/i;
+
+  return technicalFragment.test(title) || isShortNounPhrase;
+}
+
+function buildNeutralCooldownTitle(input: {
+  title?: string;
+  fallbackTitle?: string;
+  chapterGoal?: string;
+  continuity?: string;
+  mainPlotProgress?: string;
+}) {
+  const explicit = trimChapterTitleLength(cleanChapterTitleText(input.title ?? ""));
+
+  if (explicit && !isPuzzleFragmentTitle(explicit)) {
+    return explicit;
+  }
+
+  const candidates = [
+    trimChapterTitleLength(cleanChapterTitleText(input.fallbackTitle ?? "")),
+    "状态整理",
+    "短暂休整",
+    "阶段回响"
+  ].filter(Boolean);
+
+  return candidates.find((title) => !isPuzzleFragmentTitle(title)) ?? "短暂休整";
 }
 
 function isInvestigationExpansionSentence(value: string) {
   const text = value.trim();
 
-  if (!text || isClosureActionText(text)) {
+  if (!text || isClosureActionText(text) || isAftermathHookText(text)) {
     return false;
   }
 
   const newEntity = /证人|嫌疑|线索|地点|物证|记录|登记|名册|名单|账册|卷宗|档案|目击者|陌生人|外地人|来客|访客|商人|组织|势力|据点|暗号|符号/.test(text);
   const investigationVerb = /问|查|打听|翻|登记|见过|认得|出来|进去|来过|领着|带路|指向|指认|寻访|走访|查访|蹲守|追踪|跟踪|比对|核实|验证/.test(text);
   const genericExpansion =
-    /(新|另|又|再|还有|另外|除此之外|忽然|突然)[^。！？；\n]*(人|证人|嫌疑|线索|记录|地点|物证|组织|势力|登记|名册|名单|档案|卷宗)/.test(text);
+    /(新|另|又|再|还有|另外|除此之外|忽然|突然)[^。！？；\n]*(人物|角色|证人|嫌疑|线索|记录|地点|物证|组织|势力|登记|名册|名单|档案|卷宗)/.test(text);
 
   return (newEntity && investigationVerb) || genericExpansion || isExpansionThreadText(text);
+}
+
+function isClosureLandingText(value: string) {
+  const text = value.trim();
+
+  return /休息|歇|睡|回住处|回家|返回|归档|收好|放下|合上|结束|暂不|不再|以后再说|明日再说|先到这里|告一段落|暂告一段落|落定|尘埃落定|领到|拿到|获得|任命|奖励|报酬|认可|身份|关系|状态|余波|回响/.test(text);
+}
+
+function isOpenEndedSceneEntranceText(value: string) {
+  const text = value.trim();
+
+  if (!text || isAftermathHookText(text) || isClosureLandingText(text)) {
+    return false;
+  }
+
+  const sceneEntrance =
+    /(门|入口|巷|通道|走廊|楼梯|屋|房间|院|洞口|岸边|车厢|船舱|站台|电梯|窗|墙角|深处|尽头|门外|门后|里面|桌上|地上|墙上|柜|箱|抽屉|信封|纸条|档案|卷宗|包裹|钥匙|标记|暗号|名单|脚步声|人影|陌生人|声音|灯光)/;
+  const actionEntrance =
+    /(走向|走进|走到|来到|停在|拐进|跨进|推开|打开|靠近|看见|发现|注意到|听见|摸到|拿起|递来|出现|露出|探出|等在|传来|亮着|放着|站着|躺着|挂着|写着|虚掩|半掩|没锁)/;
+  const unresolvedEntrance =
+    /(忽然|突然|只见|有一(?:个|位|扇|只|张|封|块|道)|传来|亮着|放着|站着|躺着|挂着|写着|虚掩|半掩|没锁|尽头|深处|里面|门外|门后)/;
+
+  return (sceneEntrance.test(text) && (actionEntrance.test(text) || unresolvedEntrance.test(text))) ||
+    /^(她|他|我|主角|众人|那人|有人|一行人)[^。！？]{0,60}(走向|走进|拐进|推开|打开|停在|看见|发现|听见)[^。！？]{0,80}$/.test(text);
+}
+
+function signalsPriorSceneClosed(value: string) {
+  return /结束|告一段落|已经了结|已经结束|走出|离开|返回|回到|收尾|落定|完成|处理完|告退|散去|散了/.test(value);
+}
+
+function repeatsClosedSceneAsCurrentAction(value: string) {
+  const text = value.trim();
+
+  if (!text) {
+    return false;
+  }
+
+  const closedSceneAnchor = /当场|原地|原场景|现场|刚才那里|先前场景|同一场合/;
+  const formalAction = /宣布|宣读|复述|总结|表彰|任命|授予|颁发|发放|交接|重新说明|继续处理|继续询问|继续推进/;
+
+  return closedSceneAnchor.test(text) && formalAction.test(text);
+}
+
+function buildChronologyRewindIssue(content: string, context: ChapterDraftContext) {
+  const previousTail = context.previousDraftTail ?? "";
+
+  if (!signalsPriorSceneClosed(previousTail)) {
+    return "";
+  }
+
+  const opening = content.slice(0, 700);
+
+  if (!repeatsClosedSceneAsCurrentAction(opening)) {
+    return "";
+  }
+
+  return "时间线倒退：上一章结尾已经完成并离开当前场面，下一章开头不能倒回同一场面继续做正式处理；应从后续承接场面、休整、手续、通知或现实回响开始。";
+}
+
+function countActionLoopPatternMatches(text: string, pattern: RegExp) {
+  return Array.from(text.matchAll(pattern)).length;
+}
+
+function buildActionLoopDriftIssue(content: string, taskCard?: StoredWritingTaskCard | null) {
+  const taskText = [
+    taskCard?.chapterGoal ?? "",
+    taskCard?.mainPlotProgress ?? "",
+    taskCard?.foreshadowingTasks?.join("\n") ?? "",
+    taskCard?.endingHook ?? ""
+  ].join("\n");
+  const combined = `${taskText}\n${content}`;
+  const needsProgressLoop =
+    /调查|查证|追查|验证|核实|寻找|找出|查明|查清|线索|证据|物证|证词|口供|嫌疑|对手|阻力|目标|任务|危机|误会|交易|谈判|试炼|副本|战斗|救援|经营/.test(combined);
+
+  if (!needsProgressLoop || content.length < 900) {
+    return null;
+  }
+
+  const sceneShiftCount = countActionLoopPatternMatches(
+    content,
+    /(赶到|来到|回到|返回|前往|赶往|抵达|到达|进入|走进|走到|出了|离开|转向|折返|穿过|拐进|绕到|跟上|追到|带到)/g
+  );
+  const discoveryCount = countActionLoopPatternMatches(
+    content,
+    /(发现|看见|注意到|找到|翻出|取出|捡起|摸到|听见|露出|残留|留下|写着|指向|显示|证明|说明|暗示|牵出|引出)/g
+  );
+  const loopClosureCount = countActionLoopPatternMatches(
+    content,
+    /(验证|核实|比对|排除|推翻|确认|证实|对质|质问|逼问|审问|审讯|反驳|承认|交代|供认|指认|锁定|缩小|定责|结论|复盘|归纳|整理|落定|收束|解决|不是[^。！？；\n]{0,24}而是)/g
+  );
+
+  if (sceneShiftCount < 4 || discoveryCount < 5 || loopClosureCount >= 2) {
+    return null;
+  }
+
+  const location =
+    splitDraftSentences(content)
+      .find((sentence) => /(赶到|来到|回到|返回|前往|赶往|抵达|到达|进入|走进|离开|转向|折返)/.test(sentence)) ||
+    "全文";
+
+  return {
+    location: compactStateText(location, 120),
+    sceneShiftCount,
+    discoveryCount,
+    loopClosureCount
+  };
+}
+
+function buildOpenEndedClosureTailIssue(content: string, taskCard?: StoredWritingTaskCard | null) {
+  if (!taskCard || !hasStageClosureTaskSignal(taskCard)) {
+    return "";
+  }
+
+  const sentences = splitDraftSentences(content);
+  const tail = cleanStateEntries([
+    actualDraftEnding(content),
+    sentences.slice(-3).join("")
+  ], 2, 160).find(isOpenEndedSceneEntranceText);
+
+  return tail
+    ? `阶段收束尾巴未收住：结尾停在开放式新入口「${compactStateText(tail, 55)}」，会把轻钩子变成下一章支线。`
+    : "";
+}
+
+function buildDislocationRealitySceneIssue(content: string, taskCard?: StoredWritingTaskCard | null) {
+  if (!taskCard) {
+    return "";
+  }
+
+  const taskText = [
+    taskCard.chapterGoal,
+    taskCard.continuity,
+    taskCard.mainPlotProgress,
+    taskCard.pleasurePoint,
+    taskCard.endingHook,
+    taskCard.rulesNotToBreak.join("\n")
+  ].join("\n");
+  const hasDislocationTask = /现实|梦境|梦里|醒来|入梦|穿越|重生|异世|前世|今生|副本|主世界/.test(taskText);
+
+  if (!hasDislocationTask) {
+    return "";
+  }
+
+  const hasRealityLayer = /现实|醒来|手机|电脑|屏幕|消息|电话|上班|工作|会议|同事|老板|主管|学校|课堂|家里|出租屋|医院|车站|地铁|公交|街道|办公室/.test(content);
+  const hasReturnToOtherLayer =
+    /(再睁开眼|睁开眼时|醒来时|眼前一黑|沉了下去|失去意识)[\s\S]{0,260}(陌生|不是.*现实|不是.*原来|另一层|另一个世界|梦里|梦境|异世|副本|身份|衣服|身体|房间|地点|时间|任务|面板|令牌|标记)/.test(content);
+  const hasRealityPressure = /疲惫|困|疼|僵|饿|冷|热|压力|催| deadline|KPI|加班|迟到|请假|工资|房租|家人|父母|朋友|同事|老板|主管|老师|医生|电话|消息|会议|作业|账单|身体|头疼|胃|手抖/.test(content);
+  const hasCognitiveReaction = /怀疑|疑问|害怕|恐惧|不安|错觉|幻觉|做梦|梦里|梦境|真实|清醒|疯了|压力太大|记忆|想起|为什么|怎么会|是不是|不敢想|不能再想|压下|解释/.test(content);
+  const hasRealityAttribution = /只是梦|就是梦|一场梦|做梦|压力太大|太累|没睡醒|幻觉|错觉|精神|加班|疲惫|累疯|睡眠不足|自我安慰|解释/.test(content);
+  const hasDestabilizingDetail = /触感|重量|疼|痛|汗|冷|热|气味|声音|细节|记得|清楚|真实|残留|痕迹|时间|错位|醒来|梦里|梦境/.test(content);
+  const hasPrematureConclusion = /不是巧合|绝不是巧合|肯定|一定|确定|明白了|她知道|终于知道|真相/.test(content);
+
+  if (!hasRealityLayer) {
+    return "";
+  }
+
+  if (hasReturnToOtherLayer) {
+    return "";
+  }
+
+  if (!hasRealityPressure || !hasCognitiveReaction) {
+    return "双层空间现实段过薄：回到现实/原本生活层后，需要有现实压力或身体代价，并保留主角的疑问、自我怀疑或现实逻辑解释；不能只当转场按钮。";
+  }
+
+  if (!hasRealityAttribution || !hasDestabilizingDetail) {
+    return "异常经历认知链缺失：人物应先否认或现实归因，再被具体感官细节动摇，最后暂时压下；不能直接接受设定、判定真相或把轻钩子写成确定结论。";
+  }
+
+  return hasPrematureConclusion
+    ? "异常经历认知链过快定论：可以写怀疑、归因和细节动摇，但不要直接把轻钩子写成确定结论。"
+    : "";
+}
+
+function buildLayerReturnHardCutIssue(content: string, taskCard?: StoredWritingTaskCard | null) {
+  if (!taskCard) {
+    return "";
+  }
+
+  const taskText = [
+    taskCard.chapterGoal,
+    taskCard.continuity,
+    taskCard.mainPlotProgress,
+    taskCard.endingHook,
+    taskCard.rulesNotToBreak.join("\n")
+  ].join("\n");
+
+  if (!/现实|原本生活|现世|梦境|梦里|入梦|穿越|异世|副本|主世界|另一层|另一个世界/.test(taskText)) {
+    return "";
+  }
+
+  const hardCutPattern =
+    /(合上眼|闭上眼|睡着|睡过去|沉了下去|失去意识|眼前一黑|再睁开眼|睁开眼时|醒来时)[\s\S]{0,180}(再睁开眼|睁开眼时|醒来时|看见的是|已经是|窗纸|屋顶|床榻|衣服|身份|印信|令牌|系统面板|陌生房间)/;
+  const hasHardCut = hardCutPattern.test(content);
+
+  if (!hasHardCut) {
+    return "";
+  }
+
+  const transitionSlice = content.match(hardCutPattern)?.[0] ?? content.slice(0, 700);
+  const hasResistanceBefore =
+    /不敢睡|不能睡|怕.*回去|害怕.*再|抗拒|犹豫|不想|如果.*又|万一|只是梦|太累|压力|自我安慰|解释/.test(content.slice(0, Math.max(700, content.indexOf(transitionSlice) + transitionSlice.length)));
+  const hasSensoryRupture =
+    /下坠|失重|耳鸣|冷|热|疼|痛|麻|窒息|水声|风声|钟声|嗡鸣|气味|触感|时间.*断|身体.*轻|身体.*沉|眼前.*黑|亮得刺眼/.test(transitionSlice);
+  const hasDisorientationAfter =
+    /愣住|僵住|没动|不敢动|怔|迟疑|茫然|恍惚|错位|分不清|这是哪里|又回来了|过了多久|先低头|先摸|确认|看向自己|看了看自己|摸.*衣|摸.*身体|掐|疼/.test(content.slice(content.indexOf(transitionSlice), content.indexOf(transitionSlice) + 900));
+
+  return hasResistanceBefore && hasSensoryRupture && hasDisorientationAfter
+    ? ""
+    : "跨层返回硬切：从原本生活层回到另一层空间时，不能像普通睡觉换场景；需要写入睡前抗拒或现实归因、切换时感官异常/时间断裂、醒来后的短暂错位，并通过身体、衣物、地点、时间或他人反应确认已经回到另一层。";
+}
+
+function quoteDialogues(content: string) {
+  return Array.from(content.matchAll(/“([^”]{1,120})”/g))
+    .map((match) => String(match[1] ?? "").trim())
+    .filter(Boolean);
+}
+
+function dialogueAnswerLooksMismatched(question: string, answer: string) {
+  const q = question.trim();
+  const a = answer.trim();
+
+  if (!q || !a || !/[？?]/.test(q)) {
+    return false;
+  }
+
+  const asksYesNo =
+    /(?:有没有|有无|是否|是不是|能不能|可不可以|要不要|会不会|认不认识|见过|知道|听过|带了|在不在|来没来|去不去|是不是有|还有没有)/.test(q);
+  const answerStartsYesNo = /^(有|没有|没|是|不是|能|不能|可以|不可以|会|不会|知道|不知道|听过|没听过|见过|没见过|认识|不认识)[，。、“”\s]/.test(a);
+
+  if (answerStartsYesNo && !asksYesNo) {
+    return true;
+  }
+
+  const asksWhere = /哪儿|哪里|何处|什么地方|在哪|去向|下落|住处/.test(q);
+
+  if (asksWhere && /^(有|没有|是|不是|知道|不知道|听过|见过|认识)[，。、“”\s]/.test(a)) {
+    return true;
+  }
+
+  const asksWho = /谁|何人|哪个人|什么人|哪位/.test(q);
+
+  if (asksWho && /^(有|没有|是|不是)[，。、“”\s]/.test(a)) {
+    return true;
+  }
+
+  const asksWhat = /什么|为何|为什么|怎么回事|意思|代号|数目|原因/.test(q);
+
+  if (asksWhat && /^(有|没有|是|不是)[，。、“”\s]/.test(a)) {
+    return true;
+  }
+
+  return false;
+}
+
+function findDialogueQuestionAnswerMismatch(content: string, previousTail?: string) {
+  const dialogues = quoteDialogues([previousTail ?? "", content].filter(Boolean).join("\n"));
+
+  for (let index = 0; index < dialogues.length - 1; index += 1) {
+    const question = dialogues[index];
+    const answer = dialogues[index + 1];
+
+    if (dialogueAnswerLooksMismatched(question, answer)) {
+      return {
+        location: `“${compactStateText(question, 48)}” / “${compactStateText(answer, 48)}”`,
+        question,
+        answer
+      };
+    }
+  }
+
+  return null;
+}
+
+function isSceneActionOrObservationText(value: string) {
+  const text = value.trim();
+
+  return (
+    /^(她|他|我|你|众人|那人|此人|那个|这个|随后|忽然|终于|已经|没有|不是|第一|第二)[^。！？；\n]{0,80}(看见|看着|盯着|抬头|低头|伸手|走到|回头|沉默|开口|问|说|想|觉得|发现|注意到|意识到)/.test(text) ||
+    /^(那个动作|这个动作|那句话|这句话|那一眼|这一眼|那封信|这封信|那张纸|这张纸|那块布|这块布)/.test(text)
+  );
+}
+
+function isResolvedEvidenceText(value: string) {
+  const text = value.trim();
+
+  return (
+    /确认|证实|吻合|一致|归案|认罪|定罪|供认|承认|已结|已完成|形成证据链|水落石出|非血迹|为朱砂|系/.test(text) &&
+    !/未知|不明|为何|为什么|是谁|何人|来源|含义|目的|暗示|可能|疑似|待查|待确认|另有|背后|幕后/.test(text)
+  );
+}
+
+function isPlotQueueTaskText(value: string) {
+  const text = value.trim();
+
+  if (
+    !text ||
+    isCarryOverRuleText(text) ||
+    isAftermathHookText(text) ||
+    isSceneActionOrObservationText(text) ||
+    isResolvedEvidenceText(text)
+  ) {
+    return false;
+  }
+
+  if (/^(承接|继续|处理|推进|完成|收束|回收|查明|查清|确认|解决|进入|开启|准备|安排|补足|缉拿|抓捕|对质|审理|定责|定罪|返回|复盘)/.test(text)) {
+    return true;
+  }
+
+  return /未完成任务|下一步|下一章|短期目标|阶段目标|阶段落点|必须|需要|决定|天亮后|明日|随后.*查|转入下一案|进入下一阶段/.test(text);
+}
+
+function cleanPlotQueueEntries(values: string[], limit = 8, maxLength = 110) {
+  return cleanStateEntries(values, limit * 2, maxLength)
+    .filter(isPlotQueueTaskText)
+    .filter((item) => !isLowCommitmentAnomalyResidueText(item))
+    .slice(0, limit);
+}
+
+function cleanPlotContextQuestionEntries(values: string[], limit = 12, maxLength = 110) {
+  return cleanStateEntries(values, limit * 2, maxLength)
+    .filter((item) =>
+      !isCarryOverRuleText(item) &&
+      !isLowCommitmentAnomalyResidueText(item) &&
+      !isSceneActionOrObservationText(item) &&
+      !isResolvedEvidenceText(item)
+    )
+    .slice(0, limit);
 }
 
 function extractStageExpansionEvidence(content: string) {
@@ -3610,7 +4399,29 @@ function isClosedWorldAllowedEvidence(value: string, knownText: string) {
   const anchors = hookKeywordGrams(value).filter((gram) => gram.length >= 2);
   const hitCount = anchors.filter((gram) => normalizedKnownText.includes(normalizeLedgerComparisonText(gram))).length;
 
-  return hitCount >= 3;
+  if (hitCount >= 3) {
+    return true;
+  }
+
+  const meaningfulTokens = Array.from(
+    new Set(
+      value.match(/[\u4e00-\u9fffA-Za-z0-9]{2,12}/g) ?? []
+    )
+  ).filter((token) =>
+    !/^(直到|快速|几页|都是|寻常|记录|发现|看见|注意|这里|那里|这个|那个|已经|突然|忽然|继续|开始|最后|里面|外面|内侧)$/.test(token)
+  );
+  const tokenHits = meaningfulTokens.filter((token) => normalizedKnownText.includes(normalizeLedgerComparisonText(token)));
+
+  if (tokenHits.length >= 2) {
+    return true;
+  }
+
+  const localInspectionAction = /翻到|翻开|打开|掀开|夹层|内衬|封底|背面|里面|内侧|底部|边缘|页角|缝隙|压痕|折痕|划痕|痕迹/.test(value);
+  const registeredObjectHit = hookKeywordGrams(value)
+    .filter((gram) => gram.length >= 2)
+    .some((gram) => normalizedKnownText.includes(normalizeLedgerComparisonText(gram)));
+
+  return localInspectionAction && registeredObjectHit;
 }
 
 function closedWorldKnownText(input: {
@@ -3633,7 +4444,7 @@ function closedWorldKnownText(input: {
 
 function applyStageClosureGuardToTaskCard<T extends Pick<
   StoredWritingTaskCard,
-  "chapterGoal" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "rulesNotToBreak" | "endingHook"
+  "title" | "chapterGoal" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "rulesNotToBreak" | "endingHook"
 >>(
   card: T,
   guard: StageClosureGuard,
@@ -3645,42 +4456,142 @@ function applyStageClosureGuardToTaskCard<T extends Pick<
 
   const closureRule = "阶段收束模式：本章是封闭证据池，只能使用上一章台账、任务卡和当前项目状态已登记的人物、地点、物证、供词和伏笔；不得新增需要多章追查的新调查对象。";
   const closureTasks = carryOverTasks.filter((task) => !isInvestigationExpansionSentence(task)).slice(0, 3);
-  const closureTaskText = closureTasks.length > 0
-    ? closureTasks.join("；")
-    : "既有证据、人物供词和前文线索";
+  const concreteTasks = uniqueList([
+    ...closureTasks,
+    ...card.foreshadowingTasks.filter((task) =>
+      !isCarryOverRuleText(task) &&
+      !isAftermathHookText(task) &&
+      (!isExpansionThreadText(task) || isClosureActionText(task))
+    )
+  ]).slice(0, 3);
+  const concreteTaskText = concreteTasks.length > 0
+    ? concreteTasks.join("；")
+    : "合并已登记信息，完成当前任务链的阶段性落点";
   const closureGoal = compactStateText(
-    `阶段收束：围绕${closureTaskText}完成对质、定责、回收或返回，不引出新的调查链。`,
+    concreteTasks.length > 0
+      ? `完成本章收束动作：${concreteTaskText}。`
+      : "把上一章已经摆出的信息推进到可记录的结果、回应、选择或责任归属，让当前任务链出现阶段性落点。",
     300
   );
   const closureProgress = compactStateText(
-    `阶段收束：先处理${closureTasks[0] || "当前案件/任务链的未闭合证据"}，把既有线索合成证据链并推进对质或阶段性落点；不再把伏笔升级成新主线。`,
+    concreteTasks.length > 0
+      ? `用已登记信息完成闭环：${concreteTaskText}。`
+      : "用已登记信息完成当前任务链闭环，并推进到结果明确、责任归属、状态更新或返回后的阶段性落点。",
     300
   );
-  const closurePleasure = /对质|定责|证据|供认|回收|结案|返回|收束/.test(card.pleasurePoint)
+  const closurePleasure = /对质|定责|证据|回收|完成|返回|收束|闭环/.test(card.pleasurePoint)
     ? card.pleasurePoint
-    : compactStateText(`爽点改为收束回报：用既有证据逼出供认、定责或阶段性真相，让前文压制得到回应；不靠新线索制造爽点。`, 300);
+    : compactStateText("爽点改为收束回报：用既有信息给出结果、责任归属或阶段性真相，让前文压制得到回应；不靠新线索制造爽点。", 300);
   const closureForeshadowingTasks = cleanStateEntries(
     uniqueList([
       ...closureTasks.map((task) => `优先收束上一章未完成：${task}`),
       ...card.foreshadowingTasks
+        .filter((task) => !isAftermathHookText(task))
         .filter((task) => !isExpansionThreadText(task) || isClosureActionText(task))
-        .map((task) => (/回收|收束|对质|证据链|只作为/.test(task) ? task : `只保留为案后钩子，不在本章深挖：${task}`)),
-      "如出现更大暗线，只能压成案后钩子，不能展开调查链。"
+        .filter((task) => /回收|收束|对质|闭环|定责|裁定|交代|比对|确认|完成|解决/.test(task))
     ]),
     4,
     130
   );
+  const title = isAftermathHookText(card.title) || (isExpansionThreadText(card.title) && !isClosureActionText(card.title))
+    ? "阶段落点"
+    : card.title;
+  const endingHook = isAftermathHookText(card.endingHook)
+    ? compactStateText(`阶段落点完成后，只留一处余波或未解压力作为后续钩子，本章不展开追查：${card.endingHook}`, 260)
+    : isExpansionThreadText(card.endingHook) || isInvestigationExpansionSentence(card.endingHook)
+      ? "阶段落点完成后，只留一处尚未回应、信息待公开或责任待裁定的压力，不展开新的行动链。"
+      : card.endingHook;
 
   return {
     ...card,
+    title,
     chapterGoal: closureGoal,
     mainPlotProgress: closureProgress,
     pleasurePoint: closurePleasure,
     foreshadowingTasks: closureForeshadowingTasks,
     rulesNotToBreak: cleanStateEntries(uniqueList([closureRule, ...guard.rules, ...card.rulesNotToBreak]), 14, 150),
-    endingHook: isExpansionThreadText(card.endingHook) || isInvestigationExpansionSentence(card.endingHook)
-      ? "阶段落点完成后，只留一处尚未承认、证据待公开或责任待裁定的压力，不展开新调查链。"
-      : card.endingHook
+    endingHook
+  };
+}
+
+function applyPostClosureCooldownToTaskCard<T extends Pick<
+  StoredWritingTaskCard,
+  "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "rulesNotToBreak" | "endingHook"
+>>(
+  card: T,
+  guard: PostClosureCooldownGuard,
+  _carryOverTasks: string[],
+  userInput?: Partial<
+    Pick<
+      StoredWritingTaskCard,
+      "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+    >
+  > | null
+): T {
+  if (!guard.active) {
+    return card;
+  }
+
+  const userGoal = compactStateText(userInput?.chapterGoal?.trim() ?? "", 180);
+  const userContinuity = compactStateText(userInput?.continuity?.trim() ?? "", 180);
+  const userProgress = compactStateText(userInput?.mainPlotProgress?.trim() ?? "", 180);
+  const userPleasure = compactStateText(userInput?.pleasurePoint?.trim() ?? "", 180);
+  const userHook = compactStateText(userInput?.endingHook?.trim() ?? "", 160);
+  const previousSceneClosed = signalsPriorSceneClosed(card.continuity) || signalsPriorSceneClosed(guard.reason);
+  const shouldReplaceCooldownField = (value: string) =>
+    isLowCommitmentAnomalyResidueText(value) ||
+    isInvestigationExpansionSentence(value) ||
+    /新案|旧案|第二案|下一案|调查|追查|查证|查访|走访|比对两案|对比两案|卷宗|档案|新证人|新地点|新物证|新线索|新组织|新势力|幕后|决定去查|明日.*查|继续查|确认异常并非偶然|确认[^。！？；\n]{0,30}异常/.test(value) ||
+    (previousSceneClosed && repeatsClosedSceneAsCurrentAction(value));
+  const cooldownField = (value: string, fallback: string, userValue = "") => {
+    if (userValue) {
+      return userValue;
+    }
+
+    const cleaned = compactStateText(value, 180);
+    return cleaned && !shouldReplaceCooldownField(cleaned) ? cleaned : fallback;
+  };
+  const safeForeshadowingTasks = cleanStateEntries(
+    card.foreshadowingTasks.filter((task) =>
+      !isCarryOverRuleText(task) &&
+      !isAftermathHookText(task) &&
+      !isLowCommitmentAnomalyResidueText(task) &&
+      !shouldReplaceCooldownField(task) &&
+      !/阶段冷却|冷却规则|不展开新调查链|不得新增|只能使用|封闭证据池/.test(task)
+    ),
+    2,
+    120
+  );
+
+  return {
+    ...card,
+    title: buildNeutralCooldownTitle({
+      title: card.title,
+      fallbackTitle: "阶段回响",
+      chapterGoal: card.chapterGoal,
+      continuity: card.continuity,
+      mainPlotProgress: card.mainPlotProgress
+    }),
+    chapterGoal: cooldownField(card.chapterGoal, "写结案后的休整、身份小收益和有效现实回响；如有双层空间切换，现实段要有压力或代价，不进入新调查。", userGoal),
+    continuity: cooldownField(card.continuity, "承接上一章结案后的现实回响、身份变化和轻度情绪余波；按否认/归因、细节动摇、暂时压下的认知链写，不开启查证行动。", userContinuity),
+    mainPlotProgress: cooldownField(card.mainPlotProgress, "完成上一案后的状态整理和收束，不把下一阶段写成本章主任务。", userProgress),
+    pleasurePoint: cooldownField(card.pleasurePoint, "把上一案压力转成阶段性回报：领赏、认可、关系松动或一处轻收益。", userPleasure),
+    foreshadowingTasks: safeForeshadowingTasks,
+    rulesNotToBreak: cleanStateEntries(
+      uniqueList([
+        `冷却规则：${guard.reason}`,
+        ...guard.rules,
+        previousSceneClosed
+          ? "时间线闭合：上一章真实结尾已经完成并离开当前场面，本章不得倒回同一场面继续做正式处理；收益改为后续承接、手续、通知或现实回响。"
+          : "",
+        ...card.rulesNotToBreak
+      ]),
+      12,
+      150
+    ),
+    endingHook: userHook || (/新案|调查|追查|证人|物证|地点|卷宗|组织/.test(card.endingHook)
+      ? "只留下轻量过渡钩子，不开启新调查链。"
+      : card.endingHook)
   };
 }
 
@@ -3734,7 +4645,14 @@ function isHardForeshadowingTask(value: string) {
     .replace(/^优先承接上一章未完成任务[:：]\s*/, "")
     .trim();
 
-  if (!text || /保持[^，。；\n]*(未回收|部分回收)|只保留为案后钩子|暂不深挖|不在本章深挖|后续暗线压力/.test(text)) {
+  if (
+    !text ||
+    /保持[^，。；\n]*(未回收|部分回收)|只保留为案后钩子|暂不深挖|不在本章深挖|后续暗线压力/.test(text) ||
+    /(?:不|暂不|无需|不必|不能|不要)[^，。；\n]{0,24}(?:回收|揭示|揭开|解释|深挖|追查|调查|展开|处理)/.test(text) ||
+    /(?:只|仅)[^，。；\n]{0,24}(?:确认|保留|暗示|轻触|点到|作为|留下)[^，。；\n]{0,40}(?:方向|钩子|伏笔|余波|压力|线索)/.test(text) ||
+    /^(阶段收束|围绕既有|既有证据|如出现|不得|禁止|不要|只能|优先合并|不引出|不展开)/.test(text) ||
+    /不能展开调查链|新的调查链|更大暗线|案后钩子|背景压力|封闭证据池/.test(text)
+  ) {
     return false;
   }
 
@@ -3746,46 +4664,21 @@ function isHardForeshadowingTask(value: string) {
     return false;
   }
 
+  const explicitHardPattern =
+    /(?:必须|本章必须|本章要|本章需|务必|需要)[^，。；\n]{0,40}(?:回收|部分回收|处理|兑现|补足|合并|对质|核实|验证|比对|传唤|审问|审讯|逼问|质问|定责|定罪|结案|公开审理)/;
   const actionableHardPattern =
-    /必须|本章|补足|合并|对质|证据链|物件|染料|账本|指纹|供词|衣袖|指甲|残留|比对|核实|验证|传唤|审问|审讯|逼问|质问|定责|定罪|结案|公开审理/;
+    /回收|部分回收|补足|合并|对质|证据链|比对|核实|验证|传唤|审问|审讯|逼问|质问|定责|定罪|结案|公开审理/;
   const recoverPattern = /回收|部分回收|已回收/;
 
-  return actionableHardPattern.test(text) || recoverPattern.test(text);
+  return explicitHardPattern.test(text) || actionableHardPattern.test(text) || recoverPattern.test(text);
 }
 
 function buildDraftObligationRepairIssues(content: string, context: ChapterDraftContext) {
   const taskCard = context.taskCard;
-  const missingCharacters = taskCard.requiredCharacters
-    .filter((name) => isValidTaskCardRequiredCharacter(name) && !name.includes("主角") && !characterAppearsInDraft(content, name))
-    .slice(0, 4);
-  const missingForeshadowingTasks = taskCard.foreshadowingTasks
-    .filter(isHardForeshadowingTask)
-    .filter((task) => !taskEvidenceAppearsInDraft(task, content))
-    .slice(0, 4);
-  const stageExpansionIssue = buildStageExpansionReviewIssue({
-    draft: {
-      id: "draft-obligation-check",
-      projectId: taskCard.projectId,
-      taskCardId: taskCard.id,
-      chapterNumber: taskCard.chapterNumber,
-      title: taskCard.title,
-      content,
-      status: "draft",
-      createdAt: "",
-      updatedAt: ""
-    },
-    taskCard,
-    longFormPlan: context.longFormPlan
-  });
+  const chronologyRewindIssue = buildChronologyRewindIssue(content, context);
 
   return cleanStateEntries([
-    missingCharacters.length > 0
-      ? `必出人物未落实：${missingCharacters.join("、")} 必须在正文中以原名出现，并发生有效动作、对白、质询、观察或选择。`
-      : "",
-    ...missingForeshadowingTasks.map((task) => `伏笔/收束任务未落实：${task}`),
-    stageExpansionIssue
-      ? `阶段收束失控：${stageExpansionIssue.problem ?? stageExpansionIssue.suggestion}`
-      : ""
+    chronologyRewindIssue
   ], 8, 180);
 }
 
@@ -4180,9 +5073,14 @@ function normalizeChapterTitleForStorage(
 ) {
   const cleanTitle = trimChapterTitleLength(cleanChapterTitleText(title ?? ""));
   const cleanFallback = trimChapterTitleLength(cleanChapterTitleText(fallbackTitle));
+  const systemTitlePattern = /^(阶段冷却|结案后冷却|结算章|过渡章|冷却章|未命名章节)$/;
 
   if (!cleanTitle) {
     return cleanFallback || "未命名章节";
+  }
+
+  if (systemTitlePattern.test(cleanTitle)) {
+    return cleanFallback && !systemTitlePattern.test(cleanFallback) ? cleanFallback : "阶段回响";
   }
 
   return cleanTitle;
@@ -4197,6 +5095,190 @@ type RecentChapterTitleUsage = {
 
 function titleVisibleLength(value: string) {
   return Array.from(cleanChapterTitleText(value).replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, "")).length;
+}
+
+function isWeakActionSentenceTitle(value: string) {
+  const title = cleanChapterTitleText(value);
+
+  if (!title) {
+    return true;
+  }
+
+  return (
+    /^(?:她|他|我|你|主角|少年|少女|男人|女人|老人|孩子|众人|那人|有人|差役|捕头|大人|夫人)(?:把|将|又|再|先|才|正|刚|已|已经|终于)?[\u4e00-\u9fa5]{1,8}(?:了|着|过)?(?:一|那|这|这个|那个)?[\u4e00-\u9fa5]{1,8}$/.test(title) ||
+    /^(?:翻开|打开|拿起|放下|走进|走出|来到|回到|看见|发现|找到|收起|包好|推开|关上|坐下|站起|睡着|醒来)[\u4e00-\u9fa5]{1,10}$/.test(title)
+  );
+}
+
+function isMalformedGeneratedTitle(value: string) {
+  const title = cleanChapterTitleText(value);
+
+  if (!title) {
+    return true;
+  }
+
+  const brokenActionPrefix =
+    /^(?:抢|夺|偷|换|烧|毁|封|锁|拦|截|骗|藏|争夺|抢夺|夺取|追回|追查|查看|翻看|打开|拿起|带走|拿走|破坏|闯入|踹开|追来|拦住)(?:后|前|时|中|里|内|外|间|了|着|过)/;
+  const clippedActionWithConnector =
+    /^(?:抢|夺|偷|换|烧|毁|封|锁|拦|截|骗|藏|争夺|抢夺|夺取|追回|追查|查看|翻看|打开|拿起|带走|拿走|破坏).{0,4}(?:后|前|时|中|里|内|外|间)[\u4e00-\u9fa5A-Za-z0-9]{2,}/;
+  const proseFragment =
+    /(?:少了|多了|缺了)(?:一|两|三|几|半)?(?:页|行|段|个|件|张|条|处|角|块|枚|份|本|封|道|层)(?:[\u4e00-\u9fa5A-Za-z0-9]{0,6})$/;
+  const clippedReasoningFragment =
+    /^(?:断有人|判定|判断|推断|确认|证明|说明|表明|发现有人|有人提前|有人已经|有人刚刚|有人未|有人没有)/;
+  const danglingConnector =
+    /(?:且|并|但|却|而|或|以及|同时|随后|因为|所以|如果|虽然|只是|未|没有|尚未|还没)$/;
+
+  return (
+    brokenActionPrefix.test(title) ||
+    clippedActionWithConnector.test(title) ||
+    proseFragment.test(title) ||
+    clippedReasoningFragment.test(title) ||
+    danglingConnector.test(title) ||
+    /(?:于是|然后|接着|随后|之后|以前|时候|期间)$/.test(title)
+  );
+}
+
+function isGenericChapterTitle(value: string) {
+  const title = cleanChapterTitleText(value);
+
+  return (
+    !title ||
+    /^(?:未命名章节|新的线索|新线索|新发现|新危机|新任务|新阶段|下一步|再起波澜|风波再起|暗流涌动|真相将近|疑云再起|线索浮现|危机逼近|阶段回响)$/.test(title)
+  );
+}
+
+function chapterTitleQualityScore(value: string) {
+  const title = cleanChapterTitleText(value);
+  const length = titleVisibleLength(title);
+
+  if (!title || length < 2) {
+    return -100;
+  }
+
+  let score = 0;
+
+  if (length >= 3 && length <= 9) {
+    score += 3;
+  } else if (length <= 14) {
+    score += 1;
+  } else {
+    score -= 2;
+  }
+
+  if (/门|灯|影|血|火|雨|夜|井|楼|城|街|院|书|纸|刀|钥|铃|镜|信|账|图|牌|印|声|脚步|来客|陌生|裂|旧|残|断|空|冷|黑|红/.test(title)) {
+    score += 2;
+  }
+
+  if (/谁|何|不|未|无|错|假|旧|残|暗|冷|夜|血|裂|失|夺|抢|闯|拦|追|问|藏|封|禁|异|醒|梦|归|回/.test(title)) {
+    score += 2;
+  }
+
+  if (/^(?:她|他|我|你|主角|众人|有人|那人)/.test(title)) {
+    score -= 4;
+  }
+
+  if (isWeakActionSentenceTitle(title)) {
+    score -= 6;
+  }
+
+  if (isMalformedGeneratedTitle(title)) {
+    score -= 14;
+  }
+
+  if (isGenericChapterTitle(title)) {
+    score -= 8;
+  }
+
+  return score;
+}
+
+function normalizeTitleSubjectFragment(value: string) {
+  let subject = cleanChapterTitleText(value)
+    .replace(/^[\u4e00-\u9fa5A-Za-z0-9]{0,12}[，,。！？；;：:]/, "")
+    .replace(/^(?:发现|看见|看到|听见|得知|确认|拿到|得到|打开|翻开|争夺|抢夺|夺取|追回|查到|找到|追查|进入|回到|来到|盯着|盯住|面对|处理|销毁|破坏)/, "")
+    .replace(/^(?:的|了|着|过|那|这|这个|那个|一|有|又|再|才|却|但|而)/, "")
+    .replace(/^(?:后|前|时|中|里|内|外|间)+/, "");
+
+  subject = subject.replace(/^[\u4e00-\u9fa5A-Za-z0-9]{1,8}(?:后|前|时|中|里|内|外|间)(?=[\u4e00-\u9fa5A-Za-z0-9]{2,8}$)/, "");
+  subject = subject.replace(/(?:的|了|着|过|后|前|时|中|里|内|外|间)$/g, "");
+
+  const length = titleVisibleLength(subject);
+  if (length < 2 || length > 8 || isMalformedGeneratedTitle(subject)) {
+    return "";
+  }
+
+  return subject;
+}
+
+function buildTitleCandidatesFromText(value: string) {
+  const text = compactStateText(value, 260);
+
+  if (!text) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  const add = (candidate: string) => {
+    const clean = trimChapterTitleLength(cleanChapterTitleText(candidate));
+
+    if (
+      clean &&
+      !isGenericChapterTitle(clean) &&
+      !isWeakActionSentenceTitle(clean) &&
+      !isMalformedGeneratedTitle(clean) &&
+      chapterTitleQualityScore(clean) > -2
+    ) {
+      candidates.push(clean);
+    }
+  };
+
+  for (const match of text.matchAll(/([\u4e00-\u9fa5A-Za-z0-9]{1,10})(?:被|遭|让|给)(抢|夺|偷|换|烧|毁|封|锁|拦|截|骗|藏|带走|拿走|破坏)/g)) {
+    const subject = normalizeTitleSubjectFragment(match[1]);
+    if (subject) {
+      add(`${subject}被${match[2]}`);
+    }
+  }
+
+  for (const match of text.matchAll(/([\u4e00-\u9fa5A-Za-z0-9]{2,12})[^。！？；;\n]{0,10}(少了|缺了|缺失|不见|消失|被撕去|被撕掉|被毁去|被抹掉)[^。！？；;\n]{0,10}(一页|一段|一行|一角|一块|一处|记录|字迹|痕迹|名字|编号|印记|内容)?/g)) {
+    const subject = normalizeTitleSubjectFragment(match[1]);
+    if (subject) {
+      add(match[3] === "一页" ? `${subject}缺页` : `缺失的${subject}`);
+    }
+  }
+
+  for (const match of text.matchAll(/([\u4e00-\u9fa5A-Za-z0-9]{2,12})(出现|再现|失踪|消失|断裂|变形|变色|错位|不见|多出|留下|露出)/g)) {
+    const subject = normalizeTitleSubjectFragment(match[1]);
+    if (!subject) {
+      continue;
+    }
+
+    const event = match[2];
+    if (/多出|错位|变形|变色|断裂/.test(event)) {
+      add(`异常的${subject}`);
+    } else {
+      add(`${subject}${event}`);
+    }
+  }
+
+  for (const match of text.matchAll(/(?:旧|残|断|无字|空白|染血|烧焦|陌生|错误|假的|被封|被藏)([\u4e00-\u9fa5A-Za-z0-9]{2,8})/g)) {
+    add(match[0]);
+  }
+
+  if (/(?:门外|身后|窗外|院外|楼下|巷口)[^。！？；;\n]{0,14}(?:脚步|声音|响动|来人)/.test(text)) {
+    add("门外脚步");
+  }
+
+  if (/(?:有人|陌生人|来客|黑影)[^。！？；;\n]{0,14}(?:闯入|追来|拦住|堵住|推开|踹开)/.test(text)) {
+    add("来人闯入");
+  }
+
+  if (/(?:持刀|带刀|举刀)[^。！？；;\n]{0,14}(?:闯入|逼近|追来|拦住|堵住)/.test(text)) {
+    add("刀下阻拦");
+  }
+
+  return uniqueList(candidates)
+    .sort((a, b) => chapterTitleQualityScore(b) - chapterTitleQualityScore(a))
+    .slice(0, 4);
 }
 
 function latestRepeatedTitleLength(recentTitles: Array<{ title: string }>) {
@@ -4226,27 +5308,37 @@ function chooseChapterTitleForStorage(input: {
   titleAlternatives?: unknown;
   fallbackTitle: string;
   recentTitles: Array<{ title: string }>;
+  titleContext?: string[];
 }) {
   const recentTitleSet = new Set(input.recentTitles.map((item) => cleanChapterTitleText(item.title)).filter(Boolean));
   const blockedLength = latestRepeatedTitleLength(input.recentTitles);
   const candidates = uniqueList([
     input.title ?? "",
     ...textListFromUnknown(input.titleAlternatives),
+    ...(input.titleContext ?? []).flatMap(buildTitleCandidatesFromText),
     input.fallbackTitle
   ]
     .map((item) => trimChapterTitleLength(cleanChapterTitleText(item)))
-    .filter(Boolean));
+    .filter((item) => item && !isMalformedGeneratedTitle(item)));
 
-  const nonRepeating = candidates.find((candidate) => {
-    const length = titleVisibleLength(candidate);
-    return length > 0 && !recentTitleSet.has(candidate) && (blockedLength === null || length !== blockedLength);
-  });
+  const rankedCandidates = candidates
+    .map((candidate, index) => {
+      const length = titleVisibleLength(candidate);
+      const blockedByRecent = recentTitleSet.has(candidate) || (blockedLength !== null && length === blockedLength);
+      return {
+        candidate,
+        index,
+        score: chapterTitleQualityScore(candidate) - (blockedByRecent ? 8 : 0)
+      };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const nonRepeating = rankedCandidates.find((item) => item.score > -4);
 
   if (nonRepeating) {
-    return nonRepeating;
+    return nonRepeating.candidate;
   }
 
-  return candidates.find((candidate) => !recentTitleSet.has(candidate)) || candidates[0] || "未命名章节";
+  return rankedCandidates[0]?.candidate || candidates.find((candidate) => !recentTitleSet.has(candidate)) || candidates[0] || "未命名章节";
 }
 
 function getRecentChapterTitles(
@@ -4875,14 +5967,22 @@ function plotStateForChapterContext(
       (lastLedger ? `承接第 ${lastLedger.chapterNumber} 章钩子：${lastLedger.cliffhanger}` : plotState.shortTermGoal),
     currentStage:
       stripChapterRefsAtOrAfter(plotState.currentStage, chapterNumber) ||
-      lastLedger?.stateChanges[0] ||
+      cleanPlotQueueEntries(lastLedger?.stateChanges ?? [], 1, 110)[0] ||
       plotState.currentStage,
-    unresolvedQuestions: plotState.unresolvedQuestions.filter(
-      (item) => !hasChapterRefAtOrAfter(item, chapterNumber)
+    unresolvedQuestions: cleanPlotContextQuestionEntries(plotState.unresolvedQuestions, 16, 110)
+      .filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber))
+      .slice(0, 12),
+    openThreads: cleanPlotQueueEntries(
+      plotState.openThreads.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
+      16,
+      110
     ),
-    openThreads: plotState.openThreads.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
     resolvedThreads: plotState.resolvedThreads.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
-    nextMilestones: plotState.nextMilestones.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
+    nextMilestones: cleanPlotQueueEntries(
+      plotState.nextMilestones.filter((item) => !hasChapterRefAtOrAfter(item, chapterNumber)),
+      8,
+      110
+    ),
     relationshipChanges: plotState.relationshipChanges.filter(
       (item) => !hasChapterRefAtOrAfter(item, chapterNumber)
     )
@@ -4950,7 +6050,8 @@ function isNoisyStateText(value: string) {
   return (
     text.length < 4 ||
     text.length > 140 ||
-    /这些信息只露出一角|不要提前|不能提前把真相讲透|等所有人都以为|爽点释放在这里|这一章的核心|上一章留下的压力/.test(text)
+    /这些信息只露出一角|不要提前|不能提前把真相讲透|等所有人都以为|爽点释放在这里|这一章的核心|上一章留下的压力/.test(text) ||
+    /^(她|他|我|你|众人|那人|这个|那个|这种|此时|刚才|随后|忽然|终于|已经|没有|不是|什么|怎么|为何|为什么|第一|第二)[，。！？；：\s]/.test(text)
   );
 }
 
@@ -5173,6 +6274,9 @@ const characterRoleAliasNames = new Set([
   "嬷嬷",
   "丫鬟",
   "小厮",
+  "家丁",
+  "门房",
+  "仆人",
   "护卫",
   "侍卫",
   "长老",
@@ -5198,6 +6302,33 @@ function stripCharacterHonorificName(name: string) {
   return baseCharacterName(name)
     .replace(/(?:大人|老爷|先生|姑娘|小姐|夫人|娘子|公子|前辈|师父|师傅|老师)$/g, "")
     .trim();
+}
+
+function taskCardCharacterMentionCandidates(name: string) {
+  const base = stripCharacterHonorificName(name);
+
+  if (!base) {
+    return [];
+  }
+
+  const candidates = [base];
+  const baseWithoutOrdinal = base.replace(/[甲乙丙丁戊己庚辛壬癸A-Z]$/i, "");
+
+  if (baseWithoutOrdinal !== base && baseWithoutOrdinal.length >= 2) {
+    candidates.push(baseWithoutOrdinal);
+  }
+
+  characterRoleAliasNames.forEach((role) => {
+    if (base.length > role.length + 1 && base.startsWith(role)) {
+      candidates.push(base.slice(role.length));
+    }
+
+    if (base.endsWith(role) || baseWithoutOrdinal.endsWith(role)) {
+      candidates.push(role);
+    }
+  });
+
+  return uniqueList(candidates.filter((candidate) => candidate.length >= 2));
 }
 
 function areCharacterAliasNames(left: string, right: string) {
@@ -5695,18 +6826,166 @@ function draftEndingAppearsToCarryHook(content: string, endingHook: string) {
     return true;
   }
 
-  const endingSection = content.slice(-700);
+  const endingSection = content.slice(-900);
+  const normalizedEnding = normalizeLedgerComparisonText(endingSection);
+  const normalizedHook = normalizeLedgerComparisonText(hook);
 
-  if (content.includes(hook.slice(0, 12))) {
+  if (!normalizedEnding || !normalizedHook) {
+    return false;
+  }
+
+  const hookPrefix = normalizedHook.slice(0, Math.min(normalizedHook.length, 24));
+
+  if (hookPrefix.length >= 12 && normalizedEnding.includes(hookPrefix)) {
+    return true;
+  }
+
+  const hookEndingFragments = splitDraftSentences(hook)
+    .slice(-2)
+    .map(normalizeLedgerComparisonText)
+    .flatMap((sentence) => {
+      const fragments = [sentence];
+
+      if (sentence.length > 18) {
+        fragments.push(sentence.slice(0, 18), sentence.slice(-18));
+      }
+
+      return fragments;
+    })
+    .filter((fragment) => fragment.length >= 8);
+
+  if (hookEndingFragments.some((fragment) => normalizedEnding.includes(fragment))) {
     return true;
   }
 
   const hitCount = hookKeywordGrams(hook)
     .filter((gram) => endingSection.includes(gram))
+    .slice(0, 6)
+    .length;
+  const hookTailGrams = hookKeywordGrams(hook.slice(-120));
+  const tailHitCount = hookTailGrams
+    .filter((gram) => endingSection.includes(gram))
     .slice(0, 4)
     .length;
 
-  return hitCount >= 3;
+  return hitCount >= 5 && tailHitCount >= 2;
+}
+
+function ledgerCliffhangerMatchesActualEnding(cliffhanger: string, actualEnding: string) {
+  const normalizedCliffhanger = normalizeLedgerComparisonText(cliffhanger);
+  const normalizedEnding = normalizeLedgerComparisonText(actualEnding);
+
+  if (!normalizedCliffhanger || !normalizedEnding) {
+    return false;
+  }
+
+  if (
+    normalizedCliffhanger.includes(normalizedEnding) ||
+    normalizedEnding.includes(normalizedCliffhanger)
+  ) {
+    return true;
+  }
+
+  const endingFragments = [
+    normalizedEnding.slice(0, 18),
+    normalizedEnding.slice(-18)
+  ].filter((item) => item.length >= 8);
+
+  if (endingFragments.some((fragment) => normalizedCliffhanger.includes(fragment))) {
+    return true;
+  }
+
+  const hitCount = hookKeywordGrams(actualEnding)
+    .filter((gram) => cliffhanger.includes(gram))
+    .slice(0, 5)
+    .length;
+
+  return hitCount >= 4;
+}
+
+function concreteHookSignalCandidates(value: string) {
+  const text = compactStateText(value, 260).replace(/\s+/g, "");
+  const signals = new Set<string>();
+
+  const addSignal = (raw: string) => {
+    const parts = raw
+      .replace(/^[，。！？；:：、]+|[，。！？；:：、]+$/g, "")
+      .split(/(?:正要|刚要|借着|对着|看见|看着|盯着|盯住|摸到|摸着|拿起|打开|推开|递过|凑近|不是|也不是|和|与|以及)/)
+      .map((item) => item.replace(/^(?:一个|一处|一阵|一道|那|那个|这|这个|的)+/g, "").trim())
+      .filter((item) => item.length >= 3);
+
+    parts.forEach((part) => {
+      signals.add(part);
+
+      if (part.length >= 5) {
+        signals.add(part.slice(0, 4));
+        signals.add(part.slice(-4));
+      }
+    });
+  };
+
+  [
+    /(?:在|到|进|进入|回到|来到|蹲在|站在|坐在|停在|走到|靠近|贴近)([^，。！？；\n]{3,18})/g,
+    /(?:借着|对着|看见|看着|盯着|盯住|摸到|摸着|拿起|打开|推开|递过|凑近)([^，。！？；\n]{3,18})/g,
+    /(?:门外|身后|窗外|屋里|屋外|院里|院外|前方|后方|旁边|角落)[^，。！？；\n]{0,18}(?:传来|响起|出现|站着|多了|少了|变了|动了)[^，。！？；\n]{0,14}/g,
+    /(?:传来|响起|出现|多了|少了|变了|抖了|灭了|亮了)([^，。！？；\n]{3,14})/g
+  ].forEach((pattern) => {
+    for (const match of text.matchAll(pattern)) {
+      addSignal(match[1] ?? match[0]);
+    }
+  });
+
+  return Array.from(signals).filter((item) => item.length >= 3);
+}
+
+function concreteSceneHookAppearsToCarryHook(content: string, endingHook: string) {
+  const hook = compactStateText(endingHook, 260);
+
+  if (!hook) {
+    return true;
+  }
+
+  const endingSection = content.slice(-900).replace(/\s+/g, "");
+
+  if (endingSection.includes(hook.replace(/\s+/g, "").slice(0, 18))) {
+    return true;
+  }
+
+  const signalHits = concreteHookSignalCandidates(hook)
+    .filter((signal) => endingSection.includes(signal))
+    .slice(0, 4)
+    .length;
+
+  if (signalHits >= 2) {
+    return true;
+  }
+
+  const longGramHits = hookKeywordGrams(hook)
+    .filter((gram) => gram.length >= 4 && endingSection.includes(gram))
+    .slice(0, 6)
+    .length;
+
+  return signalHits >= 1 && longGramHits >= 3;
+}
+
+function isConcreteSceneHookText(value: string) {
+  const text = compactStateText(value, 260);
+
+  if (!text) {
+    return false;
+  }
+
+  const hasSceneAnchor =
+    /(?:在|到|进|进入|回到|来到|蹲在|站在|坐在|停在|走到|靠近|贴近)[^，。！？；\n]{2,24}/.test(text) ||
+    /(?:借着|对着|看见|看着|盯着|盯住|听见|听着|摸到|摸着|拿起|打开|推开|递过|凑近)[^，。！？；\n]{2,24}/.test(text);
+  const hasVisibleAction = /蹲|站|坐|走|跑|看|盯|听|闻|摸|拿|递|推|拉|凑近|打开|关上|抬头|低头|回头|传来|响起|出现|抖|灭|亮|停|拦|挡/.test(text);
+  const hasImmediatePressure = /不是|不对|异常|突然|猛地|正要|刚要|却|门外|身后|脚步|声音|来人|陌生|变了|多了|少了|不同|危险|出事/.test(text);
+
+  return (hasSceneAnchor && hasVisibleAction && hasImmediatePressure) || /正要[\s\S]{0,80}(传来|响起|出现|有人|脚步|声音)/.test(text);
+}
+
+function concreteSceneHookMissing(content: string, endingHook: string) {
+  return isConcreteSceneHookText(endingHook) && !concreteSceneHookAppearsToCarryHook(content, endingHook);
 }
 
 function draftEndingHasStagePressure(content: string) {
@@ -5725,6 +7004,10 @@ function buildEndingHookSuggestion(content: string, endingHook: string) {
 
   if (!original || !hook) {
     return "需手动处理：结尾缺少可承接的压力点。建议在现有结尾补一两句具体异常、追问、阻拦或新线索，不要整段照搬任务卡钩子。";
+  }
+
+  if (isConcreteSceneHookText(hook)) {
+    return `需手动处理：任务卡给的是具体场面钩子，当前结尾“${original}”还停在场面前置或泛压力上。建议压缩前置过渡、赶路、解释或铺垫，在本章后半段进入钩子所在的可见场面，写出关键观察、动作和外部打断；不要整段照搬任务卡文本。`;
   }
 
   return `需手动处理：当前结尾“${original}”没有明显承接任务卡钩子的功能。建议只补一个短促的可见压力点或新线索，把任务卡里未写完的钩子留给下一章继续推进，不要直接追加整段任务卡文本。`;
@@ -5830,11 +7113,20 @@ function shouldDropReviewIssueForCurrentDraft(
   draft: StoredChapterDraft,
   taskCard?: StoredWritingTaskCard
 ) {
-  if (/章末钩子/.test(issue.type) && draftEndingHasStagePressure(draft.content)) {
-    return true;
+  const endingHook = taskCard?.endingHook?.trim() ?? "";
+  const isHookIssue = /章末钩子/.test(issue.type);
+
+  if (/具体章末钩子/.test(issue.type)) {
+    return false;
   }
 
-  const endingHook = taskCard?.endingHook?.trim() ?? "";
+  if (isHookIssue && endingHook && concreteSceneHookMissing(draft.content, endingHook)) {
+    return false;
+  }
+
+  if (isHookIssue && draftEndingHasStagePressure(draft.content)) {
+    return true;
+  }
 
   if (!endingHook) {
     return false;
@@ -5846,7 +7138,7 @@ function shouldDropReviewIssueForCurrentDraft(
     .slice(0, 8)
     .length;
 
-  return /章末钩子/.test(issue.type) && /将|改为|补入|追加/.test(issue.suggestion) && hookHitCount >= 6;
+  return isHookIssue && /将|改为|补入|追加/.test(issue.suggestion) && hookHitCount >= 6;
 }
 
 function reviewQuotedTexts(value: string) {
@@ -5909,6 +7201,46 @@ function extractLinesByKeywords(content: string, keywords: string[], limit = 6) 
       keywords.some((keyword) => sentence.includes(keyword))
     ),
     limit
+  );
+}
+
+function extractMeaningfulEventLines(content: string, taskCard?: StoredWritingTaskCard) {
+  const sentences = splitDraftSentences(content);
+  const taskText = [
+    taskCard?.chapterGoal ?? "",
+    taskCard?.mainPlotProgress ?? "",
+    taskCard?.pleasurePoint ?? "",
+    taskCard?.endingHook ?? ""
+  ].join("\n");
+  const closureMode = taskCard ? hasStageClosureTaskSignal(taskCard) : false;
+  const eventKeywords = closureMode
+    ? [
+        "结束", "结案", "收束", "返回", "休整", "休息", "歇", "归档", "记录", "整理",
+        "奖励", "报酬", "领取", "拿到", "获得", "任命", "晋升", "委任", "授权", "认可",
+        "身份", "职位", "权限", "职责", "关系", "态度", "现实", "回响", "余波"
+      ]
+    : [
+        "决定", "确认", "发现", "获得", "拿到", "进入", "返回", "对质", "审问", "交代",
+        "承认", "拒绝", "阻止", "救下", "击败", "突破", "完成", "开始", "选择", "失去"
+      ];
+
+  const taskAnchors = taskText
+    .replace(/[^\p{Script=Han}A-Za-z0-9]/gu, " ")
+    .split(/\s+/)
+    .filter((item) => item.length >= 2 && item.length <= 8)
+    .slice(0, 20);
+  const candidates = sentences.filter((sentence) =>
+    eventKeywords.some((keyword) => sentence.includes(keyword)) ||
+    taskAnchors.some((anchor) => sentence.includes(anchor))
+  );
+
+  return cleanStateEntries(
+    candidates.filter((sentence) =>
+      !isSceneActionOrObservationText(sentence) ||
+      /获得|拿到|领取|任命|委任|授权|确认|承认|交代|决定|完成|返回|结束|收束|结案/.test(sentence)
+    ),
+    6,
+    110
   );
 }
 
@@ -6012,13 +7344,14 @@ function actualDraftEnding(content: string) {
 }
 
 function characterAppearsInDraft(content: string, name: string) {
-  const baseName = baseCharacterName(name);
+  const mentionCandidates = taskCardCharacterMentionCandidates(name);
+  const baseName = mentionCandidates[0] ?? baseCharacterName(name);
 
   if (!baseName) {
     return false;
   }
 
-  if (content.includes(baseName)) {
+  if (mentionCandidates.some((candidate) => content.includes(candidate))) {
     return true;
   }
 
@@ -6050,6 +7383,49 @@ function isValidTaskCardRequiredCharacter(name: string) {
         !/主角|人物|角色|对手|新人物|主要|陆续|周围|那些|这些|本章|任务|线索|证据|物证|凶器|符号|手印|掌纹|指纹|现场|剧情/.test(compact))
     )
   );
+}
+
+function taskActionSemantics(value: string) {
+  const groups: Array<{ task: RegExp; evidence: RegExp }> = [
+    {
+      task: /比对|对比|纹路|指纹|掌纹|手印|痕迹|吻合|一致|同源|同一/,
+      evidence: /比对|对比|并排|拓印|纹路|指纹|掌纹|手印|痕迹|吻合|一致|同源|同一|完全相同|对得上/
+    },
+    {
+      task: /确认|证明|锁定|落实|定责|定罪|认定|直接参与|参与/,
+      evidence: /确认|证明|锁定|认定|定责|定罪|承认|供认|交代|招供|供出|无话可说|人证物证|证据确凿|抵赖/
+    },
+    {
+      task: /指使|安排|命令|让.*处理|处理|销毁|烧掉|藏匿|转移|灭口|善后/,
+      evidence: /指使|安排|命令|吩咐|让[^。！？；\n]{0,24}(处理|烧|烧掉|毁|销毁|藏|藏匿|转移|带走|埋|丢|扔)|交给[^。！？；\n]{0,24}(处理|烧|烧掉|毁|销毁|藏|藏匿|转移|带走)|处理[^。！？；\n]{0,24}(证物|物证|凶器|痕迹|线索)|烧掉|烧毁|销毁|藏匿|转移|灭口|善后/
+    },
+    {
+      task: /回收|部分回收|承接|兑现|交代/,
+      evidence: /承认|供认|交代|招供|供出|说明|说出|吐口|松口|无话可说|露出破绽|被问住/
+    }
+  ];
+
+  return groups.filter((group) => group.task.test(value));
+}
+
+function taskSemanticEvidenceAppearsInDraft(value: string, content: string, hitCount: number, namedEntityCount: number) {
+  const semanticGroups = taskActionSemantics(value);
+
+  if (semanticGroups.length === 0) {
+    return false;
+  }
+
+  const evidenceHits = semanticGroups.filter((group) => group.evidence.test(content)).length;
+
+  if (evidenceHits === 0) {
+    return false;
+  }
+
+  if (namedEntityCount >= 1 && hitCount >= 1) {
+    return true;
+  }
+
+  return evidenceHits >= 2 && hitCount >= 2;
 }
 
 function taskEvidenceAppearsInDraft(value: string, content: string) {
@@ -6099,6 +7475,10 @@ function taskEvidenceAppearsInDraft(value: string, content: string) {
     .map((match) => baseCharacterName(match[0] ?? ""))
     .filter((name) => isValidTaskCardRequiredCharacter(name) && content.includes(name))
     .slice(0, 4);
+
+  if (taskSemanticEvidenceAppearsInDraft(value, content, hitCount, namedEntities.length)) {
+    return true;
+  }
 
   if (matchedAnchors.length >= 1 && namedEntities.length >= 1 && hitCount >= 2) {
     return true;
@@ -6150,6 +7530,10 @@ function isLowValueCarryOverTask(value: string) {
     return true;
   }
 
+  if (isCarryOverRuleText(text)) {
+    return true;
+  }
+
   const lowValuePatterns = [
     /心理适应|适应成本|身体反应|现实记忆回响|现实回响|恐惧|害怕|反胃|手抖|腿软|膝盖|伤痛|疼痛|疲惫|沉默|专注/,
     /收益来源|触发条件|符合关键机制|越级风险|无越级|压制来源|代价|小收益|爽点|情绪回报|读者/,
@@ -6161,15 +7545,74 @@ function isLowValueCarryOverTask(value: string) {
   return lowValuePatterns.some((pattern) => pattern.test(text));
 }
 
+function isCarryOverRuleText(value: string) {
+  const text = stripCarryOverPrefix(value);
+
+  return /阶段收束|封闭证据池|不引出新的调查链|不得新增|只能使用|不能展开调查链|不展开调查链|不再把伏笔升级|规则|硬规则|模式|优先合并既有|围绕既有证据|既有证据、人物供词和前文线索/.test(text);
+}
+
+function cleanCarryOverTasksForNextChapter(tasks: string[] | undefined, limit = 3, maxLength = 110) {
+  return cleanStateEntries(
+    (tasks ?? [])
+      .filter((task) => !isCarryOverRuleText(task))
+      .map(normalizeCarryOverTask)
+      .filter(Boolean),
+    limit,
+    maxLength
+  );
+}
+
+function sanitizeLedgerCarryOverTasks(ledger: StoredChapterLedger | null): StoredChapterLedger | null {
+  if (!ledger) {
+    return ledger;
+  }
+
+  return {
+    ...ledger,
+    carryOverTasks: cleanCarryOverTasksForNextChapter(ledger.carryOverTasks, 5, 140)
+  };
+}
+
+function sanitizeLedgerForCooldownContext(ledger: StoredChapterLedger | null): StoredChapterLedger | null {
+  if (!ledger) {
+    return null;
+  }
+
+  const keepAsContext = (value: string) => !isLowCommitmentAnomalyResidueText(value);
+
+  return {
+    ...ledger,
+    newClues: cleanStateEntries(ledger.newClues.filter(keepAsContext), 5, 120),
+    stateChanges: cleanStateEntries(ledger.stateChanges.filter(keepAsContext), 5, 120),
+    cliffhanger: isLowCommitmentAnomalyResidueText(ledger.cliffhanger)
+      ? "上一章仅留下现实/异常余波，本章只能作为心理扰动轻触，不得升级为查证任务。"
+      : ledger.cliffhanger,
+    carryOverTasks: cleanCarryOverTasksForNextChapter(ledger.carryOverTasks, 5, 140)
+  };
+}
+
+function cleanTaskCardForeshadowingTasksForStorage(tasks: string[] | undefined) {
+  return cleanStateEntries(
+    (tasks ?? []).filter((task) =>
+      !isCarryOverRuleText(task) &&
+      !isAftermathHookText(task) &&
+      !isLowCommitmentAnomalyResidueText(task) &&
+      !/不展开新调查链|不得新增|只能使用|封闭证据池|阶段冷却|冷却规则|阶段落点完成后/.test(task)
+    ),
+    8,
+    130
+  );
+}
+
 function normalizeCarryOverTask(value: string) {
   const text = compactStateText(stripCarryOverPrefix(value), 100);
 
-  if (isLowValueCarryOverTask(text)) {
+  if (isLowValueCarryOverTask(text) || isCarryOverRuleText(text)) {
     return "";
   }
 
-  const actionPattern = /查明|追问|验证|核实|确认|锁定|找到|取得|提取|比对|对质|审讯|审问|抓捕|传唤|回收|收束|结案|返回|揭示|处理|保护|交代|供出|指认|保存|带走|移交|公开审理/;
-  const cluePattern = /线索|证据|物证|证词|口供|嫌疑|同伙|管家|知县|凶器|尸体|现场|符号|案卷|账本|钥匙|布带|墙皮|脚印|指纹|掌纹|血迹|旧案/;
+  const actionPattern = /查明|追问|验证|核实|确认|锁定|找到|取得|提取|比对|对质|审讯|审问|抓捕|传唤|回收|结案|返回|揭示|处理|保护|交代|供出|指认|保存|带走|移交|公开审理/;
+  const cluePattern = /线索|证据|物证|证词|口供|嫌疑|同伙|凶器|尸体|现场|标记|图案|符号|案卷|记录|文件|档案|钥匙|残片|痕迹|脚印|手印|血迹|旧案|旧事|资料|名单|编号/;
 
   if (actionPattern.test(text)) {
     return text;
@@ -6306,7 +7749,129 @@ function buildCarryOverTasksFromDraft(
     addIfMissing("延续章节目标", taskCard.chapterGoal);
   }
 
-  return cleanStateEntries(uniqueList(carryOverTasks), 3, 110);
+  return cleanCarryOverTasksForNextChapter(uniqueList(carryOverTasks), 3, 110);
+}
+
+function ledgerTaskPhrase(value?: string, maxLength = 80) {
+  const text = compactStateText(value ?? "", maxLength);
+
+  if (!text) {
+    return "";
+  }
+
+  return text
+    .replace(/^(本章目标|主线推进|小收益|收益来源|触发条件|支线|主线)[：:]/, "")
+    .replace(/。.*$/, "")
+    .trim();
+}
+
+function firstDraftLineByPattern(content: string, pattern: RegExp, maxLength = 90) {
+  return compactStateText(
+    splitDraftSentences(content).find((sentence) => pattern.test(sentence)) ?? "",
+    maxLength
+  );
+}
+
+function buildStructuredLedgerEvents(
+  content: string,
+  taskCard?: StoredWritingTaskCard
+) {
+  const continuity = ledgerTaskPhrase(taskCard?.continuity, 90);
+  const goal = ledgerTaskPhrase(taskCard?.chapterGoal, 90);
+  const progress = ledgerTaskPhrase(taskCard?.mainPlotProgress, 90);
+  const payoff = ledgerTaskPhrase(taskCard?.pleasurePoint, 90);
+  const foundEvidence = firstDraftLineByPattern(
+    content,
+    /发现|找到|取得|拿到|获得|翻出|搜出|辨认|确认|比对|吻合|相似|一致/,
+    90
+  );
+  const conflict = firstDraftLineByPattern(
+    content,
+    /阻拦|阻止|质疑|否认|不承认|拦|抢|夺|持刀|追|打|撞|闯|踹|冲|攻击|威胁|拒绝|推开/,
+    90
+  );
+  const transitionDone = continuity && taskEvidenceAppearsInDraft(continuity, content)
+    ? `承接完成：${continuity}`
+    : "";
+  const goalDone = goal && taskEvidenceAppearsInDraft(goal, content)
+    ? `本章行动：${goal}`
+    : goal && foundEvidence
+      ? `本章行动推进到目标线索：${foundEvidence}`
+      : "";
+  const progressDone = progress && taskEvidenceAppearsInDraft(progress, content)
+    ? `主线推进：${progress}`
+    : foundEvidence
+      ? `主线推进：角色通过现场行动取得或确认关键线索，直接证据为“${foundEvidence}”。`
+      : "";
+  const payoffDone = payoff && taskEvidenceAppearsInDraft(payoff, content)
+    ? `本章收益：${payoff}`
+    : "";
+  const conflictEvent = conflict ? `章末压力：${conflict}` : "";
+
+  return cleanStateEntries([
+    transitionDone,
+    goalDone,
+    progressDone,
+    payoffDone,
+    conflictEvent
+  ], 5, 120);
+}
+
+function buildStructuredCliffhanger(content: string, taskCard?: StoredWritingTaskCard) {
+  const ending = actualDraftEnding(content);
+
+  if (!ending) {
+    return "";
+  }
+
+  if (isOpenEndedSceneEntranceText(ending) || /抢|夺|持刀|攻击|闯入|踹开|追来|拦住|撞开|扑向|冲向/.test(ending)) {
+    return compactStateText(`章末留下即时外部压力：${ending}`, 130);
+  }
+
+  return compactStateText(ending, 130);
+}
+
+function sanitizeLedgerAgainstActualDraftEnding(
+  ledger: StoredChapterLedger | null,
+  actualEnding: string
+): StoredChapterLedger | null {
+  if (!ledger || !actualEnding) {
+    return ledger;
+  }
+
+  const cliffhanger = ledger.cliffhanger.trim();
+
+  if (!cliffhanger) {
+    return {
+      ...ledger,
+      cliffhanger: compactStateText(`上一章实际正文结尾：${actualEnding}`, 130)
+    };
+  }
+
+  if (ledgerCliffhangerMatchesActualEnding(cliffhanger, actualEnding)) {
+    return ledger;
+  }
+
+  return {
+    ...ledger,
+    cliffhanger: compactStateText(`上一章实际正文结尾：${actualEnding}`, 130)
+  };
+}
+
+function ledgerHasOpenContinuationPressure(ledger?: StoredChapterLedger | null) {
+  if (!ledger) {
+    return false;
+  }
+
+  const text = [
+    ledger.cliffhanger,
+    ...(ledger.carryOverTasks ?? [])
+  ].join("\n");
+
+  return Boolean(
+    (ledger.carryOverTasks?.length ?? 0) > 0 ||
+    /章末|钩子|下一步|未解决|待|继续|承接|压力|外部|冲突|阻拦|抢夺|攻击|闯入|追来|持刀|夺走|带回|查明|确认|核实/.test(text)
+  );
 }
 
 function buildLedgerFromDraft(
@@ -6314,10 +7879,22 @@ function buildLedgerFromDraft(
   taskCard: StoredWritingTaskCard | undefined
 ) {
   const sentences = splitDraftSentences(draft.content);
-  const events = cleanStateEntries(sentences.slice(0, 6), 5);
+  const closureMode = taskCard ? hasStageClosureTaskSignal(taskCard) : false;
+  const keyEventLines = extractMeaningfulEventLines(draft.content, taskCard);
+  const structuredEventLines = buildStructuredLedgerEvents(draft.content, taskCard);
+  const events = cleanStateEntries(
+    structuredEventLines.length > 0
+      ? structuredEventLines
+      : keyEventLines.length > 0
+        ? keyEventLines
+      : closureMode
+        ? [taskCard?.chapterGoal ?? "", taskCard?.mainPlotProgress ?? "", taskCard?.pleasurePoint ?? ""]
+        : sentences.slice(0, 6),
+    5
+  );
   const resourceLines = extractLinesByKeywords(
     draft.content,
-    ["获得", "拿到", "奖励", "资源", "丹药", "灵石", "功法", "合同", "股份", "名额", "钥匙"],
+    ["获得", "拿到", "得到", "领取", "奖励", "报酬", "赏赐", "奖金", "分成", "薪水", "俸禄", "津贴", "资源", "道具", "装备", "文书", "任命", "委任", "授权", "令牌", "徽章", "证件", "合同", "股份", "名额", "钥匙", "丹药", "灵石", "功法"],
     4
   );
   const powerLines = extractLinesByKeywords(
@@ -6327,32 +7904,60 @@ function buildLedgerFromDraft(
   );
   const mapLines = extractLinesByKeywords(
     draft.content,
-    ["城", "镇", "宗门", "家族", "公司", "黑市", "码头", "学院", "势力", "地图"],
+    ["辖区", "管辖", "职责范围", "负责区域", "领地", "岗位", "部门", "办公室", "据点", "住处", "住所", "基地", "城", "镇", "街", "坊", "宗门", "家族", "公司", "黑市", "码头", "学院", "势力", "地图"],
     4
   );
   const clueLines = extractLinesByKeywords(
     draft.content,
-    ["线索", "账本", "令牌", "名单", "暗纹", "真相", "伏笔", "秘密", "父亲", "幕后", "规则", "地图", "势力", "符号", "伤口", "血迹", "尸体", "凶器"],
+    ["线索", "记录", "文件", "档案", "令牌", "名单", "暗纹", "真相", "伏笔", "秘密", "幕后", "规则", "地图", "势力", "符号", "标记", "图案", "伤口", "血迹", "尸体", "凶器"],
     8
   );
   const endingSentence = actualDraftEnding(draft.content) || taskCard?.endingHook || "新的高层冲突出现";
+  const rawCliffhanger = buildStructuredCliffhanger(draft.content, taskCard) || endingSentence;
+  const safeEndingSentence = closureMode && isOpenEndedSceneEntranceText(endingSentence)
+    ? compactStateText(taskCard?.endingHook || "阶段结果已经落定，只保留轻量余波，不展开新行动。", 110)
+    : rawCliffhanger;
   const appearedRequiredCharacters = (taskCard?.requiredCharacters ?? [])
     .map((item) => item.trim())
     .filter((item) => !item.includes("主角") && isValidAutoCharacterName(item) && characterAppearsInDraft(draft.content, item));
   const appearedActionCharacters = extractCharacterNamesFromActionEvidence(draft.content);
 
+  const promotionLines = extractLinesByKeywords(
+    draft.content,
+    ["升任", "晋升", "任命", "委任", "授权", "文书", "令牌", "徽章", "证件", "职位", "身份", "称呼", "权限", "职责", "管辖", "负责", "领取", "奖励", "报酬", "赏赐", "奖金", "薪水", "俸禄"],
+    6
+  );
+  const aftermathLines = extractLinesByKeywords(
+    draft.content,
+    ["已经结束", "已经结了", "暂告一段落", "不能再翻", "暂不处理", "以后再说", "用饭", "吃饭", "住处", "住所", "报酬", "第一笔钱", "现实回响", "情绪余波", "水渍", "倒影", "影子", "梦醒", "醒来"],
+    6
+  );
+  const payoffSource = cleanStateEntries([
+    ...resourceLines,
+    ...promotionLines
+  ], 4, 120)[0];
+  const stateChangeLines = cleanStateEntries([
+    ...promotionLines,
+    ...resourceLines,
+    ...mapLines,
+    ...aftermathLines,
+    safeEndingSentence
+  ], 8);
+
   return {
     events,
     newCharacters: uniqueList([...appearedRequiredCharacters, ...appearedActionCharacters]).slice(0, 8),
-    newClues: cleanStateEntries(clueLines, 8),
-    payoff: compactStateText(resourceLines[0] || clueLines.at(-1) || endingSentence || "完成一次情绪回报"),
-    cliffhanger: compactStateText(endingSentence, 110),
-    stateChanges: cleanStateEntries([
-      ...resourceLines,
-      ...powerLines,
-      ...mapLines,
-      endingSentence
-    ], 8),
+    newClues: cleanLedgerEntries(
+      closureMode
+        ? clueLines.filter((line) => !isOpenEndedSceneEntranceText(line) && !isInvestigationExpansionSentence(line))
+        : clueLines,
+      8,
+      110,
+      events
+    ),
+    payoff: compactStateText(payoffSource || (closureMode ? taskCard?.pleasurePoint : clueLines.at(-1)) || safeEndingSentence || "完成一次情绪回报"),
+    cliffhanger: compactStateText(safeEndingSentence, 110),
+    stateChanges: cleanStateEntries([...stateChangeLines, ...powerLines], 8),
     carryOverTasks: buildCarryOverTasksFromDraft(draft, taskCard)
   };
 }
@@ -6566,12 +8171,7 @@ function createLedgerRecord(
   const newClues = cleanLedgerEntries(extracted.newClues, 10);
   const payoff = compactStateText(extracted.payoff, 110);
   const cliffhanger = compactStateText(extracted.cliffhanger, 130);
-  const carryOverTasks = cleanLedgerEntries(extracted.carryOverTasks ?? [], 6, 130, [
-    ...events,
-    ...newClues,
-    payoff,
-    cliffhanger
-  ]);
+  const carryOverTasks = cleanCarryOverTasksForNextChapter(extracted.carryOverTasks, 6, 130);
 
   return {
     id: randomUUID(),
@@ -6721,34 +8321,41 @@ function applyLedgerToWritingState(
   const revealKeywords = ["回收", "揭开", "真相", "曝光", "确认", "水落石出"];
 
   if (plotState) {
-    const cleanClues = cleanStateEntries(ledger.newClues, 8);
-    const cleanChanges = cleanStateEntries(ledger.stateChanges, 8);
+    const cleanClues = cleanStateEntries(
+      ledger.newClues.filter((item) => !isLowCommitmentAnomalyResidueText(item)),
+      8
+    );
+    const cleanChanges = cleanStateEntries(
+      ledger.stateChanges.filter((item) => !isLowCommitmentAnomalyResidueText(item)),
+      8
+    );
+    const queueClues = cleanPlotQueueEntries(cleanClues, 4, 110);
+    const queueChanges = cleanPlotQueueEntries(cleanChanges, 4, 110);
     const relationshipChanges = cleanStateEntries(extracted?.relationshipChanges ?? [], 10);
     const mapAndForceUpdates = cleanMapAndForceEntries(extracted?.mapAndForceUpdates ?? [], 10);
     const powerSystemUpdates = cleanStateEntries(extracted?.powerSystemUpdates ?? [], 10);
     const resourceUpdates = cleanStateEntries(extracted?.resourceUpdates ?? [], 10);
-    const cleanHook = compactStateText(ledger.cliffhanger, 110);
-    const carryOverTasks = cleanStateEntries(
-      (ledger.carryOverTasks ?? []).map(normalizeCarryOverTask).filter(Boolean),
-      3,
-      110
-    );
-    const stageChange = cleanChanges[0];
+    const cleanHook = isLowCommitmentAnomalyResidueText(ledger.cliffhanger)
+      ? ""
+      : compactStateText(ledger.cliffhanger, 110);
+    const carryOverTasks = cleanCarryOverTasksForNextChapter(ledger.carryOverTasks, 3, 110);
+    const queueHook = isPlotQueueTaskText(cleanHook) ? cleanHook : "";
+    const stageChange = queueChanges[0];
 
     plotState.currentStage = stageChange || plotState.currentStage;
     plotState.shortTermGoal = carryOverTasks[0]
       ? `承接第 ${ledger.chapterNumber} 章未完成任务：${carryOverTasks[0]}`
-      : cleanHook ? `承接第 ${ledger.chapterNumber} 章钩子：${cleanHook}` : plotState.shortTermGoal;
+      : queueHook ? `承接第 ${ledger.chapterNumber} 章钩子：${queueHook}` : plotState.shortTermGoal;
     plotState.unresolvedQuestions = uniqueList([
       ...carryOverTasks,
-      ...cleanClues,
-      cleanHook,
+      ...queueClues,
+      queueHook,
       ...plotState.unresolvedQuestions
     ]).slice(0, 20);
     plotState.openThreads = uniqueList([
       ...carryOverTasks,
-      ...cleanClues,
-      cleanHook,
+      ...queueClues,
+      queueHook,
       ...(plotState.openThreads ?? [])
     ]).slice(0, 30);
     const resolved = cleanChanges.filter((item) =>
@@ -6766,11 +8373,11 @@ function applyLedgerToWritingState(
     );
     plotState.nextMilestones = uniqueList([
       ...carryOverTasks.map((task) => `继续处理第 ${ledger.chapterNumber} 章未完成任务：${task}`),
-      cleanHook ? `处理第 ${ledger.chapterNumber} 章钩子：${cleanHook}` : "",
-      ...cleanChanges.slice(0, 3),
+      queueHook ? `处理第 ${ledger.chapterNumber} 章钩子：${queueHook}` : "",
+      ...queueChanges.slice(0, 3),
       ...plotState.nextMilestones
     ]).slice(0, 12);
-    plotState.nextStageGoal = carryOverTasks[0] || cleanHook || plotState.nextStageGoal;
+    plotState.nextStageGoal = carryOverTasks[0] || queueHook || plotState.nextStageGoal;
     plotState.powerSystemState = appendStateText(
       plotState.powerSystemState,
       cleanPowerSystemEntries([
@@ -6870,7 +8477,12 @@ function applyLedgerToWritingState(
       (item) => item.projectId === projectId && (item.name === name || cleanClue.includes(item.name))
     );
 
-    if (exists || isNoisyStateText(cleanClue) || !isValidForeshadowingName(name)) {
+    if (
+      exists ||
+      isNoisyStateText(cleanClue) ||
+      isResolvedEvidenceText(cleanClue) ||
+      !isValidForeshadowingName(name)
+    ) {
       return;
     }
 
@@ -6987,12 +8599,14 @@ function rollbackPlotStateAfterChapterDelete(
 
   if (latestLedger) {
     const hook = compactStateText(latestLedger.cliffhanger, 110);
-    plotState.shortTermGoal = hook ? `承接第 ${latestLedger.chapterNumber} 章钩子：${hook}` : plotState.shortTermGoal;
-    plotState.currentStage = latestLedger.stateChanges[0] || latestLedger.events.at(-1) || plotState.currentStage;
-    plotState.nextStageGoal = hook || plotState.nextStageGoal;
+    const queueHook = isPlotQueueTaskText(hook) ? hook : "";
+    const queueChanges = cleanPlotQueueEntries(latestLedger.stateChanges, 3, 110);
+    plotState.shortTermGoal = queueHook ? `承接第 ${latestLedger.chapterNumber} 章钩子：${queueHook}` : plotState.shortTermGoal;
+    plotState.currentStage = queueChanges[0] || plotState.currentStage;
+    plotState.nextStageGoal = queueHook || plotState.nextStageGoal;
     plotState.nextMilestones = uniqueList([
-      hook ? `处理第 ${latestLedger.chapterNumber} 章钩子：${hook}` : "",
-      ...latestLedger.stateChanges.slice(0, 3),
+      queueHook ? `处理第 ${latestLedger.chapterNumber} 章钩子：${queueHook}` : "",
+      ...queueChanges,
       ...plotState.nextMilestones
     ]).slice(0, 8);
   } else {
@@ -11438,9 +13052,17 @@ export async function cleanupProjectWritingState(projectId: string) {
     ...keptForeshadowings
   ];
 
-  const ledgerClues = cleanStateEntries(ledgers.flatMap((ledger) => ledger.newClues), 10);
-  const ledgerChanges = cleanStateEntries(ledgers.flatMap((ledger) => ledger.stateChanges), 10);
-  const latestHook = latestLedger ? compactStateText(latestLedger.cliffhanger, 100) : "";
+  const ledgerClues = cleanStateEntries(
+    ledgers.flatMap((ledger) => ledger.newClues).filter((item) => !isLowCommitmentAnomalyResidueText(item)),
+    10
+  );
+  const ledgerChanges = cleanStateEntries(
+    ledgers.flatMap((ledger) => ledger.stateChanges).filter((item) => !isLowCommitmentAnomalyResidueText(item)),
+    10
+  );
+  const latestHook = latestLedger && !isLowCommitmentAnomalyResidueText(latestLedger.cliffhanger)
+    ? compactStateText(latestLedger.cliffhanger, 100)
+    : "";
   const descriptionGoal = compactStateText(plotState.mainGoal, 120);
   const nextStageAnchor = compactStateText(plotState.nextStageGoal || descriptionGoal, 120);
 
@@ -11810,24 +13432,50 @@ export async function generateWritingTaskCard(
       ? Math.floor(Number(input?.chapterNumber))
       : nextChapterNumber;
   const recentChapterTitles = getRecentChapterTitles(store, projectId, targetChapterNumber);
+  const recentLedgersBeforeTarget = getRecentChapterLedgersBefore(store, projectId, targetChapterNumber, 4);
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, targetChapterNumber);
   const lastDraft = getLatestChapterDraftBefore(store, projectId, targetChapterNumber);
   const lastDraftActualEnding = lastDraft ? actualDraftEnding(lastDraft.content) : "";
-  const carryOverTasks = cleanStateEntries(
-    (lastLedger?.carryOverTasks ?? []).map(normalizeCarryOverTask).filter(Boolean),
-    3,
-    110
-  );
+  const actualEndingCleanLastLedger = sanitizeLedgerAgainstActualDraftEnding(lastLedger, lastDraftActualEnding);
+  const carryOverCleanLastLedger = sanitizeLedgerCarryOverTasks(actualEndingCleanLastLedger);
+  const carryOverTasks = cleanCarryOverTasksForNextChapter(carryOverCleanLastLedger?.carryOverTasks, 3, 110);
   const carryOverText = carryOverTasks.length > 0
     ? `优先承接上一章未完成任务：${carryOverTasks.join("；")}。`
     : "";
   const stageClosureGuard = getStageClosureGuard(longFormPlan, targetChapterNumber);
+  const userRequestedCooldown = userInputRequestsPostClosureCooldown(input ?? undefined);
+  const postClosureCooldownGuard = getPostClosureCooldownGuard(
+    carryOverCleanLastLedger,
+    targetChapterNumber,
+    stageClosureGuard,
+    userRequestedCooldown
+      ? {
+          force: true,
+          reason: "用户明确要求阶段结束后休整、奖励、身份小收益、现实回响和轻钩子，本章必须按冷却章处理。"
+        }
+      : undefined
+  );
+  const cleanLastLedger = postClosureCooldownGuard.active
+    ? sanitizeLedgerForCooldownContext(carryOverCleanLastLedger)
+    : carryOverCleanLastLedger;
+  const layerReturnGuard = getLayerReturnGuard({
+    project,
+    bible,
+    longFormPlan,
+    recentLedgers: recentLedgersBeforeTarget
+  });
   const stageClosureRules = stageClosureGuard.rules;
+  const phaseTransitionRules = uniqueList([
+    ...(postClosureCooldownGuard.active ? postClosureCooldownGuard.rules : []),
+    ...(layerReturnGuard.active ? layerReturnGuard.rules : [])
+  ]);
   const protagonistEmbodimentRules = uniqueList([
     "主角适应成本按阶段轮换出现即可，不要每章打卡；只有本章遇到尸体、梦境异常、强压制、现实身份触发或阶段收束时，才安排一处短促反应。",
     "女强可以害怕或不适，但不要连续章节重复同一种表现；平稳查证章节可以用专注、疲惫、沉默或行动选择体现压力。",
     "时间与体力必须连续：连续查案、战斗、赶路、审讯或夜探后，要安排可见代价或恢复窗口，例如吃饭、喝水、换药、短睡、轮值、等待天亮、暂回住处、现实醒来缓冲；不能让主角无休止跨场景奔走。",
     "转场必须有时间成本和行动理由：一章内最多保留 2-3 个有效地点，赶路、等待、天色变化和休整可以压缩，但不能完全消失。",
+    "行动闭环要求：本章不能只靠换地点和发现新线索来推进；必须至少完成一个小闭环，即提出一个具体问题，现场验证或遭遇阻力，并得到阶段结论、排除项、锁定范围、人物反应或状态变化。",
+    "连续查证章节要轮换节奏：上一章已经发现新线索时，本章优先验证、对质、排除或复盘；只有得到阶段结论后，章末才可以抛出下一步压力。",
     /穿越|快穿|入梦|梦境|重生|异世/.test(`${project.description}\n${bible.worldRules}\n${bible.immutableSettings}`)
       ? "涉及梦境/穿越/异世时，必须区分主观经历时间、异世界时间与现实时间；可以中途醒来再入梦，但必须承接同一案件或同一任务进度，不得擅自跳成新世界或重置关系。"
       : ""
@@ -11838,7 +13486,7 @@ export async function generateWritingTaskCard(
     plotState,
     contextForeshadowings,
     targetChapterNumber,
-    lastLedger
+    cleanLastLedger
   );
   const openForeshadowings = contextForeshadowings
     .filter((item) => item.status !== "closed")
@@ -11883,40 +13531,58 @@ export async function generateWritingTaskCard(
   const fallbackCard = {
     title: fallbackTitle,
     chapterGoal: withCharacterTaskRequirement(
-      input?.chapterGoal?.trim() ||
-        carryOverText ||
-        (relatedInspirationText ? `参考相关灵感：${relatedInspirationText}。` : "") ||
-        `${project.description.trim() ? `参考作品简介的开局方向：${project.description.trim()}。` : ""}围绕“${plotStateContext.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，让主角获得可见收益或新线索。`,
+      layerReturnGuard.active
+        ? input?.chapterGoal?.trim() || "结束连续原本生活层回响，把主角带回核心行动层或下一阶段主任务；现实压力只作开头代价和转向触发。"
+        : postClosureCooldownGuard.active
+        ? input?.chapterGoal?.trim() || "写结案后的余波：奖励、休整、身份变化或关系松动，只在章末留一处轻钩子。"
+        : input?.chapterGoal?.trim() ||
+          carryOverText ||
+          (relatedInspirationText ? `参考相关灵感：${relatedInspirationText}。` : "") ||
+          `${project.description.trim() ? `参考作品简介的开局方向：${project.description.trim()}。` : ""}围绕“${plotStateContext.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，让主角获得可见收益或新线索。`,
       chapterCharacterConstraints
     ),
     continuity: withCharacterTaskRequirement(
-      input?.continuity?.trim() ||
-        (lastDraftActualEnding
-          ? `承接第 ${lastDraft?.chapterNumber} 章实际正文结尾：${compactStateText(lastDraftActualEnding, 140)}`
-          : lastLedger
-          ? `承接上一章台账钩子：${lastLedger.cliffhanger}`
-          : targetChapterNumber === 1
-            ? project.description.trim()
-              ? `开启第一章：参考作品简介的开局设定：${project.description.trim()}`
-              : `开启第一章：建立主角初始处境与第一轮压力`
-          : project.description.trim()
-            ? `参考作品简介的开局设定：${project.description.trim()}`
-            : `承接当前阶段：${plotStateContext.currentStage}`),
+      layerReturnGuard.active
+        ? input?.continuity?.trim() || "承接连续现实/原本生活层余波，但不再继续自检同一异常；用少量篇幅处理压力后，明确转回核心行动层。"
+        : postClosureCooldownGuard.active
+        ? input?.continuity?.trim() || "承接上一章结果已定后的疲惫、认可和短暂松弛。"
+        : input?.continuity?.trim() ||
+          (lastDraftActualEnding
+            ? `承接第 ${lastDraft?.chapterNumber} 章实际正文结尾：${compactStateText(lastDraftActualEnding, 140)}`
+            : cleanLastLedger
+            ? `承接上一章台账钩子：${cleanLastLedger.cliffhanger}`
+            : targetChapterNumber === 1
+              ? project.description.trim()
+                ? `开启第一章：参考作品简介的开局设定：${project.description.trim()}`
+                : `开启第一章：建立主角初始处境与第一轮压力`
+            : project.description.trim()
+              ? `参考作品简介的开局设定：${project.description.trim()}`
+              : `承接当前阶段：${plotStateContext.currentStage}`),
       chapterCharacterConstraints
     ),
     mainPlotProgress: withCharacterTaskRequirement(
-      input?.mainPlotProgress?.trim() ||
-        carryOverText ||
-        (relatedInspirationText ? `把相关灵感转成当前主线里的具体推进：${relatedInspirationText}` : "") ||
-        `${project.description.trim() ? "避免明显偏离作品简介里的主角身份、初始危机和核心卖点。" : ""}按“${storyAnalysis?.mainLoop || plotStateContext.currentStage}”继续推进到下一个冲突点。`,
+      layerReturnGuard.active
+        ? input?.mainPlotProgress?.trim() || "恢复核心承诺推进：让主角回到主要行动场、进入下一阶段任务，或做出会影响核心主线的选择。"
+        : postClosureCooldownGuard.active
+        ? input?.mainPlotProgress?.trim() || "让上一阶段的结果转化为人物状态变化、身份小收益或现实回响，下一阶段只作轻钩子。"
+        : input?.mainPlotProgress?.trim() ||
+          carryOverText ||
+          (relatedInspirationText ? `把相关灵感转成当前主线里的具体推进：${relatedInspirationText}` : "") ||
+          `${project.description.trim() ? "避免明显偏离作品简介里的主角身份、初始危机和核心卖点。" : ""}按“${storyAnalysis?.mainLoop || plotStateContext.currentStage}”继续推进到下一个冲突点。`,
       chapterCharacterConstraints
     ),
     requiredCharacters: relevantCharacters.length > 0 ? relevantCharacters : ["主角", "主要对手"],
     pleasurePoint:
       input?.pleasurePoint?.trim() ||
-      `使用“${storyAnalysis?.topPleasureTypes[0] || bible.corePleasure}”制造一次明确情绪回报，并写清收益来源、触发条件、是否符合关键机制；本章也可以只是小收益、线索或机制试错，不必强行大突破。`,
+      (layerReturnGuard.active
+        ? "回归爽点：现实/原本生活层压力转化为下一次行动的准备、代价或决心；本章必须出现核心行动层的新压力或新选择。"
+        : postClosureCooldownGuard.active
+        ? "小收益：主角获得奖励、认可或称呼/权限上的小变化；来源：上一阶段收束；触发：上级或同伴的态度变化；越级风险：无。"
+        : `使用“${storyAnalysis?.topPleasureTypes[0] || bible.corePleasure}”制造一次明确情绪回报，并写清收益来源、触发条件、是否符合关键机制；本章也可以只是小收益、线索或机制试错，不必强行大突破。`),
     foreshadowingTasks:
-      openForeshadowings.length > 0
+      postClosureCooldownGuard.active || layerReturnGuard.active
+        ? []
+        : openForeshadowings.length > 0
         ? uniqueList([
             ...carryOverTasks.map((task) => `承接上一章未完成：${task}`),
             ...openForeshadowings.map((item) => `${item.name}：保持${item.status === "partial" ? "部分回收" : "未回收"}状态`)
@@ -11946,15 +13612,20 @@ export async function generateWritingTaskCard(
       longFormPlan
         ? `长篇规划约束：目标约 ${longFormPlan.targetTotalWords} 字 / 预计约 ${longFormPlan.estimatedChapters} 章。本章必须符合当前阶段、成长节奏和收益频率；如冲突，优先降级为小收益、线索、资格或机制试错。`
         : "尚未生成长篇规划；本章默认保守推进，不要连续大升级、大地图跳转或让支线替代主线。",
-      ...stageClosureRules,
+      ...(postClosureCooldownGuard.active ? postClosureCooldownGuard.rules : stageClosureRules),
+      ...(layerReturnGuard.active ? layerReturnGuard.rules : []),
       ...(longFormPlan?.progressionRules ?? []),
       ...protagonistEmbodimentRules,
       "章节功能可以轮换：允许日常经营、关系铺垫、机制试错、小收益和低强度压力，不要每章都强行新敌人、新地图、大战斗或大突破。"
     ]),
     endingHook: withCharacterTaskRequirement(
-      input?.endingHook?.trim() ||
-        (carryOverTasks.length > 0 ? `章末处理或升级上一章未完成任务：${carryOverTasks[0]}` : "") ||
-        `章末抛出一个新信息，让当前阶段的“${plotStateContext.currentEnemy || "压力源"}”升级。`,
+      layerReturnGuard.active
+        ? input?.endingHook?.trim() || "章末落在核心行动层的新压力、下一阶段行动或明确选择上，不继续停留在原本生活层自检。"
+        : postClosureCooldownGuard.active
+        ? input?.endingHook?.trim() || "只留下轻量过渡钩子，不开启新调查链。"
+        : input?.endingHook?.trim() ||
+          (carryOverTasks.length > 0 ? `章末处理或升级上一章未完成任务：${carryOverTasks[0]}` : "") ||
+          `章末抛出一个新信息，让当前阶段的“${plotStateContext.currentEnemy || "压力源"}”升级。`,
       chapterCharacterConstraints
     )
   };
@@ -11969,7 +13640,8 @@ export async function generateWritingTaskCard(
         bible,
         plotState: plotStateContext,
         longFormPlan,
-        lastLedger,
+        phaseTransitionRules,
+        lastLedger: cleanLastLedger,
         latestDraft: lastDraft,
         latestDraftActualEnding: lastDraftActualEnding ? compactStateText(lastDraftActualEnding, 220) : "",
         characters: allCharacters,
@@ -12046,13 +13718,19 @@ export async function generateWritingTaskCard(
         ...fallbackCard,
         title: normalizeChapterTitleForStorage(fallbackCard.title, "未命名章节")
       };
-  const resolvedCard = applyStageClosureGuardToTaskCard(rawResolvedCard, stageClosureGuard, carryOverTasks);
+  const resolvedCard = postClosureCooldownGuard.active
+    ? applyPostClosureCooldownToTaskCard(rawResolvedCard, postClosureCooldownGuard, carryOverTasks, input)
+    : applyStageClosureGuardToTaskCard(rawResolvedCard, stageClosureGuard, carryOverTasks);
+  const cooledCard = postClosureCooldownGuard.active
+    ? resolvedCard
+    : applyPostClosureCooldownToTaskCard(resolvedCard, postClosureCooldownGuard, carryOverTasks, input);
+  cooledCard.foreshadowingTasks = cleanTaskCardForeshadowingTasksForStorage(cooledCard.foreshadowingTasks);
 
   const card: StoredWritingTaskCard = {
     id: randomUUID(),
     projectId,
     chapterNumber: targetChapterNumber,
-    ...resolvedCard,
+    ...cooledCard,
     status: "draft",
     createdAt: timestamp,
     updatedAt: timestamp
@@ -12166,13 +13844,17 @@ export async function updateWritingTaskCard(
     (item) => !(item.projectId === projectId && relatedDraftIds.has(item.draftId))
   );
 
-  taskCard.title = normalizeChapterTitleForStorage(input.title, taskCard.title);
+  taskCard.title = chooseChapterTitleForStorage({
+    title: normalizeChapterTitleForStorage(input.title, taskCard.title),
+    fallbackTitle: taskCard.title,
+    recentTitles: getRecentChapterTitles(store, projectId, taskCard.chapterNumber)
+  });
   taskCard.chapterGoal = compactStateText(input.chapterGoal ?? taskCard.chapterGoal, 300);
   taskCard.continuity = compactStateText(input.continuity ?? taskCard.continuity, 300);
   taskCard.mainPlotProgress = compactStateText(input.mainPlotProgress ?? taskCard.mainPlotProgress, 300);
   taskCard.requiredCharacters = cleanStateEntries(input.requiredCharacters ?? taskCard.requiredCharacters, 8, 40);
   taskCard.pleasurePoint = compactStateText(input.pleasurePoint ?? taskCard.pleasurePoint, 300);
-  taskCard.foreshadowingTasks = cleanStateEntries(input.foreshadowingTasks ?? taskCard.foreshadowingTasks, 8, 130);
+  taskCard.foreshadowingTasks = cleanTaskCardForeshadowingTasksForStorage(input.foreshadowingTasks ?? taskCard.foreshadowingTasks);
   taskCard.rulesNotToBreak = cleanStateEntries(input.rulesNotToBreak ?? taskCard.rulesNotToBreak, 12, 130);
   taskCard.endingHook = compactStateText(input.endingHook ?? taskCard.endingHook, 260);
   taskCard.updatedAt = now();
@@ -12348,7 +14030,13 @@ export async function generateChapterDraft(
     title: aiDraft.title,
     titleAlternatives: aiDraft.titleAlternatives,
     fallbackTitle: taskCard.title,
-    recentTitles: recentChapterTitles
+    recentTitles: recentChapterTitles,
+    titleContext: [
+      taskCard.chapterGoal,
+      taskCard.mainPlotProgress,
+      taskCard.endingHook,
+      aiDraft.title
+    ]
   });
   const draftContext: ChapterDraftContext = {
     taskCard,
@@ -12672,6 +14360,12 @@ export async function regenerateChapterDraftContent(
   draft.updatedAt = timestamp;
   project.status = "writing";
   project.updatedAt = timestamp;
+  const stateUpdate = await createAndApplyLedgerForDraft(store, {
+    projectId,
+    draft,
+    taskCard,
+    useAi: true
+  });
   finishAiJob(job, withAiBillingOutput(store, job, {
     usedAi: true,
     usedFallback: false,
@@ -12682,14 +14376,18 @@ export async function regenerateChapterDraftContent(
     regenerateOnlyContent: true,
     deletedLedgerCount: invalidatedState.deletedLedgerCount,
     deletedReviewCount: invalidatedState.deletedReviewCount,
-    stateUpdated: false
-  }, combineAiTokenUsages([getAiTokenUsage(aiDraft), polishUsage])));
+    ledgerId: stateUpdate.ledger.id,
+    stateUpdated: true,
+    stateUpdateUsedAi: stateUpdate.usedAi,
+    stateUpdateError: stateUpdate.error
+  }, combineAiTokenUsages([getAiTokenUsage(aiDraft), polishUsage, stateUpdate.tokenUsage])));
   await writeStore(store);
 
   return {
     draft,
     deletedLedgerCount: invalidatedState.deletedLedgerCount,
-    deletedReviewCount: invalidatedState.deletedReviewCount
+    deletedReviewCount: invalidatedState.deletedReviewCount,
+    ledger: stateUpdate.ledger
   };
 }
 
@@ -13008,7 +14706,17 @@ export async function saveStreamedChapterDraft(input: {
     projectId: input.projectId,
     taskCardId: taskCard.id,
     chapterNumber: taskCard.chapterNumber,
-    title: taskCard.title,
+    title: chooseChapterTitleForStorage({
+      title: taskCard.title,
+      fallbackTitle: taskCard.title,
+      recentTitles: getRecentChapterTitles(store, input.projectId, taskCard.chapterNumber),
+      titleContext: [
+        taskCard.chapterGoal,
+        taskCard.mainPlotProgress,
+        taskCard.endingHook,
+        content.slice(-600)
+      ]
+    }),
     content,
     status: "draft",
     createdAt: timestamp,
@@ -13018,11 +14726,12 @@ export async function saveStreamedChapterDraft(input: {
   store.chapterDrafts.push(draft);
   project.status = "writing";
   project.updatedAt = timestamp;
+  const useAiStateUpdate = hasConfiguredAiSettings(store, currentUser.id);
   const stateUpdate = await createAndApplyLedgerForDraft(store, {
     projectId: input.projectId,
     draft,
     taskCard,
-    useAi: false
+    useAi: useAiStateUpdate
   });
   const finalTokenUsage = combineAiTokenUsages([tokenUsage, stateUpdate.tokenUsage]);
   finishAiJob(job, withAiBillingOutput(store, job, {
@@ -13251,6 +14960,14 @@ export async function saveStreamedRegeneratedChapterDraftContent(input: {
   draft.updatedAt = timestamp;
   project.status = "writing";
   project.updatedAt = timestamp;
+  const useAiStateUpdate = hasConfiguredAiSettings(store, currentUser.id);
+  const stateUpdate = await createAndApplyLedgerForDraft(store, {
+    projectId: input.projectId,
+    draft,
+    taskCard,
+    useAi: useAiStateUpdate
+  });
+  const finalTokenUsage = combineAiTokenUsages([tokenUsage, stateUpdate.tokenUsage]);
   finishAiJob(job, withAiBillingOutput(store, job, {
     usedAi: input.usedAi,
     usedFallback: false,
@@ -13262,8 +14979,11 @@ export async function saveStreamedRegeneratedChapterDraftContent(input: {
     actualCharacters,
     deletedLedgerCount: invalidatedState.deletedLedgerCount,
     deletedReviewCount: invalidatedState.deletedReviewCount,
-    stateUpdated: false
-  }, tokenUsage));
+    ledgerId: stateUpdate.ledger.id,
+    stateUpdated: true,
+    stateUpdateUsedAi: stateUpdate.usedAi,
+    stateUpdateError: stateUpdate.error
+  }, finalTokenUsage));
   await writeStore(store);
   return draft;
 }
@@ -13490,8 +15210,77 @@ export async function reviewChapterDraft(
   }
   const timestamp = now();
   const issues: ReviewIssue[] = [];
+  if (taskCard && concreteSceneHookMissing(draft.content, taskCard.endingHook)) {
+    issues.push({
+      type: "具体章末钩子未兑现",
+      location: endingDraftExcerpt(draft.content) || "结尾段",
+      severity: "medium",
+      problem: "任务卡给的是具体可见的章末场面，但正文结尾只留下泛压力、前置对话或场面入口，没有真正进入该场面并写出关键观察、动作和外部打断。",
+      suggestion: buildEndingHookSuggestion(draft.content, taskCard.endingHook)
+    });
+  }
+
+  const dislocationIssue = taskCard ? buildDislocationRealitySceneIssue(draft.content, taskCard) : "";
+  if (dislocationIssue) {
+    issues.push({
+      type: "异常经历认知链",
+      location: "现实/异常切换段",
+      severity: "medium",
+      problem: dislocationIssue,
+      suggestion: "建议把异常经历写成正常人的三拍反应：先用疲惫、压力、做梦或错觉解释，再被一个具体感官细节动摇，最后暂时压下或做低成本记录。"
+    });
+  }
+
+  const layerReturnIssue = taskCard ? buildLayerReturnHardCutIssue(draft.content, taskCard) : "";
+  if (layerReturnIssue) {
+    issues.push({
+      type: "跨层转场过快",
+      location: "现实/异常切换段",
+      severity: "medium",
+      problem: layerReturnIssue,
+      suggestion: "建议保留转场，但补一两处抗拒、感官断裂、醒后错位或自我确认，让读者相信这不是普通换场。"
+    });
+  }
+
+  const dialogueMismatch = findDialogueQuestionAnswerMismatch(
+    draft.content,
+    getPreviousDraftTail(store, projectId, draft.chapterNumber)
+  );
+  if (dialogueMismatch) {
+    issues.push({
+      type: "对白问答错位",
+      location: dialogueMismatch.location,
+      severity: "medium",
+      problem: "相邻对白没有接住问句：上一句问的是一个方向，下一句却用“有/没有/是/不是”等回答另一个问题，读者会感觉中间漏了一句。",
+      suggestion: "建议补一条过渡问句，或把前一句改成可被当前回答承接的“有没有/是否/认不认识”类问题；如果要换话题，先写人物停顿、回忆或主动解释。"
+    });
+  }
+
+  const actionLoopDrift = buildActionLoopDriftIssue(draft.content, taskCard);
+  if (actionLoopDrift) {
+    issues.push({
+      type: "行动推进多，问题闭环弱",
+      location: actionLoopDrift.location,
+      severity: "medium",
+      problem: `正文有较多转场和新发现，但缺少验证、排除、对质或阶段结论，读者会感觉人物一直在奔走，而不是把一个问题查实、缩小或解决。`,
+      suggestion: "建议压缩一个转场或一次新发现，把篇幅让给同场验证：先提出一个具体问题，再通过人物反应、证据比对、误判被推翻或短复盘得到阶段结论；章末可以留新压力，但本章要先咬住一个小闭环。"
+    });
+  }
+
+  const openEndedClosureTailIssue = taskCard ? buildOpenEndedClosureTailIssue(draft.content, taskCard) : "";
+  if (openEndedClosureTailIssue) {
+    issues.push({
+      type: "收束尾巴偏开放",
+      location: endingDraftExcerpt(draft.content) || "结尾段",
+      severity: "medium",
+      problem: openEndedClosureTailIssue,
+      suggestion: "建议把结尾改成结果、状态、关系、奖励、休整或轻量压力，不要停在新场景入口。"
+    });
+  }
+
   if (
     taskCard &&
+    !concreteSceneHookMissing(draft.content, taskCard.endingHook) &&
     !draftEndingAppearsToCarryHook(draft.content, taskCard.endingHook) &&
     !draftEndingHasStagePressure(draft.content)
   ) {
@@ -13729,10 +15518,11 @@ export async function reviewChapterDraft(
 
   const reviewedLedger = store.chapterLedgers.find((item) => item.draftId === draft.id && item.projectId === projectId);
   const hasHighRiskIssue = report.issues.some((issue) => issue.severity === "high");
+  const hasOpenContinuationPressure = ledgerHasOpenContinuationPressure(reviewedLedger);
 
   if (reviewedLedger) {
-    reviewedLedger.closureStatus = hasHighRiskIssue ? "pending" : "confirmed";
-    reviewedLedger.closureConfirmedAt = hasHighRiskIssue ? undefined : timestamp;
+    reviewedLedger.closureStatus = hasHighRiskIssue || hasOpenContinuationPressure ? "pending" : "confirmed";
+    reviewedLedger.closureConfirmedAt = hasHighRiskIssue || hasOpenContinuationPressure ? undefined : timestamp;
     reviewedLedger.updatedAt = timestamp;
 
     if (taskCard && !hasHighRiskIssue) {

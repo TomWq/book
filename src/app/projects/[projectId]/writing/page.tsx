@@ -469,6 +469,9 @@ export default async function ProjectWritingPage({
               <a className="button primary" href="#task-card-form">
                 {activeTaskCard ? "查看任务卡" : `生成第 ${taskCardChapterNumber} 章任务卡`}
               </a>
+              <Link className="button" href={`/projects/${projectId}/writing/chapters`}>
+                章节目录
+              </Link>
               <Link className="button" href={`/projects/${projectId}/state`}>
                 完善设定
               </Link>
@@ -729,7 +732,12 @@ export default async function ProjectWritingPage({
                   </div>
                 </div>
                 <div className="quote-box">{displayTaskCard.endingHook}</div>
-                <TaskCardEditForm projectId={projectId} taskCard={displayTaskCard} hasRelatedDraft={Boolean(activeDraftTaskCard)} />
+                <TaskCardEditForm
+                  key={displayTaskCard.id}
+                  projectId={projectId}
+                  taskCard={displayTaskCard}
+                  hasRelatedDraft={Boolean(activeDraftTaskCard)}
+                />
                 <div className="list">
                   {activeTaskCard ? (
                     <StreamDraftButton

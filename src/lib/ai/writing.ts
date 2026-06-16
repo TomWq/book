@@ -27,6 +27,7 @@ type TaskCardContext = {
   bible: StoredWritingBible;
   plotState: StoredPlotState;
   longFormPlan?: StoredLongFormPlan | null;
+  phaseTransitionRules?: string[];
   lastLedger: StoredChapterLedger | null;
   latestDraft: StoredChapterDraft | null;
   latestDraftActualEnding?: string;
@@ -682,12 +683,19 @@ function nearbyLongFormChapterBlueprints(plan: StoredLongFormPlan, chapterNumber
   return plan.first10Chapters.slice(Math.max(0, chapterNumber - 2), chapterNumber + 1);
 }
 
-function buildTaskCardLongFormPlanSummary(plan: StoredLongFormPlan | null | undefined, chapterNumber?: number) {
+function buildTaskCardLongFormPlanSummary(
+  plan: StoredLongFormPlan | null | undefined,
+  chapterNumber?: number,
+  options?: { suppressCurrentStage?: boolean; transitionNote?: string }
+) {
   if (!plan) {
     return null;
   }
 
   const currentBlueprint = longFormChapterBlueprint(plan, chapterNumber);
+  const currentStage = options?.suppressCurrentStage
+    ? options.transitionNote ?? "真实台账显示刚完成上一阶段；本章先做阶段交接、结算或冷却，长篇规划的章节范围只作后续参考，不按章号强制切入下一阶段。"
+    : extractLongFormStageText(plan, chapterNumber);
 
   return {
     targetTotalWords: plan.targetTotalWords,
@@ -696,7 +704,7 @@ function buildTaskCardLongFormPlanSummary(plan: StoredLongFormPlan | null | unde
     openingBlueprintPolicy: "开局任务蓝图按任务队列参考；如上一章 carryOverTasks 未完成，优先承接未完成项，蓝图顺位可自然后移。蓝图中写明章节号的条目必须按对应章节读取，不限于前10章。",
     currentChapterPlan: currentBlueprint ? cleanPromptText(currentBlueprint, 220) : "",
     nearbyOpeningPlan: compactTextList(nearbyLongFormChapterBlueprints(plan, chapterNumber), 3, 180),
-    currentStage: cleanPromptText(extractLongFormStageText(plan, chapterNumber), 360),
+    currentStage: cleanPromptText(currentStage, 360),
     progressionPacing: compactTextList(plan.progressionPacing, 3, 100),
     rewardPacing: compactTextList(plan.rewardPacing, 3, 100),
     confirmedFacts: compactTextList(plan.confirmedFacts, 4, 100),
@@ -708,7 +716,11 @@ function buildTaskCardLongFormPlanSummary(plan: StoredLongFormPlan | null | unde
   };
 }
 
-function buildTaskCardLongFormRules(plan?: StoredLongFormPlan | null, chapterNumber?: number) {
+function buildTaskCardLongFormRules(
+  plan?: StoredLongFormPlan | null,
+  chapterNumber?: number,
+  options?: { suppressCurrentStage?: boolean; transitionRules?: string[] }
+) {
   if (!plan) {
     return [
       "当前项目尚未生成长篇规划；任务卡保持保守节奏，先稳住核心承诺、关键机制和当前阶段目标。"
@@ -716,12 +728,16 @@ function buildTaskCardLongFormRules(plan?: StoredLongFormPlan | null, chapterNum
   }
 
   const currentChapterPlan = cleanPromptText(longFormChapterBlueprint(plan, chapterNumber), 280);
+  const currentStageRule = options?.suppressCurrentStage
+    ? ""
+    : cleanPromptText(extractLongFormStageText(plan, chapterNumber), 320);
 
   return [
     `长篇规划基准：目标约 ${plan.targetTotalWords} 字，预计 ${plan.estimatedChapters} 章；核心承诺：${cleanPromptText(plan.corePromise || plan.planningBasis, 180)}`,
     currentChapterPlan ? `开局任务蓝图中的当前章节约束：${currentChapterPlan}` : "",
     "开局任务蓝图是任务队列和节奏参考，不是强制一章一条；如果上一章 carryOverTasks 未完成，本章优先承接 carryOverTasks，再把蓝图顺位自然后移。蓝图中的心理、身体反应和现实回响只作为节奏提示，除非用户明确要求本章必须写，否则不要写入任务卡硬规则。",
-    cleanPromptText(extractLongFormStageText(plan, chapterNumber), 320),
+    ...compactTextList(options?.transitionRules ?? [], 4, 130),
+    currentStageRule,
     plan.doNotChange.length ? `禁止改写核心事实：${compactTextList(plan.doNotChange, 4, 90).join("；")}` : "",
     plan.doNotRevealEarly.length ? `禁止提前揭示：${compactTextList(plan.doNotRevealEarly, 3, 90).join("；")}` : "",
     plan.progressionPacing.length ? `成长节奏上限：${compactTextList(plan.progressionPacing, 3, 90).join("；")}` : "",
@@ -857,18 +873,20 @@ function buildLongFormStageClosureRules(plan: StoredLongFormPlan, chapterNumber?
   }
 
   const isNearStageEnd = chapterNumber >= stage.end - 2;
-  const hasClosureSignal = /收束|结案|完成|回收|进入下一阶段|返回|公开审理|破获|解决/.test(stage.text);
+  const hasImmediateClosureSignal =
+    /(?:本章|当前章节|当前应|当前要|这一章|此章|本阶段尾声|阶段尾声|最后\s*\d*\s*章|末尾)[^。！？\n]{0,80}(?:收束|完成|回收|返回|进入下一阶段|阶段落点|阶段结算)/.test(stage.text) ||
+    /(?:收束|完成|回收|返回|进入下一阶段|阶段落点|阶段结算)[^。！？\n]{0,80}(?:本章|当前章节|当前应|当前要|这一章|此章|本阶段尾声|阶段尾声|最后\s*\d*\s*章|末尾)/.test(stage.text);
 
-  if (!isNearStageEnd && !hasClosureSignal) {
+  if (!isNearStageEnd && !hasImmediateClosureSignal) {
     return [];
   }
 
   return [
     `阶段收束压力：当前位于长篇规划第${stage.start}-${stage.end}章，规划要求为「${cleanPromptText(stage.text, 300)}」。`,
     isNearStageEnd
-      ? "当前已接近或到达本阶段尾声，本章任务卡必须优先收束当前案件/当前任务链；不得再新增需要多章验证的新嫌疑人、新地点、新物证或新组织。"
-      : "如果本阶段规划已写明收束、结案、完成、回收或进入下一阶段，任务卡必须朝该收束动作推进，不要继续扩写旁支细节。",
-    "悬疑/案件类章节到阶段末尾时，优先安排关键证据对上、嫌疑人正面对质、公开审理、阶段性定罪、现实返回或进入下一案；细枝线索只能压缩成一两句或滚入后续案外暗线。"
+      ? "当前已接近或到达本阶段尾声，本章任务卡必须优先收束当前任务链；不得再新增需要多章验证的新目标、新地点、新物件、新角色或新组织。"
+      : "如果本阶段规划已写明收束、完成、回收或进入下一阶段，任务卡必须朝该收束动作推进，不要继续扩写旁支细节。",
+    "阶段末尾优先安排关键冲突对上、关键人物正面回应、阶段性结果、状态更新、返回或进入下一阶段；细枝信息只能压缩成一两句或滚入后续暗线。"
   ];
 }
 
@@ -1656,7 +1674,7 @@ function estimateDraftMaxTokens(targetWordCount: number) {
 }
 
 function estimateDraftStreamMaxTokens(targetWordCount: number) {
-  return Math.min(5200, Math.max(1600, Math.ceil(targetWordCount * 1.3)));
+  return Math.min(7000, Math.max(2600, Math.ceil(targetWordCount * 2.1)));
 }
 
 function estimateDraftContinuationMaxTokens(targetWordCount: number, currentCharacters: number) {
@@ -1667,7 +1685,7 @@ function estimateDraftContinuationMaxTokens(targetWordCount: number, currentChar
     return 1000;
   }
 
-  return Math.min(3600, Math.max(1000, Math.ceil(remainingCharacters * 2.4)));
+  return Math.min(5200, Math.max(1400, Math.ceil(remainingCharacters * 2.8)));
 }
 
 function estimateDraftPolishMaxTokens(content: string) {
@@ -2281,7 +2299,8 @@ export async function compressChapterDraftToTarget(
 ) {
   const maxCharacters = maximumDraftCharacters(targetWordCount);
   const minCharacters = minimumDraftCharacters(targetWordCount);
-  const originalCarriesHook = draftCoversTaskEndingHook(content, context.taskCard.endingHook);
+  const draftContext = buildDraftGenerationPayloadContext(context);
+  const originalCarriesHook = draftCoversTaskEndingHook(content, draftContext.draftTaskCard.endingHook);
 
   if (countDraftCharacters(content) <= maxCharacters) {
     return { content, usage: undefined as AiTokenUsage | undefined };
@@ -2305,10 +2324,15 @@ export async function compressChapterDraftToTarget(
               maxCharacters,
               currentCharacters: countDraftCharacters(content),
               content,
-              taskCard: context.taskCard,
+              taskCard: draftContext.draftTaskCard,
+              closureMode: draftContext.closureMode,
               compressionRules: [
                 "保留主要场景和关键对话，删掉重复解释、重复心理活动、同义铺垫和多余环境描写。",
+                ...draftContext.closureRules,
                 "如果原文已经写出任务卡章末钩子，不要删除；如果原文本来没有写到钩子，不要为了补钩子新增大段剧情。",
+                draftContext.closureMode
+                  ? "收束章压缩时优先保留定责、判定、返回或状态更新；案后钩子只保留最后一两句，不得为了保留钩子牺牲阶段落点。"
+                  : "",
                 "压缩后仍然必须是完整小说正文，不能变成梗概。",
                 "必须保留本章起因、推进、转折、爽点释放和章末落点，不能把正文压到剧情写了一半就结束。",
                 "如果无法同时满足字数上限和完整剧情，优先保证剧情完整、前后文通顺，允许略微超过字数上限。",
@@ -2647,6 +2671,119 @@ function buildDraftFacingTaskCard(taskCard: StoredWritingTaskCard): StoredWritin
   };
 }
 
+function isDraftStageClosureContext(context: ChapterDraftContext) {
+  return /阶段收束|收束|阶段落点|阶段完成|阶段结束|任务链完成|任务链收束|结果落定|返回|封闭信息池|不得新增|不得再新增|不展开|不深挖|后续钩子|后续暗线/.test(
+    [
+      context.taskCard.title,
+      context.taskCard.chapterGoal,
+      context.taskCard.mainPlotProgress,
+      context.taskCard.pleasurePoint,
+      context.taskCard.endingHook,
+      context.taskCard.foreshadowingTasks.join("\n"),
+      context.taskCard.rulesNotToBreak.join("\n"),
+      context.longFormPlan?.progressionRules.join("\n") ?? ""
+    ].join("\n")
+  );
+}
+
+function isDraftAftermathHookText(value: string) {
+  return /后续钩子|后续暗线|后续压力|后续伏笔|阶段后钩子|暂不深挖|不在本章深挖|暂不揭示|不揭示|暂不解释|不解释|保留[^。！？；\n]*(悬念|伏笔|钩子|暗线)|仅展示|只展示|暗示[^。！？；\n]*(后续|下一阶段|下一卷|新阶段)|现实钩子|现实.*出现|梦境.*现实|跨世界|后续世界|为后续.*铺垫|为下一阶段.*铺垫/.test(value);
+}
+
+function sanitizeDraftLedgerForClosure(ledger: StoredChapterLedger | null) {
+  if (!ledger) {
+    return null;
+  }
+
+  const keepClosureEvidence = (value: string) =>
+    !isDraftAftermathHookText(value) &&
+    !/未解(?:标记|暗号|图案)|旧线索|幕后|旧阶段|组织|势力|跨世界|现实.*异常|下一阶段|后续|新行动链|新任务链/.test(value);
+
+  return {
+    ...ledger,
+    newClues: compactTextList(ledger.newClues.filter(keepClosureEvidence), 4, 120),
+    cliffhanger: isDraftAftermathHookText(ledger.cliffhanger)
+      ? "上一章留下阶段后异常或未解压力，本章只可在结尾轻触，不得展开追查。"
+      : cleanPromptText(ledger.cliffhanger, 120),
+    stateChanges: compactTextList(ledger.stateChanges.filter(keepClosureEvidence), 4, 120),
+    carryOverTasks: compactTextList(ledger.carryOverTasks ?? [], 3, 100)
+  };
+}
+
+function sanitizePreviousDraftTailForClosure(value?: string) {
+  const text = cleanPromptText(value ?? "", 420);
+
+  if (!text) {
+    return "";
+  }
+
+  if (isDraftAftermathHookText(text) || /未解(?:标记|暗号|图案)|旧线索|幕后|现实.*异常/.test(text)) {
+    return cleanPromptText(`${text}\n【收束章承接限制】上面的异常可以造成短暂疑问、害怕、自我怀疑或现实逻辑解释；但本章中段不得把疑问转成追问、查证、解释异常或开启新行动链。`, 520);
+  }
+
+  return text;
+}
+
+function buildClosureDraftRules(context: ChapterDraftContext) {
+  if (!isDraftStageClosureContext(context)) {
+    return [];
+  }
+
+  return [
+    "本章处于阶段收束/阶段交接模式：正文主体必须优先完成当前任务链的关键回应、结果归属、状态更新、返回、奖励或关系变化。",
+    "正文篇幅预算：前 70%-85% 写已登记信息闭环和阶段落点；阶段后钩子、现实异常、后续暗线最多只能占最后 1-2 句，不能占中段场面。",
+    "上一章尾巴、上一章台账或任务卡 endingHook 中的阶段后异常只能轻触；人物可以产生疑问、恐惧、自我怀疑、试图用现实逻辑解释，但不能把疑问推进成查证含义、来源、幕后人、旧事、组织、势力、新地点、新物件或新角色的行动链。",
+    "如果本章出现现实/梦境、现世/异世、前世/今生、主世界/副本等异常切换，必须写正常人的认知链：先否认或归因于压力/疲惫/幻觉，再被一两个具体感官细节动摇，最后暂时压下或做低成本自检；不能直接得出确定结论，也不能升级成中段调查。",
+    "如果角色提到后续暗线，必须立刻由结果落定、外部阻力、时间耗尽、返回或身体/现实切换把它压住；不得继续追下去。",
+    "收束章的悬疑细节只能服务现有信息闭环；不要把每 400 字的新信息写成新调查方向，可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作替代。",
+    "收束/交接章里，只有完成本章阶段目标和主线推进后，才允许最后轻触阶段后异常；如果任务卡明确给了具体可见场面，则按具体场面预算进入该场面，但不得在中段扩成新调查链。",
+    "收束/休整/结算章的最后一段必须落在结果、状态、关系、奖励、休息、返回或情绪余波上；不得停在推门、进屋、拐入新地点、看见陌生人、发现新物件、听见异常声音等开放式动作入口。"
+  ];
+}
+
+function isConcreteSceneHookText(value: string) {
+  const text = cleanPromptText(value, 260);
+
+  if (!text) {
+    return false;
+  }
+
+  const hasSceneAnchor =
+    /(?:在|到|进|进入|回到|来到|蹲在|站在|坐在|停在|走到|靠近|贴近)[^，。！？；\n]{2,24}/.test(text) ||
+    /(?:借着|对着|看见|看着|盯着|盯住|听见|听着|摸到|摸着|拿起|打开|推开|递过|凑近)[^，。！？；\n]{2,24}/.test(text);
+  const hasVisibleAction = /蹲|站|坐|走|跑|看|盯|听|闻|摸|拿|递|推|拉|凑近|打开|关上|抬头|低头|回头|传来|响起|出现|抖|灭|亮|停|拦|挡/.test(text);
+  const hasImmediatePressure = /不是|不对|异常|突然|猛地|正要|刚要|却|门外|身后|脚步|声音|来人|陌生|变了|多了|少了|不同|危险|出事/.test(text);
+
+  return (hasSceneAnchor && hasVisibleAction && hasImmediatePressure) || /正要[\s\S]{0,80}(传来|响起|出现|有人|脚步|声音)/.test(text);
+}
+
+function buildConcreteHookBudgetRules(endingHook: string) {
+  if (!isConcreteSceneHookText(endingHook)) {
+    return [];
+  }
+
+  return [
+    "任务卡章末钩子是具体场面钩子，本章必须在后半段进入该具体场面，不能只停在赶路、解释、通知、路上对话或场面入口。",
+    "正文预算要倒推安排：前置过渡、现实段、赶路、背景说明和支线信息都必须压缩，至少保留最后 20%-30% 篇幅兑现章末钩子所在场面。",
+    "如果字数不够，优先删减前置解释和路上信息，不得把具体场面钩子顺延到下一章。"
+  ];
+}
+
+function buildDraftGenerationPayloadContext(context: ChapterDraftContext) {
+  const closureMode = isDraftStageClosureContext(context);
+
+  return {
+    draftTaskCard: buildDraftFacingTaskCard(context.taskCard),
+    lastLedger: closureMode ? sanitizeDraftLedgerForClosure(context.lastLedger) : context.lastLedger,
+    previousDraftTail: closureMode ? sanitizePreviousDraftTailForClosure(context.previousDraftTail) : context.previousDraftTail,
+    closureRules: [
+      ...buildClosureDraftRules(context),
+      ...buildConcreteHookBudgetRules(context.taskCard.endingHook)
+    ],
+    closureMode
+  };
+}
+
 function buildPremiseAnchorRules(context: {
   projectName?: string;
   projectDescription?: string;
@@ -2730,6 +2867,14 @@ function buildProtagonistEmbodimentRules(context: {
   ].filter(Boolean).join("\n");
   const hasDislocationPremise = /穿越|快穿|入梦|梦境|重生|异世|古代|末世|规则怪谈|无限流|副本/.test(sourceText);
   const hasHighPressurePremise = /悬疑|刑侦|法医|尸体|命案|凶案|血|恐怖|惊悚|审讯|追杀|逃亡|灾变/.test(sourceText);
+  const dislocationRules = hasDislocationPremise
+    ? [
+        "如果涉及现实/梦境、现世/异世、前世/今生、主世界/副本等双层空间切换，回到原本生活层后必须至少写一个有效现实场面，而不是一句醒来又立刻入睡。有效现实场面需要包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的至少两项。",
+        "双层空间切换不能只当转场按钮；每次切回现实或原本生活层，都要让现实剧情改变主角状态、判断、资源、时间压力或下一次进入另一层空间的心态。",
+        "从原本生活层再次进入另一层空间时，不能写成普通睡觉换场景；必须有四拍：入睡前的抗拒/自我解释，切换时的感官异常或时间断裂，醒来后的短暂错位，最后通过衣物、身体、地点、时间或他人反应确认已经回到另一层。",
+        "面对超常经历时，主角的正常思维顺序是：先否认或现实归因，再被具体感官记忆、身体残留、时间错位或外界细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定，也不能立刻得出确定真相。"
+      ]
+    : [];
 
   if (!hasDislocationPremise && !hasHighPressurePremise) {
     return [
@@ -2748,6 +2893,7 @@ function buildProtagonistEmbodimentRules(context: {
     "女强不是无所畏惧，但也不是反复害怕；害怕、反胃、手抖、迟疑、现实压力回响等不要连续章节重复同一种表现，能用行动选择体现就不额外解释。",
     "时间与体力必须连续：连续查案、战斗、赶路、审讯或夜探后，要安排可见代价或恢复窗口，例如吃饭、喝水、换药、短睡、轮值、等待天亮、暂回住处、现实醒来缓冲；不能让主角无休止跨场景奔走。",
     "转场必须有时间成本和行动理由：一章内最多保留 2-3 个有效地点，赶路、等待、天色变化和休整可以压缩，但不能完全消失；如果连续多章都是夜间行动，必须处理天亮、休息、官府当值或现实身体疲惫。",
+    ...dislocationRules,
     "如果涉及梦境、穿越、重生或异世，必须区分主观经历时间、异世界时间与现实时间；可以把醒来/再入梦作为休整和现实回响，但必须承接同一世界、同一案件或同一任务进度，不得擅自跳成新世界或重置关系。"
   ];
 }
@@ -2804,7 +2950,11 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
     bible: context.bible,
     plotState: context.plotState
   });
-  const longFormPlanRules = buildTaskCardLongFormRules(context.longFormPlan, context.chapterNumber);
+  const hasPhaseTransitionRules = Boolean(context.phaseTransitionRules?.length);
+  const longFormPlanRules = buildTaskCardLongFormRules(context.longFormPlan, context.chapterNumber, {
+    suppressCurrentStage: hasPhaseTransitionRules,
+    transitionRules: context.phaseTransitionRules
+  });
   const response = await requestAiJson<Partial<StoredWritingTaskCard>>({
     messages: [
       {
@@ -2820,7 +2970,13 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             projectDescription: cleanPromptText(context.projectDescription ?? "", 800),
             bible: compactTaskCardBible(context.bible),
             plotState: compactTaskCardPlotState(context.plotState),
-            longFormPlan: buildTaskCardLongFormPlanSummary(context.longFormPlan, context.chapterNumber),
+            longFormPlan: buildTaskCardLongFormPlanSummary(context.longFormPlan, context.chapterNumber, {
+              suppressCurrentStage: hasPhaseTransitionRules,
+              transitionNote: hasPhaseTransitionRules
+                ? "上一章台账显示阶段刚完成；本章处于阶段交接缓冲。长篇规划中的章节范围是预算参考，不代表本章必须立即切入下一阶段。"
+                : undefined
+            }),
+            phaseTransitionRules: compactTextList(context.phaseTransitionRules ?? [], 6, 140),
             lastLedger: compactTaskCardLedger(context.lastLedger),
             latestDraft: compactTaskCardLatestDraft(context.latestDraft),
             latestDraftActualEnding: cleanPromptText(context.latestDraftActualEnding ?? "", 260),
@@ -2846,6 +3002,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "title 只写章节标题本身，不要包含“第N章”“Chapter N”或序号；标题不追求工整，允许短句式、动作式、地点异常式或线索式。",
               "title 必须参考 recentChapterTitles 避免连续相同字数和相同句式；如果最近 2 个以上标题都是 4 个中文字，本章 title 禁止再用 4 个中文字。",
               "title 不要压成四字成语式概括；优先抓本章具体冲突、物件、线索、地点压力或章末钩子；避免套用固定模板词、空泛气氛词或万能概括词。",
+              "title 不能写成普通动作句，例如“她打开了某物”“他走进某地”“主角发现线索”；应压成有悬念或压力的标题，例如物件异常、地点压力、外部阻拦、错误判断、代价或章末危机。",
               "titleAlternatives 必须给 3 个备选标题，且三个备选标题的字数和句式不能相同；至少 2 个不能是 4 个中文字。",
               "输出必须精炼：chapterGoal、continuity、mainPlotProgress、pleasurePoint、endingHook 每项控制在 60-140 个中文字；requiredCharacters 不超过 4 个；foreshadowingTasks 不超过 3 条；rulesNotToBreak 不超过 8 条，每条不超过 60 个中文字。",
               "不要在任务卡里写正文片段、长对白、连续动作描写或完整段落；任务卡只写可执行剧情功能。",
@@ -2862,8 +3019,11 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "如果 latestDraftActualEnding 与 lastLedger.cliffhanger、旧任务卡钩子或主线状态不一致，以 latestDraftActualEnding 为准；缺失事件只能写成后续待发生，不能写成已经发生。",
               "每张任务卡只安排一个核心场面、一个关键发现、一个主要阻力和一个章末钩子；不要把多个专业检验点、多个地点、旧案揭示和嫌疑人反转全塞进同一章。",
               "连续查证章节必须合并节奏：发现线索 -> 验证关键点 -> 对质/收束/转入下一案，不能把撤退、跟踪、伤痛、等待、赶路单独扩成一整章目标。",
+              "任务卡必须写出本章小闭环：本章要解决或缩小的具体问题是什么，验证方式是什么，现场阻力是什么，结尾得到什么阶段结论。不能只写前往新地点、发现新线索、引出新人物。",
+              "如果上一章已经以新线索、新地点或新人物收尾，本章优先验证和对质，不要再把目标写成继续换地点寻找另一条线索；除非先给出明确阶段结论。",
               "任务卡必须检查时间与体力连续性：如果上一章已经夜探、奔逃、审讯、受伤、长时间查案或现实疲惫，本章应优先安排休整、天亮后的正式流程、现实醒来缓冲或压缩转场，不能继续无缝奔向新地点。",
               "梦境/穿越类作品不需要默认“完成任务才能醒来”；除非创作圣经明确规定，否则可安排中途醒来再入梦，但再入梦必须承接同一案件进度，不能跳成新世界或重置关系。",
+              "如果项目存在现实/梦境、现世/异世、前世/今生、主世界/副本等双层空间，任务卡里的现实回响不能只写成情绪提示；必须安排一个有效现实场面，至少包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的两项，并说明它如何影响主角下一次行动心态。",
               "悬疑查案章必须设计现场阻力：有人质疑、催促、遮掩、破坏证物、给出错误判断或限制时间。不能只让主角顺畅观察并连续解释。",
               "如果 projectDescription 不为空，它是本书核心承诺参考，任务卡不要明显违背简介里的主角身份、初始危机、金手指机制和核心卖点。",
               ...familyNameRules.slice(0, 2),
@@ -2873,15 +3033,18 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               ...protagonistEmbodimentRules,
               ...longFormPlanRules,
               "任务卡的 chapterGoal 必须写清本章如何推进核心承诺锚点；mainPlotProgress 必须写清这章推进的是主线还是支线，以及支线如何回到主线。",
+              "mainPlotProgress 必须包含阶段性结果：确认了什么、排除了什么、锁定了谁/哪类范围、改变了哪段关系或状态；禁止只写“获得新线索、继续追查、前往某处”。",
               "mainPlotProgress 如果写支线，必须说明：关联配角是谁、该配角本章有什么小目标或压力、这条支线如何给主线提供线索/阻力/情绪补偿/伏笔，不允许只写“推进配角线”。",
               "任务卡只能规划剧情功能，不要安排“用旁白交代人物履历/学历/专业能力/世界观规则”；需要能力展示时，必须写成具体场面、动作、对话或现场判断。",
               "任务卡的 pleasurePoint 不能只是“主角发现线索”；必须包含压制来源、反对者或风险，以及主角如何用一个可见动作扭转局面。",
               "任务卡的 pleasurePoint 必须写清：本章收益是什么、收益来源是什么、触发条件是什么、是否符合关键机制、是否存在越级风险；如果只是铺垫章，可以明确写“小收益/线索/误会加深”，不要强行突破。",
               "最近章节台账只提供连续性，不等于自动变成新主线；如果上一章钩子开启了支线，本章必须说明它如何回扣核心承诺，或如何在本章/下章收束。",
-              "阶段收束优先级高于伏笔扩展：如果 longFormPlan、rulesNotToBreak 或 lastLedger.carryOverTasks 显示当前应收束、结案、回收或返回，本章不得把符号、旧案、幕后人、新地点、新物证继续扩成新的调查链；这些只能作为案后钩子保留。",
+              "阶段收束优先级高于伏笔扩展：如果 longFormPlan、rulesNotToBreak 或 lastLedger.carryOverTasks 显示当前应收束、结案、回收或返回，本章不得把未解标记、旧线索、幕后压力、新地点、新物证继续扩成新的调查链；这些只能作为案后钩子保留。",
+              "阶段收束或阶段交接时，案后钩子、现实异常、后续暗线、下一阶段铺垫只能进入 endingHook 或 rulesNotToBreak，不能写进 title、chapterGoal、mainPlotProgress 或 foreshadowingTasks 的硬任务位。",
+              "如果上一章台账中的 newClues/cliffhanger/stateChanges 已标明只是案后钩子、暂不深挖、不揭示含义或后续铺垫，本章目标必须优先写结案、定责、返回、奖励、状态更新，不得把该钩子升级为本章主任务。",
               "当本章处于收束模式时，foreshadowingTasks 只能写“回收/部分回收/保留为案后钩子/暂不深挖”，不得写“继续追查新线索、前往新地点、调查旧案细节”。",
               "支线使用边界：支线章最多占本章一个核心场面；它可以制造误导、情绪、配角高光或新证据，但章末必须回到主线压力、核心承诺或下一步行动。",
-              "任务卡 endingHook 是本章优先争取的章末落点；如果本章任务在目标字数内装不下，允许把 endingHook 作为下一章承接目标，但本章必须留下清楚的阶段性压力或未解决问题。",
+              "任务卡章末钩子是本章优先争取的章末落点；普通压力钩子如果在目标字数内装不下，可以作为下一章承接目标，但本章必须留下清楚的阶段性压力或未解决问题；用户明确给出的具体可见场面钩子不能被改写成“下章再说”。",
               "章节功能可以轮换：允许日常经营、关系铺垫、信息差误会、资源小收益、机制试错、低强度压制，不要每章都强行新敌人、新地图、大战斗或大境界突破。",
               "前10章应优先稳住题材卖点、主角日常循环、关键机制反馈和第一阶段压力；除非大纲明确要求，不要过早开启大型副本或连续升级地图。",
               "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
@@ -2932,7 +3095,8 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
     const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
     const minCharacters = minimumDraftCharacters(targetWordCount);
     const maxCharacters = maximumDraftCharacters(targetWordCount);
-    const draftTaskCard = buildDraftFacingTaskCard(context.taskCard);
+    const draftContext = buildDraftGenerationPayloadContext(context);
+    const draftTaskCard = draftContext.draftTaskCard;
 
     const response = await requestAiJson<{ title?: string; titleAlternatives?: unknown; content?: string }>({
       messages: [
@@ -2953,9 +3117,10 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
               bible: context.bible,
               plotState: context.plotState,
               longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
-              lastLedger: context.lastLedger,
+              lastLedger: draftContext.lastLedger,
               continuityFacts: (context.continuityFacts ?? []).slice(0, 14),
-              previousDraftTail: context.previousDraftTail,
+              previousDraftTail: draftContext.previousDraftTail,
+              closureMode: draftContext.closureMode,
               recentChapterTitles: (context.recentChapterTitles ?? []).slice(0, 6).map((item) => ({
                 chapterNumber: item.chapterNumber,
                 title: cleanPromptText(item.title, 40)
@@ -2966,25 +3131,42 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 "title 只写章节标题本身，不要包含“第N章”“Chapter N”或序号；标题不追求工整，允许短句式、动作式、地点异常式或线索式。",
                 "title 必须参考 recentChapterTitles 避免连续相同字数和相同句式；如果最近 2 个以上标题都是 4 个中文字，本章 title 禁止再用 4 个中文字。",
                 "title 不要压成四字概括或万能气氛词；优先来自本章具体线索、物件、压力或钩子。",
+                "title 不能写成普通动作句，例如“她打开了某物”“他走进某地”“主角发现线索”；应压成有悬念或压力的标题，例如物件异常、地点压力、外部阻拦、错误判断、代价或章末危机。",
                 "titleAlternatives 必须给 3 个备选标题，且三个备选标题的字数和句式不能相同；至少 2 个不能是 4 个中文字。",
                 `正文目标约 ${targetWordCount} 字，最高不得超过 ${maxCharacters} 字；篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
                 `最高 ${maxCharacters} 字是硬上限，不是写作目标；正文应在接近 ${Math.round(targetWordCount * 1.08)}-${Math.round(targetWordCount * 1.18)} 字时主动收束，不要写到上限才想结尾。`,
                 `必须在 ${maxCharacters} 字以内自然收束并写出章末落点，不要写到被系统长度限制截断。`,
                 "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
+                ...draftContext.closureRules,
                 "节奏经济：环境、进门、躲藏、赶路、伤痛、呼吸、手部动作等过程描写只保留会改变局面的细节；不能把一次撤退、跟踪或身体不适扩成整章主体。",
-                "悬疑细节必须换来推进：每个细节要么形成证据、制造误判、逼出人物反应、推动对质或服务章末钩子；纯氛围和重复感受要压缩。",
+                draftContext.closureMode
+                  ? "收束章的细节只能服务已登记信息闭环、关键回应、结果归属、状态更新或返回；不得把细节写成新的主动行动方向。"
+                  : "悬疑细节必须换来推进：每个细节要么形成证据、制造误判、逼出人物反应、推动对质或服务章末钩子；纯氛围和重复感受要压缩。",
+                "本章必须完成一个小闭环：开头承接问题，中段验证或遭遇阻力，后段给出阶段结论、排除项、锁定范围、人物反应或状态变化。章末可以留新压力，但不能整章只有换地点和发现新东西。",
+                "如果正文连续出现前往、赶到、进入、离开、返回等转场，要立刻压缩转场，把篇幅转回同一个场景内的验证、对质、误判被推翻、人物露馅或短复盘。",
                 "时间与体力连续性必须可信：如果上一章刚经历夜探、奔逃、审讯、长时间查案、受伤或强刺激，本章要处理休息、饥饿、天色、换药、当值、等待或现实醒来缓冲；不能让主角像不需要睡觉一样连续转场。",
                 "转场只写有效成本：可用一两句交代天亮、回住处、换班、吃点东西、短睡或现实醒来；不要把休息写成水文，但也不能完全没有。",
-                "正文预算必须先保证本章有完整阶段落点：中段细节可以压缩；任务卡 endingHook 优先兑现，但如果目标字数内装不下，可以停在更早的有效压力点，留给下一章承接。",
+                draftContext.closureMode
+                  ? "如果本章从另一层空间切回现实/原本生活层，再回到另一层空间，中间必须写成一个有效现实场面，不能一句醒来又一句入睡。有效现实场面至少包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的两项。"
+                  : "",
+                draftContext.closureMode
+                  ? "正文预算必须先保证本章有完整阶段落点：中段只写已登记信息闭环和结果归属；普通阶段后钩子只能最后轻触，不能提前展开；具体可见场面钩子必须倒推篇幅进入场面，但不得扩成新任务链。"
+                  : "正文预算必须先保证本章有完整阶段落点：中段细节可以压缩；任务卡普通压力钩子优先兑现，若目标字数内装不下，可以停在更早的有效压力点；但具体可见场面钩子不能顺延，必须压缩前置内容后在本章兑现。",
                 "如果目标字数偏短，只保留 3-5 个关键场面，最后 15%-25% 篇幅必须留给本章收束；不要为了兑现所有任务把正文硬撑长。",
-                "任务卡 requiredCharacters 是硬要求：除“主角”这类泛称外，名单里的每个具体姓名都必须在正文中以原名实际出现，并有动作、对白、观察、质询、指认、阻拦或选择；不能只在任务卡或台账里出现。",
-                "任务卡 foreshadowingTasks 是硬要求：凡是写了本章、必须、通过、回收、承接、处理、证据链、物件、染料、账本、指纹或供词的任务，都必须在正文场面里兑现；不能只写成概括结论。",
-                "涉及回收伏笔时，必须让读者看到对应物件、痕迹、人物反应或对质过程；例如衣袖染料、指甲残留、账本、指纹、供词等，不能只让旁白说“线索被回收”。",
+                "任务卡 requiredCharacters 是硬要求：除“主角”这类泛称外，名单里的每个具体人物都必须在正文中实际出现；若任务卡写的是“身份/职务+称呼”，正文可使用自然称呼，但必须有动作、对白、观察、质询、指认、阻拦或选择。",
+                "任务卡 foreshadowingTasks 只有在明确写了“本章必须/本章要/回收/处理/验证/比对/对质/定责”等动作时才是硬要求；如果写的是暂不回收、只确认方向、只保留钩子或不展开，本章只需轻触，不能扩成调查链。",
+                "涉及明确回收伏笔时，必须让读者看到对应对象、痕迹、人物反应或对质过程；不能只让旁白说“线索被回收”。",
                 "任务卡和长篇规划里的心理适应、身体反应、现实记忆回响是人物节奏提示，不是每章打卡项；只有任务卡明确写“本章必须”时才需要可见兑现，否则优先写当前场景推进，不要反复写害怕、反胃或手抖。",
+                draftContext.closureMode
+                  ? "如果本章有现实/梦境、现世/异世、前世/今生、主世界/副本等异常切换，主角必须有完整但克制的认知链：先否认或归因于压力/疲惫/幻觉，再被一两个具体感官细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定、直接判定真相或开启新行动链。"
+                  : "",
+                "如果本章从原本生活层再次进入另一层空间，不能用“合眼/睡着/再睁眼”直接换场景；必须写出入睡前抗拒或自我解释、切换时的感官异常或时间断裂、醒来后的短暂错位、通过衣物/身体/地点/时间/他人反应确认已回到另一层。",
                 "开写前先把本章拆成 4-7 个可见场面，但不要把场面表输出；正文只能输出小说内容。",
                 "本章必须有现场阻力：质疑、催促、证物将被处理、错误结论压过主角、有人遮掩或时间限制。不能写成主角一路顺畅观察和讲解。",
                 "专业判断必须写成冲突里的动作：先有人误判或阻拦，再由主角抓住一个具体细节反击。每个专业点最多用一两句，不要连续教学。",
-                "每 400 字内至少出现一次外部反应、误解、打断、风险升级或新信息，不要整段整段平铺叙事。",
+                draftContext.closureMode
+                  ? "收束章每 400 字内可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作制造节奏，不要强行加入新信息。"
+                  : "每 400 字内至少出现一次外部反应、误解、打断、风险升级或新信息，不要整段整段平铺叙事。",
                 "第一遍正文就要避开机器腔：不要集中交代人物履历、学历、技能、世界观规则；每次最多露出一个必要信息，并让它从动作、物件、对话或现场压力里出现。",
                 "禁止用旁白给读者做结论：少写“这意味着/说明/证明/显然/无疑/某种/仿佛”；要让人物看见、摸到、听到、被催促或被反驳。",
                 "不要使用“深吸一口气、下意识、脑子里、瞳孔猛缩、瞳孔骤缩、瞳孔微缩、眸色一沉、心头一震、心头一紧、倒吸一口凉气”作为默认反应；写更具体的手、眼、步子、语气、物件变化或直接删掉。",
@@ -2993,10 +3175,12 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 "禁止使用破折号“——”。",
                 ...buildNarrativeDictionRules(context),
                 ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
-                "previousDraftTail 是上一章实际正文尾段；如果它与 taskCard.continuity、taskCard.endingHook 或 lastLedger 冲突，必须以 previousDraftTail 为准。",
-                "continuityFacts 是前文已发生事实，优先级高于临场套话；如果其中显示两个人物已经见过、递过文书、问过话、审过同一案或知道对方身份，正文不得再写成初次相识、重新确认身份或完全陌生。",
-                "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
-                "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
+              "previousDraftTail 是上一章实际正文尾段；如果它与 taskCard.continuity、taskCard.endingHook 或 lastLedger 冲突，必须以 previousDraftTail 为准。",
+              "continuityFacts 是前文已发生事实，优先级高于临场套话；如果其中显示两个人物已经见过、递过文书、问过话、审过同一案或知道对方身份，正文不得再写成初次相识、重新确认身份或完全陌生。",
+              "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
+              "跨章承接对白时必须问答闭合：上一句问“哪里/谁/什么/为什么”时，下一句不能直接回答“有/没有/是/不是”；如果要引出新人、新地点或新线索，先补一句可承接的追问或解释。",
+              "如果 previousDraftTail 显示上一场面已经完成、离开或转入后续状态，本章开头不得倒回同一场面继续做正式处理、重复交代或重新发言；收益和手续必须写成后续承接场面、通知、交接或新的现实场面。",
+              "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
                 "允许章节功能轮换：不是每章都必须大战、打脸或升级；可以写机制试错、日常经营、关系铺垫、低强度压力和小收益，但必须服务核心承诺。",
                 "正文必须围绕本章任务卡推进，不要写成大纲或总结。",
                 "正文必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得把故事写成另一个频道或另一个题材。",
@@ -3046,27 +3230,33 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 minCharacters,
                 currentCharacters: countDraftCharacters(content),
                 currentContent: content,
-                taskCard: context.taskCard,
+                taskCard: draftContext.draftTaskCard,
                 projectName: context.projectName,
                 projectDescription: context.projectDescription,
                 bible: context.bible,
                 plotState: context.plotState,
                 longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
+                lastLedger: draftContext.lastLedger,
+                previousDraftTail: draftContext.previousDraftTail,
+                closureMode: draftContext.closureMode,
                 continuityFacts: (context.continuityFacts ?? []).slice(0, 14),
                 continuationRules: [
                   "只续写正文后半段，不要重复已有内容。",
                   `续写后整章最高不得超过 ${maxCharacters} 字。`,
+                  ...draftContext.closureRules,
                   "continuityFacts 是前文已发生事实；续写不得把已经见过、已经知道对方身份或已经处理过同一事件的人物写成陌生人。",
                   "如果当前正文已经接近或超过最高字数，只补完整句和章末落点，不要继续展开新战斗、新设定或新对话。",
                   ...buildNarrativeDictionRules(context),
                   ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
                   "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
-                  "如果 currentContent 已经接近或超过最高字数，不要为了补完 taskCard.endingHook 强行展开；只补完整句和阶段性落点，把未完成任务留给下一章承接。",
+                  "如果 currentContent 已经接近或超过最高字数，不要为了普通压力钩子强行展开；只补完整句和阶段性落点，把未完成任务留给下一章承接。若任务卡给的是具体可见场面钩子，优先压缩收尾解释，把续写落到该场面的关键动作和外部打断上。",
                   "如果任务卡明确写“本章必须”落实心理适应、身体反应或现实回响，而已有正文完全没有体现，续写只补一处短促、具体的反应；如果只是阶段性提示，不要为了打卡强行补害怕、反胃或手抖。",
                   "续写时优先补推进，不要继续放大环境、赶路、躲藏、撤退、伤痛和呼吸动作；这些过程只保留会改变局面的细节。",
                   "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
                   "如果已有内容过早收尾，可以补一个更清楚的阶段性压力或未解决问题。",
-                  "任务卡 endingHook 优先兑现；如果篇幅不够，允许不完整兑现，但不要把正文写成半截。",
+                  draftContext.closureMode
+                    ? "收束章续写不得为了普通阶段后钩子继续展开暗线；具体可见场面钩子只兑现可见动作和外部压力，不继续追查。"
+                    : "任务卡普通压力钩子优先兑现；如果篇幅不够，允许不完整兑现，但具体可见场面钩子必须压缩前置内容后进入场面，不要把正文写成半截。",
                   "续写结尾必须以完整句子结束，不能停在逗号、顿号、破折号、连词或半句话。"
                 ],
                 outputSchema: {
@@ -3120,7 +3310,8 @@ export async function* streamChapterDraftTextWithAi(
 ) {
   const targetWordCount = normalizeDraftTargetWordCount(context.targetWordCount);
   const maxCharacters = maximumDraftCharacters(targetWordCount);
-  const draftTaskCard = buildDraftFacingTaskCard(context.taskCard);
+  const draftContext = buildDraftGenerationPayloadContext(context);
+  const draftTaskCard = draftContext.draftTaskCard;
 
   yield* requestAiTextStream({
     messages: [
@@ -3141,9 +3332,10 @@ export async function* streamChapterDraftTextWithAi(
             bible: context.bible,
             plotState: context.plotState,
             longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
-            lastLedger: context.lastLedger,
+            lastLedger: draftContext.lastLedger,
             continuityFacts: (context.continuityFacts ?? []).slice(0, 14),
-            previousDraftTail: context.previousDraftTail,
+            previousDraftTail: draftContext.previousDraftTail,
+            closureMode: draftContext.closureMode,
             characters: context.characters,
             foreshadowings: context.foreshadowings,
             writingRules: [
@@ -3151,20 +3343,36 @@ export async function* streamChapterDraftTextWithAi(
               `最高 ${maxCharacters} 字是硬上限，不是写作目标；正文应在接近 ${Math.round(targetWordCount * 1.08)}-${Math.round(targetWordCount * 1.18)} 字时主动收束，不要写到上限才想结尾。`,
               `必须在 ${maxCharacters} 字以内自然收束并写出章末落点，不要写到被系统长度限制截断。`,
               "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
-              "节奏经济：环境、进门、躲藏、赶路、伤痛、呼吸、手部动作等过程描写只保留会改变局面的细节；不能把一次撤退、跟踪或身体不适扩成整章主体。",
-              "悬疑细节必须换来推进：每个细节要么形成证据、制造误判、逼出人物反应、推动对质或服务章末钩子；纯氛围和重复感受要压缩。",
+                ...draftContext.closureRules,
+                "节奏经济：环境、进门、躲藏、赶路、伤痛、呼吸、手部动作等过程描写只保留会改变局面的细节；不能把一次撤退、跟踪或身体不适扩成整章主体。",
+              draftContext.closureMode
+                ? "收束章的细节只能服务已登记信息闭环、关键回应、结果归属、状态更新或返回；不得把细节写成新的主动行动方向。"
+                : "悬疑细节必须换来推进：每个细节要么形成证据、制造误判、逼出人物反应、推动对质或服务章末钩子；纯氛围和重复感受要压缩。",
+              "本章必须完成一个小闭环：开头承接问题，中段验证或遭遇阻力，后段给出阶段结论、排除项、锁定范围、人物反应或状态变化。章末可以留新压力，但不能整章只有换地点和发现新东西。",
+              "如果正文连续出现前往、赶到、进入、离开、返回等转场，要立刻压缩转场，把篇幅转回同一个场景内的验证、对质、误判被推翻、人物露馅或短复盘。",
               "时间与体力连续性必须可信：如果上一章刚经历夜探、奔逃、审讯、长时间查案、受伤或强刺激，本章要处理休息、饥饿、天色、换药、当值、等待或现实醒来缓冲；不能让主角像不需要睡觉一样连续转场。",
               "转场只写有效成本：可用一两句交代天亮、回住处、换班、吃点东西、短睡或现实醒来；不要把休息写成水文，但也不能完全没有。",
-              "正文预算必须先保证本章有完整阶段落点：中段细节可以压缩；任务卡 endingHook 优先兑现，但如果目标字数内装不下，可以停在更早的有效压力点，留给下一章承接。",
+              draftContext.closureMode
+                ? "如果本章从另一层空间切回现实/原本生活层，再回到另一层空间，中间必须写成一个有效现实场面，不能一句醒来又一句入睡。有效现实场面至少包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的两项。"
+                : "",
+              draftContext.closureMode
+                ? "正文预算必须先保证本章有完整阶段落点：中段只写已登记信息闭环和结果归属；普通阶段后钩子只能最后轻触，不能提前展开；具体可见场面钩子必须倒推篇幅进入场面，但不得扩成新任务链。"
+                : "正文预算必须先保证本章有完整阶段落点：中段细节可以压缩；任务卡普通压力钩子优先兑现，若目标字数内装不下，可以停在更早的有效压力点；但具体可见场面钩子不能顺延，必须压缩前置内容后在本章兑现。",
               "如果目标字数偏短，只保留 3-5 个关键场面，最后 15%-25% 篇幅必须留给本章收束；不要为了兑现所有任务把正文硬撑长。",
-              "任务卡 requiredCharacters 是硬要求：除“主角”这类泛称外，名单里的每个具体姓名都必须在正文中以原名实际出现，并有动作、对白、观察、质询、指认、阻拦或选择；不能只在任务卡或台账里出现。",
-              "任务卡 foreshadowingTasks 是硬要求：凡是写了本章、必须、通过、回收、承接、处理、证据链、物件、染料、账本、指纹或供词的任务，都必须在正文场面里兑现；不能只写成概括结论。",
-              "涉及回收伏笔时，必须让读者看到对应物件、痕迹、人物反应或对质过程；例如衣袖染料、指甲残留、账本、指纹、供词等，不能只让旁白说“线索被回收”。",
+              "任务卡 requiredCharacters 是硬要求：除“主角”这类泛称外，名单里的每个具体人物都必须在正文中实际出现；若任务卡写的是“身份/职务+称呼”，正文可使用自然称呼，但必须有动作、对白、观察、质询、指认、阻拦或选择。",
+              "任务卡 foreshadowingTasks 只有在明确写了“本章必须/本章要/回收/处理/验证/比对/对质/定责”等动作时才是硬要求；如果写的是暂不回收、只确认方向、只保留钩子或不展开，本章只需轻触，不能扩成调查链。",
+              "涉及明确回收伏笔时，必须让读者看到对应对象、痕迹、人物反应或对质过程；不能只让旁白说“线索被回收”。",
               "任务卡和长篇规划里的心理适应、身体反应、现实记忆回响是人物节奏提示，不是每章打卡项；只有任务卡明确写“本章必须”时才需要可见兑现，否则优先写当前场景推进，不要反复写害怕、反胃或手抖。",
+              draftContext.closureMode
+                ? "如果本章有现实/梦境、现世/异世、前世/今生、主世界/副本等异常切换，主角必须有完整但克制的认知链：先否认或归因于压力/疲惫/幻觉，再被一两个具体感官细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定、直接判定真相或开启新行动链。"
+                : "",
+              "如果本章从原本生活层再次进入另一层空间，不能用“合眼/睡着/再睁眼”直接换场景；必须写出入睡前抗拒或自我解释、切换时的感官异常或时间断裂、醒来后的短暂错位、通过衣物/身体/地点/时间/他人反应确认已回到另一层。",
               "开写前先把本章拆成 4-7 个可见场面，但不要把场面表输出；正文只能输出小说内容。",
               "本章必须有现场阻力：质疑、催促、证物将被处理、错误结论压过主角、有人遮掩或时间限制。不能写成主角一路顺畅观察和讲解。",
               "专业判断必须写成冲突里的动作：先有人误判或阻拦，再由主角抓住一个具体细节反击。每个专业点最多用一两句，不要连续教学。",
-              "每 400 字内至少出现一次外部反应、误解、打断、风险升级或新信息，不要整段整段平铺叙事。",
+              draftContext.closureMode
+                ? "收束章每 400 字内可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作制造节奏，不要强行加入新信息。"
+                : "每 400 字内至少出现一次外部反应、误解、打断、风险升级或新信息，不要整段整段平铺叙事。",
               "第一遍正文就要避开机器腔：不要集中交代人物履历、学历、技能、世界观规则；每次最多露出一个必要信息，并让它从动作、物件、对话或现场压力里出现。",
               "禁止用旁白给读者做结论：少写“这意味着/说明/证明/显然/无疑/某种/仿佛”；要让人物看见、摸到、听到、被催促或被反驳。",
               "不要使用“深吸一口气、下意识、脑子里、瞳孔猛缩、瞳孔骤缩、瞳孔微缩、眸色一沉、心头一震、心头一紧、倒吸一口凉气”作为默认反应；写更具体的手、眼、步子、语气、物件变化或直接删掉。",
@@ -3176,6 +3384,8 @@ export async function* streamChapterDraftTextWithAi(
               "continuityFacts 是前文已发生事实，优先级高于临场套话；如果其中显示两个人物已经见过、递过文书、问过话、审过同一案或知道对方身份，正文不得再写成初次相识、重新确认身份或完全陌生。",
               "previousDraftTail 是上一章实际正文尾段；如果它与 taskCard.continuity、taskCard.endingHook 或 lastLedger 冲突，必须以 previousDraftTail 为准。",
               "如果 previousDraftTail 不为空，开头必须直接承接上一章尾段的最后状态，先写过渡桥段，再进入本章冲突。",
+              "跨章承接对白时必须问答闭合：上一句问“哪里/谁/什么/为什么”时，下一句不能直接回答“有/没有/是/不是”；如果要引出新人、新地点或新线索，先补一句可承接的追问或解释。",
+              "如果 previousDraftTail 显示上一场面已经完成、离开或转入后续状态，本章开头不得倒回同一场面继续做正式处理、重复交代或重新发言；收益和手续必须写成后续承接场面、通知、交接或新的现实场面。",
               "任务卡 continuity 里提到但上一章尾段没有出现的事件，必须在本章正文中现场写出来，不能用“刚才已经发生”一笔带过。",
               "先承接上一章真实正文落点，再推进本章目标。",
               "允许章节功能轮换：不是每章都必须大战、打脸或升级；可以写机制试错、日常经营、关系铺垫、低强度压力和小收益，但必须服务核心承诺。",
@@ -3183,9 +3393,14 @@ export async function* streamChapterDraftTextWithAi(
               "爽点必须有压制和释放，不要空泛总结。",
               "人物不能知道自己不知道的信息。",
               "正文里凡是发生人物关系、伏笔、主线推进、战力能力、资源收益、知情边界变化，必须让读者从动作、对话、结果和现场后果里看出来；不要用台账口吻解释“变化前后”。",
-              "结尾必须留下可承接的阶段性压力；任务卡章末钩子优先兑现，但不要为了它超长展开。"
-            ]
-          },
+                draftContext.closureMode
+                  ? "结尾必须先完成本章阶段落点，再用最后一两句留下轻钩子；不得为了章末钩子超长展开。"
+                  : "结尾必须留下可承接的阶段性压力；任务卡章末钩子优先兑现，但不要为了它超长展开。",
+                draftContext.closureMode
+                  ? "收束/休整/结算章最后一段不得停在推门、进屋、拐入新地点、看见陌生人、发现新物件或听见异常声音；这些会把轻钩子写成下一章必须追的支线。"
+                  : ""
+              ]
+            },
           null,
           2
         )
@@ -3208,6 +3423,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
   const currentCharacters = countDraftCharacters(currentContent);
   const minCharacters = minimumDraftExpansionCharacters(targetWordCount);
   const maxCharacters = maximumDraftCharacters(targetWordCount);
+  const draftContext = buildDraftGenerationPayloadContext(context);
 
   yield* requestAiTextStream({
     messages: [
@@ -3225,18 +3441,22 @@ export async function* streamChapterDraftExpansionTextWithAi(
             maxCharacters,
             currentCharacters,
             currentContent,
-            taskCard: context.taskCard,
+            taskCard: draftContext.draftTaskCard,
             projectName: context.projectName,
             projectDescription: context.projectDescription,
             bible: context.bible,
             plotState: context.plotState,
             longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
+            lastLedger: draftContext.lastLedger,
+            previousDraftTail: draftContext.previousDraftTail,
+            closureMode: draftContext.closureMode,
             continuityFacts: (context.continuityFacts ?? []).slice(0, 14),
             characters: context.characters,
             foreshadowings: context.foreshadowings,
             continuationRules: [
               "只续写正文后半段，不要重复已有内容。",
               `续写后整章最高不得超过 ${maxCharacters} 字。`,
+              ...draftContext.closureRules,
               "continuityFacts 是前文已发生事实；续写不得把已经见过、已经知道对方身份或已经处理过同一事件的人物写成陌生人。",
               "如果当前正文已经接近或超过最高字数，只补完整句和章末落点，不要继续展开新战斗、新设定或新对话。",
               "续写也不能补成说明书：不要集中补人物履历、专业知识或世界观规则；只补场面推进、动作、对白和结尾落点。",
@@ -3245,15 +3465,20 @@ export async function* streamChapterDraftExpansionTextWithAi(
               ...buildLongFormPlanRules(context.longFormPlan, context.taskCard.chapterNumber),
               "续写也必须遵守任务卡 rulesNotToBreak 与创作圣经中的题材边界、主分类、作品标签和禁止偏离项；不得补写成另一个频道或另一个题材。",
               "如果 currentContent 最后一句明显没写完，必须从断句处自然续上，补完该句，再完成本章事件落点。",
-              "如果 currentContent 已经接近或超过最高字数，不要为了补完 taskCard.endingHook 强行展开；只补完整句和阶段性落点，把未完成任务留给下一章承接。",
+              "如果 currentContent 已经接近或超过最高字数，不要为了普通压力钩子强行展开；只补完整句和阶段性落点，把未完成任务留给下一章承接。若任务卡给的是具体可见场面钩子，优先压缩收尾解释，把续写落到该场面的关键动作和外部打断上。",
               "如果任务卡明确写“本章必须”落实心理适应、身体反应或现实回响，而已有正文完全没有体现，续写只补一处短促、具体的反应；如果只是阶段性提示，不要为了打卡强行补害怕、反胃或手抖。",
-              "如果 currentContent 缺少 taskCard.requiredCharacters 中的具体姓名，续写必须让缺失人物以原名出场并产生有效动作、对白、观察、质询、指认、阻拦或选择。",
-              "如果 currentContent 缺少 taskCard.foreshadowingTasks 中的本章回收/处理任务，续写必须补出对应物件、痕迹、人物反应或对质过程；不要只写概括结论。",
+              "如果 currentContent 缺少 taskCard.requiredCharacters 中的具体人物，续写必须让缺失人物以自然称呼出场并产生有效动作、对白、观察、质询、指认、阻拦或选择。",
+              "如果 currentContent 缺少 taskCard.foreshadowingTasks 中明确要求本章回收/处理/验证/对质的任务，续写必须补出对应对象、痕迹、人物反应或对质过程；不要只写概括结论。若任务写的是暂不回收或只确认方向，只需轻触并压住。",
               "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
               "如果已有内容过早收尾，可以补一个更清楚的阶段性压力或未解决问题。",
-              "任务卡 endingHook 优先兑现；如果篇幅不够，允许不完整兑现，但不要把正文写成半截。",
-              "续写结尾必须以完整句子结束，不能停在逗号、顿号、破折号、连词或半句话。"
-            ]
+                draftContext.closureMode
+                  ? "收束章续写不得为了普通阶段后钩子继续展开暗线；具体可见场面钩子只兑现可见动作和外部压力，不继续追查。"
+                  : "任务卡普通压力钩子优先兑现；如果篇幅不够，允许不完整兑现，但具体可见场面钩子必须压缩前置内容后进入场面，不要把正文写成半截。",
+                draftContext.closureMode
+                  ? "收束/休整/结算章续写的最后一段必须落在结果、状态、关系、奖励、休息、返回或情绪余波上，不得补成新的场景入口。"
+                  : "",
+                "续写结尾必须以完整句子结束，不能停在逗号、顿号、破折号、连词或半句话。"
+              ]
           },
           null,
           2
@@ -3263,6 +3488,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
     temperature: 0.42,
     maxTokens: estimateDraftContinuationMaxTokens(targetWordCount, currentCharacters),
     timeoutMs: CHAPTER_DRAFT_REVISION_TIMEOUT_MS,
+    allowLengthFinish: true,
     onUsage
   });
 }
@@ -3306,6 +3532,7 @@ export async function* streamChapterDraftClosingTextWithAi(
     temperature: 0.28,
     maxTokens: estimateDraftClosingMaxTokens(),
     timeoutMs: CHAPTER_DRAFT_REVISION_TIMEOUT_MS,
+    allowLengthFinish: true,
     onUsage
   });
 }
@@ -3318,6 +3545,7 @@ export async function repairChapterDraftAgainstTaskCardWithAi(
 ): Promise<DraftPolishResult> {
   const normalizedTargetWordCount = normalizeDraftTargetWordCount(targetWordCount ?? context.targetWordCount);
   const maxCharacters = maximumDraftCharacters(normalizedTargetWordCount);
+  const draftContext = buildDraftGenerationPayloadContext(context);
   const response = await requestAiJson<{ content?: string }>({
     messages: [
       {
@@ -3333,21 +3561,27 @@ export async function repairChapterDraftAgainstTaskCardWithAi(
             maxCharacters,
             repairIssues,
             currentContent: content,
-            taskCard: context.taskCard,
+            taskCard: draftContext.draftTaskCard,
             projectName: context.projectName,
             projectDescription: context.projectDescription,
             bible: context.bible,
             plotState: context.plotState,
             longFormPlan: buildLongFormPlanSummary(context.longFormPlan),
-            lastLedger: context.lastLedger,
+            lastLedger: draftContext.lastLedger,
+            previousDraftTail: draftContext.previousDraftTail,
+            closureMode: draftContext.closureMode,
             continuityFacts: (context.continuityFacts ?? []).slice(0, 14),
             characters: context.characters,
             foreshadowings: context.foreshadowings,
             repairRules: [
-              "必出人物必须在正文中以任务卡给出的姓名实际出现，并发生有效动作、对白、观察、质询、指认、阻拦或选择；不能只在台账式旁白里提一下。",
-              "伏笔任务如果要求回收物件、染料、账本、指纹、供词、旧线索或人物身上痕迹，正文必须让读者看到对应物件/痕迹/对质过程，不能只写成结论。",
+              "必出人物必须在正文中实际出现，并发生有效动作、对白、观察、质询、指认、阻拦或选择；若任务卡写的是“身份/职务+称呼”，正文可使用自然称呼，不能只在台账式旁白里提一下。",
+              "伏笔任务只有明确要求本章回收、处理、验证、比对、对质或定责时才必须补场面；若任务写的是暂不回收、只确认方向、只保留钩子或不展开，只需轻触并压住，不能扩成调查链。",
+              ...draftContext.closureRules,
               "如果正文处于阶段收束模式，必须把新线索降级为案后钩子或背景压力，优先合并既有证据、人物供词和前文线索，推进对质、定责、回收、返回或阶段性结案。",
               "修复时不要新增另一个更大的新案、新地点、新组织、新嫌疑人或多章调查链。",
+              draftContext.closureMode
+                ? "如果正文结尾停在推门、进屋、拐入新地点、看见陌生人、发现新物件或听见异常声音，必须改成结果落定后的轻微余波，不要保留开放式动作入口。"
+                : "",
               "修复可以压缩或删除原文中拖慢节奏、继续扩案的段落，把篇幅让给任务卡硬要求。",
               "保持小说正文形态，不要输出提纲、任务卡、审稿说明或项目符号。",
               "禁止使用破折号“——”。",
@@ -3596,6 +3830,7 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
                 "审稿口径不是要求一章完成整张任务卡；如果正文已经完成一个合理阶段落点，并且未完成任务可以通过章节台账里的“滚入下一章的未完成任务”承接到后续章节，不要标为任务未完成。",
                 "开局任务蓝图是开局任务队列和节奏参考，不是严格章节编号；如果上一章任务拆成多章完成，不要仅因第N章没有执行蓝图第N条就判定跑偏。但如果蓝图中明确写了当前章节号和“必须”要求，应检查任务卡和正文是否落实或正确承接。",
                 "如果正文没有完成任务卡全部内容，应判断是否留下清楚阶段性压力、未解决线索或下一步动作；只有既没阶段落点、又没有可承接方向时，才标为中高风险。",
+                "必须检查行动闭环：如果正文频繁换场、赶路、进入新地点、发现新物件或新线索，但很少验证、排除、对质、复盘、锁定范围或给出阶段结论，应标为 medium severity 的“行动推进多，问题闭环弱”。",
                 "必须逐项核验本章收益：收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否造成阶段越级；如果来源偷换或越级过快，应标为 high severity 的“关键机制失真”。",
                 "如果正文保留了关键机制的名词，但实际让主角靠另一套资源、奇遇、外力或副本收益完成核心成长，应指出这是机制偷换，并建议改成符合关键机制的小收益、线索或外部诱因。",
                 "如果角色为了遮掩真相对外编造收益来源，正文必须明确这是借口或误导，不能让读者或项目台账误以为真实成长来源已经变成另一套机制。",
@@ -3609,7 +3844,8 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
                 "issues[].type 必须是中文短标签，例如：规则违反、AI 味、主线偏移风险、人物行为风险、章末钩子弱化、设定一致性问题；禁止输出 rule violation、consistency issue、style issue 等英文类型。",
                 "problem、location、suggestion、overall 和 stateUpdateSuggestions 都是给用户看的中文文案，不要写 characters、characterProfiles、taskCard、chapterGoal、mainPlotProgress、pleasurePoint、endingHook、foreshadowingTasks、rulesNotToBreak、carryOverTasks、plotState、bible、longFormPlan、ledger、chapterLedger、currentLedger、lastLedger、draft、chapterDraft、currentDraft、previousDraftTail、latestDraftActualEnding、cliffhanger、payoff、style、stateUpdateSuggestions、shouldUpdateState 等内部字段名；请改写成人物档案、章节任务卡、本章目标、主线推进、爽点回报、章末钩子、伏笔任务、不可违反设定、滚入下一章的未完成任务、主线状态、创作圣经、长篇规划、章节台账、当前章节台账、上一章台账、正文草稿、上一章正文结尾、上一章真实结尾、风格、状态同步建议。",
                 "problem、location、suggestion、overall 和 stateUpdateSuggestions 都不要使用破折号“——”或“—”；需要停顿时用逗号、句号、冒号或直接换句。",
-                "如果正文结尾已经留下追问、质疑、异常发现、阻拦或身份暴露风险等可承接压力，不要因为任务卡章末钩子没有完整兑现而标记“章末钩子弱化”；未写完的任务可以留给下一章。",
+                "如果任务卡章末钩子只是抽象压力或方向，且正文结尾已经留下追问、质疑、异常发现、阻拦或身份暴露风险等可承接压力，不要因为钩子没有完整兑现而标记“章末钩子弱化”；未写完的普通任务可以留给下一章。",
+                "如果任务卡章末钩子给出具体可见场面、明确动作、观察对象和外部打断，必须检查正文后半段是否真实进入该场面；不能用泛泛的追问、路上对话、通知、解释或普通压力替代。缺失时标记“具体章末钩子未兑现”。",
                 "审稿建议不得把任务卡章末钩子整段追加到正文里；如果确实需要加强结尾，只能建议补一两句短压力点或提示人工处理。",
                 "不要把人物档案、章节台账或代词推断说成“创作圣经明确规定”。只有 bible 字段原文直接写明的内容，才能称为创作圣经设定；人物姓名、身份、代词、已知/未知信息应称为人物档案或正文证据。",
                 "每条 issue 必须可执行：location 必须逐字摘录正文中真实存在的原句或原段，不允许概括、改写、仿写或拼接正文；如果无法逐字摘录，只能写“全文/相关段落”，并在 problem 里说明需人工定位。",

@@ -4,6 +4,7 @@ import { toAuthUser } from "@/lib/auth-utils";
 import { getBillingMode } from "@/lib/billing-mode";
 import {
   getDesktopLicenseCandidate,
+  getAccessPolicyFromStore,
   refreshDesktopLicenseStateFromRemoteCenter,
   resolveDesktopLicenseState,
   type DesktopLicenseState
@@ -97,14 +98,17 @@ export async function getSubscriptionActivationStatus() {
   }
 
   const store = await readStore();
+  const accessPolicy = isDesktopRuntime() ? getAccessPolicyFromStore(store) : null;
   const currentUser = await getCurrentUserFromStore(store);
   const candidate = currentUser
     ? { user: currentUser, state: resolveDesktopLicenseState(store, currentUser), changed: false }
     : getDesktopLicenseCandidate(store);
   const candidateUser = candidate.user;
-  const licenseState: DesktopLicenseState = candidateUser
-    ? await refreshDesktopLicenseStateFromRemoteCenter(store, candidateUser, candidate.state)
-    : candidate.state;
+  const licenseState: DesktopLicenseState = accessPolicy?.requireActivation === false
+    ? { status: "active", changed: false }
+    : candidateUser
+      ? await refreshDesktopLicenseStateFromRemoteCenter(store, candidateUser, candidate.state)
+      : candidate.state;
 
   if (candidate.changed || licenseState.changed) {
     await writeStore(store);
@@ -115,9 +119,9 @@ export async function getSubscriptionActivationStatus() {
     activated: licenseState.status === "active",
     expired: licenseState.status === "expired" || licenseState.status === "disabled",
     licenseStatus: licenseState.status,
-    licenseExpiresAt: licenseState.expiresAt,
+    licenseExpiresAt: accessPolicy?.requireActivation === false ? undefined : licenseState.expiresAt,
     licenseActivatedAt: candidateUser?.licenseActivatedAt ?? "",
-    message: licenseState.message ?? "",
+    message: accessPolicy?.requireActivation === false ? "当前为直接可用模式" : licenseState.message ?? "",
     currentUser: currentUser ? toAuthUser(currentUser) : null,
     customerId: currentUser?.licenseCustomerId ?? candidateUser?.licenseCustomerId ?? "",
     serverNow: now()

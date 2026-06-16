@@ -4,6 +4,7 @@ import { ApiButton } from "@/components/api-form";
 import { DraftExportActions } from "@/components/draft-export-actions";
 import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { Panel } from "@/components/panel";
+import { StreamDraftButton } from "@/components/stream-draft-button";
 import { getProjectWritingState } from "@/lib/projects";
 import { formatReviewText } from "@/lib/review-display";
 
@@ -112,6 +113,22 @@ export default async function ChapterDraftReaderPage({
               initialContent={draft.content}
               reviewIssues={review?.issues ?? []}
             />
+            <div className="task-block">
+              <div className="task-title">保留任务卡重写正文</div>
+              <div className="muted">
+                用本章原任务卡重新生成正文；保存成功后会替换当前正文，并清空旧台账和旧审稿。
+              </div>
+              <StreamDraftButton
+                projectId={projectId}
+                taskCardId={draft.taskCardId}
+                draftId={draft.id}
+                projectName={writingState.project.name}
+                chapterNumber={draft.chapterNumber}
+                title={draft.title}
+                mode="regenerate"
+                initialContent={draft.content}
+              />
+            </div>
           </Panel>
         </main>
 

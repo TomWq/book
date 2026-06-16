@@ -1580,6 +1580,7 @@ function syncCoreTables(store: unknown) {
 
   try {
     sync();
+    upsertAppStateInSqlite(JSON.stringify(store));
   } finally {
     db.close();
   }
@@ -1829,8 +1830,11 @@ function readCoreStoreFromDb<T>(fallback: T) {
     const aiSettingRows = rows<Record<string, unknown>>(db, "AiSetting");
     const coverImageSettingRows = rows<Record<string, unknown>>(db, "CoverImageSetting");
 
+    const appState = readAppStateFromSqlite(fallback) as Partial<T> | null;
+
     return {
       ...fallback,
+      ...(appState ?? {}),
       projects: rows(db, "Project").map((item) => ({
         id: text(item.id),
         ownerUserId: maybeString(item.ownerUserId),

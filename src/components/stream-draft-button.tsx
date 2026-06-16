@@ -63,6 +63,8 @@ export function StreamDraftButton({
       ? "新正文已生成，正在整理并替换当前正文，请稍候。"
       : "正文已生成，正在整理、保存草稿并更新章节台账，请稍候。"
     : "正在生成正文，实时内容会持续出现在下方。";
+  const isRegenerateDone = isRegenerating && state.status === "done";
+  const shouldShowStreamResultTools = !isRegenerateDone;
   const normalizedPreviewTarget = normalizedTargetWordCount();
   const targetRangeText = `${Math.floor(normalizedPreviewTarget * 0.82)}-${Math.ceil(normalizedPreviewTarget * 1.25)}`;
   const previewOverlay = (
@@ -342,40 +344,48 @@ export function StreamDraftButton({
         <div className="field stream-draft-field">
           <div className="field-label-row">
             <div className="field-label">
-              {state.status === "done"
-                ? isRegenerating
+              {isRegenerateDone
+                ? "重写已完成"
+                : state.status === "done"
+                  ? isRegenerating
                   ? "流式重写完成，已替换正文"
                   : "流式生成完成，已保存草稿"
                 : isSavingStreamDraft
                   ? "正文已生成，正在保存"
                   : "实时正文"}
             </div>
-            <div className="hero-actions">
-              <span className="field-hint">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
-              <DraftExportActions
-                content={state.content}
-                projectName={projectName}
-                chapterNumber={chapterNumber}
-                title={title}
-                compact
-              />
-              <button
-                className="mini-action-button"
-                type="button"
-                onClick={() => setIsPreviewOpen(true)}
-                disabled={!state.content.trim()}
-              >
-                全屏预览
-              </button>
-            </div>
+            {shouldShowStreamResultTools ? (
+              <div className="hero-actions">
+                <span className="field-hint">{liveCharacterCount.toLocaleString("zh-CN")} 字</span>
+                <DraftExportActions
+                  content={state.content}
+                  projectName={projectName}
+                  chapterNumber={chapterNumber}
+                  title={title}
+                  compact
+                />
+                <button
+                  className="mini-action-button"
+                  type="button"
+                  onClick={() => setIsPreviewOpen(true)}
+                  disabled={!state.content.trim()}
+                >
+                  全屏预览
+                </button>
+              </div>
+            ) : null}
           </div>
           {state.status === "running" ? <div className="pill form-status">{runningStatusText}</div> : null}
           {state.status === "done" ? (
             <div className="pill success">
-              {isRegenerating ? "正文已重写，旧台账已清空，请重新生成章节台账。" : "草稿已保存，台账已更新，可以继续审稿。"}
+              {isRegenerating
+                ? "正文已重写并替换，上方“可编辑正文”会同步为最新版本；旧台账已清空，请重新生成章节台账。"
+                : "草稿已保存，台账已更新，可以继续审稿。"}
             </div>
           ) : null}
-          <textarea className="stream-draft-textarea" value={state.content} readOnly />
+          {shouldShowStreamResultTools ? (
+            <textarea className="stream-draft-textarea" value={state.content} readOnly />
+          ) : null}
           {state.status === "error" ? <div className="pill danger">{state.error}</div> : null}
         </div>
       ) : null}

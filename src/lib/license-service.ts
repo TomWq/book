@@ -6,6 +6,7 @@ import { readStore, writeStore } from "@/lib/project-store";
 import type {
   AdminLicenseCenterSummary,
   AppStore,
+  StoredAccessPolicy,
   StoredLicenseActivationLog,
   StoredLicenseCode,
   StoredUser
@@ -52,8 +53,53 @@ export type LicenseActivationResult = {
   customerContact?: string;
 };
 
+export type LicenseAccessPolicyResult = {
+  requireActivation: boolean;
+  mode: "license_required" | "free_access";
+  updatedAt?: string;
+};
+
 function now() {
   return new Date().toISOString();
+}
+
+export function normalizeAccessPolicy(policy?: StoredAccessPolicy | null): StoredAccessPolicy {
+  return {
+    requireActivation: policy?.requireActivation !== false,
+    updatedAt: policy?.updatedAt,
+    updatedBy: policy?.updatedBy
+  };
+}
+
+export function accessPolicyToResult(policy?: StoredAccessPolicy | null): LicenseAccessPolicyResult {
+  const normalized = normalizeAccessPolicy(policy);
+
+  return {
+    requireActivation: normalized.requireActivation,
+    mode: normalized.requireActivation ? "license_required" : "free_access",
+    updatedAt: normalized.updatedAt
+  };
+}
+
+export function getAccessPolicyFromStore(store: AppStore) {
+  return normalizeAccessPolicy(store.accessPolicy);
+}
+
+export function setAccessPolicyInStore(
+  store: AppStore,
+  input: {
+    requireActivation: boolean;
+    updatedBy?: string;
+  }
+) {
+  const timestamp = now();
+  store.accessPolicy = {
+    requireActivation: Boolean(input.requireActivation),
+    updatedAt: timestamp,
+    updatedBy: normalizeLicenseText(input.updatedBy)
+  };
+
+  return store.accessPolicy;
 }
 
 export function normalizeLicenseCodePurpose(value: unknown): LicenseCodePurpose {
@@ -231,6 +277,12 @@ const ROUTINE_LICENSE_CHECK_CLIENT = "本地客户端状态校验";
 const ROUTINE_LICENSE_LOG_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_OFFLINE_GRACE_DAYS = 7;
 const DEFAULT_DESKTOP_TRIAL_MINUTES = 24 * 60;
+const ACCESS_POLICY_CACHE_KEY = "__aiNovelLicenseAccessPolicyCache";
+
+type AccessPolicyCache = {
+  expiresAtMs: number;
+  value: StoredAccessPolicy;
+} | null;
 
 function isRoutineLicenseCheck(clientName?: string) {
   return normalizeLicenseText(clientName) === ROUTINE_LICENSE_CHECK_CLIENT;
@@ -333,6 +385,27 @@ function getDesktopTrialDurationMinutes() {
   }
 
   return DEFAULT_DESKTOP_TRIAL_MINUTES;
+}
+
+function getAccessPolicyRefreshIntervalMs() {
+  const configured = Number(process.env.LICENSE_ACCESS_POLICY_CACHE_MS ?? "");
+  return Number.isFinite(configured) && configured >= 0 ? configured : 30_000;
+}
+
+function getGlobalAccessPolicyCache() {
+  return (globalThis as typeof globalThis & { [ACCESS_POLICY_CACHE_KEY]?: AccessPolicyCache })[
+    ACCESS_POLICY_CACHE_KEY
+  ] ?? null;
+}
+
+function setGlobalAccessPolicyCache(value: AccessPolicyCache) {
+  (globalThis as typeof globalThis & { [ACCESS_POLICY_CACHE_KEY]?: AccessPolicyCache })[
+    ACCESS_POLICY_CACHE_KEY
+  ] = value;
+}
+
+export function clearAccessPolicyCache() {
+  setGlobalAccessPolicyCache(null);
 }
 
 export function getTrialLicenseCodeHash(machineHash: string) {
@@ -470,6 +543,53 @@ function postJsonWithSocksProxy(input: {
     });
     request.on("error", reject);
     request.write(body);
+    request.end();
+  });
+}
+
+function getJsonWithSocksProxy(input: {
+  url: string;
+  timeoutMs: number;
+  agent: SocksProxyAgent;
+}) {
+  const target = new URL(input.url);
+
+  return new Promise<{ ok: boolean; status: number; body: unknown }>((resolve, reject) => {
+    const request = httpsRequest(
+      target,
+      {
+        method: "GET",
+        agent: input.agent,
+        timeout: input.timeoutMs,
+        headers: {
+          "Accept": "application/json"
+        }
+      },
+      (response) => {
+        let raw = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          raw += chunk;
+        });
+        response.on("end", () => {
+          const status = response.statusCode ?? 0;
+          let parsed: unknown = null;
+
+          try {
+            parsed = raw ? JSON.parse(raw) : null;
+          } catch {
+            parsed = raw;
+          }
+
+          resolve({ ok: status >= 200 && status < 300, status, body: parsed });
+        });
+      }
+    );
+
+    request.on("timeout", () => {
+      request.destroy(new Error("timeout"));
+    });
+    request.on("error", reject);
     request.end();
   });
 }
@@ -680,6 +800,93 @@ export async function requestTrialLicenseViaRemoteCenter(input: TrialLicenseInpu
   return (result.body as { license?: LicenseActivationResult } | null)?.license as LicenseActivationResult;
 }
 
+export async function getAccessPolicyViaRemoteCenter() {
+  const serverUrl = getLicenseServerUrl();
+
+  if (!serverUrl) {
+    return null;
+  }
+
+  const cacheMs = getAccessPolicyRefreshIntervalMs();
+  const cached = getGlobalAccessPolicyCache();
+
+  if (cacheMs > 0 && cached && Date.now() < cached.expiresAtMs) {
+    return accessPolicyToResult(cached.value);
+  }
+
+  const timeoutMs = Number(process.env.LICENSE_SERVER_TIMEOUT_MS ?? 30000);
+  const url = serverUrl + "/api/license/access-policy";
+  const proxyAgent = getLicenseServerProxyAgent();
+  let result: { ok: boolean; status: number; body: unknown };
+
+  try {
+    if (proxyAgent) {
+      result = await getJsonWithSocksProxy({
+        url,
+        timeoutMs,
+        agent: proxyAgent
+      });
+    } else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const raw = await response.text();
+        let body: unknown = null;
+
+        try {
+          body = raw ? JSON.parse(raw) : null;
+        } catch {
+          body = raw;
+        }
+
+        result = {
+          ok: response.ok,
+          status: response.status,
+          body
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  if (!result.ok) {
+    return null;
+  }
+
+  const policy = (result.body as { accessPolicy?: LicenseAccessPolicyResult } | null)?.accessPolicy;
+
+  if (!policy || typeof policy !== "object") {
+    return null;
+  }
+
+  const normalized = {
+    requireActivation: policy.requireActivation !== false,
+    mode: policy.requireActivation === false ? "free_access" as const : "license_required" as const,
+    updatedAt: policy.updatedAt
+  };
+
+  if (cacheMs > 0) {
+    setGlobalAccessPolicyCache({
+      expiresAtMs: Date.now() + cacheMs,
+      value: {
+        requireActivation: normalized.requireActivation,
+        updatedAt: normalized.updatedAt
+      }
+    });
+  }
+
+  return normalized;
+}
+
 export async function requestTrialLicenseWithCenter(input: TrialLicenseInput): Promise<LicenseActivationResult> {
   const machineHash = normalizeMachineHash(input.machineHash);
 
@@ -796,6 +1003,7 @@ export async function requestTrialLicenseWithCenter(input: TrialLicenseInput): P
 export function getDesktopLicenseCandidate(store: AppStore) {
   const candidates = store.users
     .filter((item) => Boolean(item.licenseCustomerId || item.licenseCodeHash))
+    .filter((item) => item.licenseCustomerId !== "free-access")
     .filter((item) => !item.licenseSignedOutAt)
     .slice()
     .sort((a, b) => {
@@ -838,6 +1046,22 @@ export function resolveDesktopLicenseState(store: AppStore, user: StoredUser): D
       message: "已退出本机授权，请重新输入激活码",
       changed: false
     };
+  }
+
+  if (user.licenseCustomerId === "free-access") {
+    const accessPolicy = getAccessPolicyFromStore(store);
+
+    return accessPolicy.requireActivation
+      ? {
+          status: "inactive",
+          message: "当前已恢复激活码模式，请输入正式授权码",
+          changed: false
+        }
+      : {
+          status: "active",
+          message: "当前为直接可用模式",
+          changed: false
+        };
   }
 
   const codeHash = user.licenseCodeHash?.trim() ?? "";
@@ -1350,6 +1574,7 @@ export function buildAdminLicenseCenter(
     }));
 
   return {
+    accessPolicy: getAccessPolicyFromStore(store),
     total: store.licenseCodes.length,
     unused: store.licenseCodes.filter((item) => item.status === "unused").length,
     active: store.licenseCodes.filter((item) => item.status === "used").length,

@@ -297,7 +297,7 @@ async function streamGeneratedChapterDraft(input: {
       const isLengthLimit = message.includes("长度限制") || message.toLowerCase().includes("length");
 
       if (content.trim()) {
-        if ((isLengthLimit || isChapterDraftEndingIncomplete(content)) && !hasUsableDraftContent(content, targetWordCount)) {
+        if (isLengthLimit || isChapterDraftEndingIncomplete(content)) {
           try {
             await appendClosing(`AI 输出被长度限制截断，正在补完整句结尾：当前 ${countDraftCharacters(content)} 字`);
 
@@ -317,6 +317,14 @@ async function streamGeneratedChapterDraft(input: {
             hasUsableDraftContent(completedContent, targetWordCount)
             && !isChapterDraftEndingIncomplete(completedContent)
           ) {
+            content = completedContent;
+          }
+        }
+
+        if (isLengthLimit && hasUsableDraftContent(content, targetWordCount)) {
+          const completedContent = prepareChapterDraftContentForForcedCompleteSave(content, targetWordCount);
+
+          if (completedContent && hasUsableDraftContent(completedContent, targetWordCount)) {
             content = completedContent;
           }
         }

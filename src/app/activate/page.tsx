@@ -4,6 +4,7 @@ import { AppIconMark } from "@/components/app-icon-mark";
 import { LicenseActivationForm } from "@/components/license-activation-form";
 import { isDesktopRuntime } from "@/lib/app-runtime";
 import { getSubscriptionActivationStatus } from "@/lib/desktop-license-status";
+import { getAccessPolicyViaRemoteCenter } from "@/lib/license-service";
 import { getCurrentUser } from "@/lib/projects";
 
 function normalizeActivationError(value?: string) {
@@ -40,11 +41,16 @@ export default async function ActivatePage({
   const replaceExisting = desktopRuntime && params.mode === "replace";
   const rawError = params.error ?? "";
   const normalizedError = normalizeActivationError(rawError);
+  const accessPolicy = desktopRuntime ? await getAccessPolicyViaRemoteCenter() : null;
   const status = desktopRuntime ? await getSubscriptionActivationStatus() : null;
   const currentUser = desktopRuntime ? status?.currentUser : await getCurrentUser();
 
   if (!replaceExisting && !rawError && currentUser) {
     redirect(nextPath);
+  }
+
+  if (desktopRuntime && accessPolicy?.requireActivation === false && !rawError) {
+    redirect(`/api/license/restore?next=${encodeURIComponent(nextPath)}`);
   }
 
   if (desktopRuntime && !replaceExisting && !rawError && status?.activated) {
@@ -111,7 +117,9 @@ export default async function ActivatePage({
                 {replaceExisting
                   ? "输入新的授权码，本机作品和设置会继续保留。"
                   : desktopRuntime
-                    ? "首次启动会自动开通体验；体验到期后，输入正式桌面授权码继续使用。"
+                    ? accessPolicy?.requireActivation === false
+                      ? "当前为直接可用模式，打开软件会自动进入工作台。"
+                      : "首次启动会自动开通体验；体验到期后，输入正式桌面授权码继续使用。"
                     : "输入交付给你的网页特邀授权码，验证后进入网页工作台。"}
               </p>
             </div>

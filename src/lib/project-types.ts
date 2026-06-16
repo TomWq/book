@@ -689,7 +689,16 @@ export type StoredSession = {
   lastSeenAt: string;
 };
 
+export type ActivationAccessMode = "license_required" | "free_access";
+
+export type StoredAccessPolicy = {
+  requireActivation: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+};
+
 export type AppStore = {
+  accessPolicy?: StoredAccessPolicy;
   users: StoredUser[];
   sessions: StoredSession[];
   projects: StoredProject[];
@@ -834,6 +843,7 @@ export type AdminLicenseSummary = {
 };
 
 export type AdminLicenseCenterSummary = {
+  accessPolicy: StoredAccessPolicy;
   total: number;
   unused: number;
   active: number;

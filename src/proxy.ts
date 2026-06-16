@@ -87,6 +87,7 @@ export async function proxy(request: NextRequest) {
       pathname === "/downloads" ||
       pathname === "/manual" ||
       pathname === "/api/license/activate" ||
+      pathname === "/api/license/access-policy" ||
       pathname === "/api/license/trial" ||
       pathname === "/api/license/web-login" ||
       pathname === "/api/license/restore" ||
@@ -144,6 +145,7 @@ export async function proxy(request: NextRequest) {
     "/api/download",
     "/api/jobs/worker",
     "/api/license/activate",
+    "/api/license/access-policy",
     "/api/license/trial",
     "/api/license/web-login",
     "/api/license/restore",

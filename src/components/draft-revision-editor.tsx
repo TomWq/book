@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActionLoadingOverlay } from "@/components/api-form";
 import { formatReviewText } from "@/lib/review-display";
 
@@ -450,6 +450,14 @@ export function DraftRevisionEditor({
   const [focusedIssueIndex, setFocusedIssueIndex] = useState<number | null>(null);
   const characterCount = countTextCharacters(content);
   const hasChanges = content !== initialContent;
+
+  useEffect(() => {
+    setContent(initialContent);
+    setState({ status: "idle" });
+    setApplyResult(null);
+    setIssueStatuses({});
+    setFocusedIssueIndex(null);
+  }, [draftId, initialContent]);
 
   function issueStatus(issue: ReviewIssue, index: number) {
     return issueStatuses[index] ?? (canAutoApplyIssue(content, issue) ? "pending" : "manual");
