@@ -2865,18 +2865,25 @@ function buildProtagonistEmbodimentRules(context: {
     context.plotState?.mainGoal,
     context.plotState?.currentStage
   ].filter(Boolean).join("\n");
-  const hasDislocationPremise = /穿越|快穿|入梦|梦境|重生|异世|古代|末世|规则怪谈|无限流|副本/.test(sourceText);
+  const hasExplicitLayerShiftPremise =
+    /穿越|快穿|入梦|梦境|重生|异世|前世|今生|主世界|另一层|另一个世界|副本世界|副本空间|主神空间|现实世界|原本生活层|回到现实|切回现实|醒来/.test(sourceText);
+  const hasHighConceptRulePremise = /规则怪谈|无限流|副本|系统/.test(sourceText);
   const hasHighPressurePremise = /悬疑|刑侦|法医|尸体|命案|凶案|血|恐怖|惊悚|审讯|追杀|逃亡|灾变/.test(sourceText);
-  const dislocationRules = hasDislocationPremise
+  const dislocationRules = hasExplicitLayerShiftPremise
     ? [
         "如果涉及现实/梦境、现世/异世、前世/今生、主世界/副本等双层空间切换，回到原本生活层后必须至少写一个有效现实场面，而不是一句醒来又立刻入睡。有效现实场面需要包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的至少两项。",
         "双层空间切换不能只当转场按钮；每次切回现实或原本生活层，都要让现实剧情改变主角状态、判断、资源、时间压力或下一次进入另一层空间的心态。",
         "从原本生活层再次进入另一层空间时，不能写成普通睡觉换场景；必须有四拍：入睡前的抗拒/自我解释，切换时的感官异常或时间断裂，醒来后的短暂错位，最后通过衣物、身体、地点、时间或他人反应确认已经回到另一层。",
         "面对超常经历时，主角的正常思维顺序是：先否认或现实归因，再被具体感官记忆、身体残留、时间错位或外界细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定，也不能立刻得出确定真相。"
       ]
+    : hasHighConceptRulePremise
+      ? [
+          "如果副本、系统或规则直接叠加在现实职场/学校/城市生活中，不要默认写成梦境、穿越、醒来或双层空间切换；重点写现实压力与异常规则同时压住主角。",
+          "面对突然出现的系统、规则或副本面板，主角可以有短促怀疑、试探和低成本自检，但不要强行安排切回现实、再入梦或跨层转场。"
+        ]
     : [];
 
-  if (!hasDislocationPremise && !hasHighPressurePremise) {
+  if (!hasExplicitLayerShiftPremise && !hasHighConceptRulePremise && !hasHighPressurePremise) {
     return [
       "主角不能只像功能工具人推进剧情；需要在关键压力点保留具体身体反应、情绪判断或现实压力回响，让人物选择有来源。"
     ];
@@ -2894,7 +2901,9 @@ function buildProtagonistEmbodimentRules(context: {
     "时间与体力必须连续：连续查案、战斗、赶路、审讯或夜探后，要安排可见代价或恢复窗口，例如吃饭、喝水、换药、短睡、轮值、等待天亮、暂回住处、现实醒来缓冲；不能让主角无休止跨场景奔走。",
     "转场必须有时间成本和行动理由：一章内最多保留 2-3 个有效地点，赶路、等待、天色变化和休整可以压缩，但不能完全消失；如果连续多章都是夜间行动，必须处理天亮、休息、官府当值或现实身体疲惫。",
     ...dislocationRules,
-    "如果涉及梦境、穿越、重生或异世，必须区分主观经历时间、异世界时间与现实时间；可以把醒来/再入梦作为休整和现实回响，但必须承接同一世界、同一案件或同一任务进度，不得擅自跳成新世界或重置关系。"
+    hasExplicitLayerShiftPremise
+      ? "如果涉及梦境、穿越、重生或异世，必须区分主观经历时间、异世界时间与现实时间；可以把醒来/再入梦作为休整和现实回响，但必须承接同一世界、同一案件或同一任务进度，不得擅自跳成新世界或重置关系。"
+      : ""
   ];
 }
 
@@ -2998,11 +3007,24 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             userInput: context.userInput ?? {},
             useAnalysisContext: context.useAnalysisContext !== false,
             chapterNumber: context.chapterNumber,
+            chapterScopeRules: context.chapterNumber === 1
+              ? [
+                  "第一章只写开局第一拍，不要把作品简介、灵感、创作圣经里的整条开局连锁压进一章。",
+                  "第一章最多安排一个核心场面、一次机制试错或低成本反击、一处章末压力；后续处罚、公开对质、关系揭示、难度升级和调岗/追责等节点可滚入第2-3章。",
+                  "requiredCharacters 只放本章必须实际出场且参与现场动作的人；项目重要人物、感情线人物或后续关键人物如果本章没有明确行动，不要放进 requiredCharacters。",
+                  "如果作品简介包含多个连续节点，只从中挑本章最前置的1-2个动作原子，其余写成后续承接压力或不要写。"
+                ]
+              : [
+                  "每章只承接1-2个未完成任务，不要为了追赶开局蓝图一次性清空所有节点。",
+                  "requiredCharacters 只放本章必须实际出场并推动冲突的人。"
+                ],
             migrationRules: [
               "title 只写章节标题本身，不要包含“第N章”“Chapter N”或序号；标题不追求工整，允许短句式、动作式、地点异常式或线索式。",
               "title 必须参考 recentChapterTitles 避免连续相同字数和相同句式；如果最近 2 个以上标题都是 4 个中文字，本章 title 禁止再用 4 个中文字。",
               "title 不要压成四字成语式概括；优先抓本章具体冲突、物件、线索、地点压力或章末钩子；避免套用固定模板词、空泛气氛词或万能概括词。",
               "title 不能写成普通动作句，例如“她打开了某物”“他走进某地”“主角发现线索”；应压成有悬念或压力的标题，例如物件异常、地点压力、外部阻拦、错误判断、代价或章末危机。",
+              "title 不能像系统日志、后台记录、剧情摘要或面板数值；禁止出现“+10/-10/倒计时/23:59:58/KPI达标/看见真相/发现真相/锁定真凶”等直白说明式标题。",
+              "title 尽量使用可视化的场面、物件、地点或外部压力，例如“茶水间的锅”“那份PPT”“监控缺口”，不要写成“数值变化，角色看见结果”。",
               "titleAlternatives 必须给 3 个备选标题，且三个备选标题的字数和句式不能相同；至少 2 个不能是 4 个中文字。",
               "输出必须精炼：chapterGoal、continuity、mainPlotProgress、pleasurePoint、endingHook 每项控制在 60-140 个中文字；requiredCharacters 不超过 4 个；foreshadowingTasks 不超过 3 条；rulesNotToBreak 不超过 8 条，每条不超过 60 个中文字。",
               "不要在任务卡里写正文片段、长对白、连续动作描写或完整段落；任务卡只写可执行剧情功能。",
@@ -3014,6 +3036,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "任务卡需要维护配角/暗线节奏：每 3-5 章至少安排一次配角小目标、秘密、亏欠、误判、立场变化、资源代价或小高光；但不得每章硬塞，也不得让支线替代主线。",
               "当 characters 中存在当前目标、秘密、未知信息或态度变化尚未兑现的配角时，本章可选择 1 个作为配角节拍：让他/她提供阻力、误导、帮助、隐瞒、付出代价或暴露新信息，并在 mainPlotProgress 里写清如何回扣主线。",
               "requiredCharacters 不应只长期重复主角和工具人；如果本章是配角节拍章，必须把该配角写入 requiredCharacters，并让其在正文中有实际行动或选择。",
+              "requiredCharacters 不是项目重要人物列表，只能写本章必须实际出场的人；后续男主、幕后人物、感情线人物或只在简介里出现的人，不要因为重要就塞入本章必出。",
               "开局任务蓝图是开局阶段任务队列，不是严格章节编号；当上一章任务拆成多章完成时，不要跳过未完成项，也不要为了追第N章蓝图硬塞新任务。",
               "如果本章主要承接 carryOverTasks，mainPlotProgress 要说明本章承接的是上一章未完成项，并把开局任务蓝图中的新任务延后到后续章节。",
               "如果 latestDraftActualEnding 与 lastLedger.cliffhanger、旧任务卡钩子或主线状态不一致，以 latestDraftActualEnding 为准；缺失事件只能写成后续待发生，不能写成已经发生。",
@@ -3048,7 +3071,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "章节功能可以轮换：允许日常经营、关系铺垫、信息差误会、资源小收益、机制试错、低强度压制，不要每章都强行新敌人、新地图、大战斗或大境界突破。",
               "前10章应优先稳住题材卖点、主角日常循环、关键机制反馈和第一阶段压力；除非大纲明确要求，不要过早开启大型副本或连续升级地图。",
               "必须把 bible.immutableSettings 与 bible.narrativeTaboos 中的主分类、题材边界、作品标签、禁止偏离项写入 rulesNotToBreak，并在本章目标中遵守。",
-              "如果 chapterCharacterConstraints 不为空，本章任务卡必须显式使用这些人物约束，并把相关人物写入 requiredCharacters。",
+              "如果 chapterCharacterConstraints 不为空，只在本章目标、主线推进、爽点或章末钩子里明确安排该人物行动时，才把相关人物写入 requiredCharacters；否则它只是状态参考，不是必出名单。",
               "rulesNotToBreak 中的称谓规则只能写成“按身份和场景使用称谓”；不要生成“全篇统一称某人为姑娘/小姐/公子/大人”等单一称谓硬规则，除非创作圣经明确指定。",
               "如果 relatedInspirations 不为空，必须把这些灵感作为本章任务素材参考，抽象成当前项目自己的情节任务、爽点、伏笔或钩子；不要原样照搬为正文。",
               "可以借鉴“被压制 -> 反击 -> 获得收益 -> 引出更高压力”的节奏，但要换成当前新书自己的冲突、人物和伏笔。"
@@ -3132,6 +3155,8 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 "title 必须参考 recentChapterTitles 避免连续相同字数和相同句式；如果最近 2 个以上标题都是 4 个中文字，本章 title 禁止再用 4 个中文字。",
                 "title 不要压成四字概括或万能气氛词；优先来自本章具体线索、物件、压力或钩子。",
                 "title 不能写成普通动作句，例如“她打开了某物”“他走进某地”“主角发现线索”；应压成有悬念或压力的标题，例如物件异常、地点压力、外部阻拦、错误判断、代价或章末危机。",
+                "title 不能像系统日志、后台记录、剧情摘要或面板数值；禁止出现“+10/-10/倒计时/23:59:58/KPI达标/看见真相/发现真相/锁定真凶”等直白说明式标题。",
+                "title 尽量使用可视化的场面、物件、地点或外部压力，例如“茶水间的锅”“那份PPT”“监控缺口”，不要写成“数值变化，角色看见结果”。",
                 "titleAlternatives 必须给 3 个备选标题，且三个备选标题的字数和句式不能相同；至少 2 个不能是 4 个中文字。",
                 `正文目标约 ${targetWordCount} 字，最高不得超过 ${maxCharacters} 字；篇幅不足时扩写动作、对话、压制过程和爽点释放，不要水字数。`,
                 `最高 ${maxCharacters} 字是硬上限，不是写作目标；正文应在接近 ${Math.round(targetWordCount * 1.08)}-${Math.round(targetWordCount * 1.18)} 字时主动收束，不要写到上限才想结尾。`,

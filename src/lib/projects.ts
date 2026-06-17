@@ -4171,6 +4171,17 @@ function buildOpenEndedClosureTailIssue(content: string, taskCard?: StoredWritin
     : "";
 }
 
+function hasExplicitLayerShiftSignal(text: string) {
+  return /回到现实|回到原本|回到现世|切回现实|切回原本|切回现世|从梦里醒来|从梦中醒来|醒来后|醒过来|再入梦|再次入梦|进入梦境|入梦|梦境|梦里|穿越|重生|异世|前世|今生|主世界|另一层|另一个世界|副本世界|副本空间|主神空间|现实世界|原本生活层/.test(text);
+}
+
+function hasActualLayerShiftInDraft(content: string) {
+  return (
+    /回到现实|回到原本|回到现世|切回现实|切回原本|切回现世|从梦里醒来|从梦中醒来|再入梦|再次入梦|进入梦境|入梦|梦境|梦里|穿越|重生|异世|前世|今生|主世界|另一层|另一个世界|副本世界|副本空间|主神空间|现实世界|原本生活层/.test(content) ||
+    /(醒来|醒过来|再睁开眼|睁开眼时|眼前一黑|沉了下去|失去意识)[\s\S]{0,220}(陌生|不是.*现实|不是.*原来|另一层|另一个世界|梦里|梦境|异世|副本世界|副本空间|身份|衣服|身体|房间|地点|时间|任务|面板|令牌|标记)/.test(content)
+  );
+}
+
 function buildDislocationRealitySceneIssue(content: string, taskCard?: StoredWritingTaskCard | null) {
   if (!taskCard) {
     return "";
@@ -4184,9 +4195,9 @@ function buildDislocationRealitySceneIssue(content: string, taskCard?: StoredWri
     taskCard.endingHook,
     taskCard.rulesNotToBreak.join("\n")
   ].join("\n");
-  const hasDislocationTask = /现实|梦境|梦里|醒来|入梦|穿越|重生|异世|前世|今生|副本|主世界/.test(taskText);
+  const hasDislocationTask = hasExplicitLayerShiftSignal(taskText);
 
-  if (!hasDislocationTask) {
+  if (!hasDislocationTask || !hasActualLayerShiftInDraft(content)) {
     return "";
   }
 
@@ -4233,7 +4244,7 @@ function buildLayerReturnHardCutIssue(content: string, taskCard?: StoredWritingT
     taskCard.rulesNotToBreak.join("\n")
   ].join("\n");
 
-  if (!/现实|原本生活|现世|梦境|梦里|入梦|穿越|异世|副本|主世界|另一层|另一个世界/.test(taskText)) {
+  if (!hasExplicitLayerShiftSignal(taskText)) {
     return "";
   }
 
@@ -5127,12 +5138,19 @@ function isMalformedGeneratedTitle(value: string) {
     /^(?:断有人|判定|判断|推断|确认|证明|说明|表明|发现有人|有人提前|有人已经|有人刚刚|有人未|有人没有)/;
   const danglingConnector =
     /(?:且|并|但|却|而|或|以及|同时|随后|因为|所以|如果|虽然|只是|未|没有|尚未|还没)$/;
+  const systemLogTitle =
+    /(?:信誉值|声望值|经验值|生命值|体力值|积分|进度|倒计时|冷却|KPI|等级|面板|系统提示|任务|副本)[+-－]?\d|[+-－]\d|(?:\d{1,2}:){1,2}\d{1,2}|(?:看见|看到|发现|得知|锁定|确认|查明|揭开)(?:了|到)?(?:真相|真凶|答案|线索|结果)|真相(?:浮现|出现|揭开|大白)|真凶(?:出现|锁定|浮现)/;
+  const explanatoryCommaTitle =
+    /[，,：:]/.test(title) &&
+    /(?:看见|看到|发现|得知|锁定|确认|查明|揭开|证明|说明|反击|翻盘|逆转|获得|扣除|消耗|升级|降低|增加)/.test(title);
 
   return (
     brokenActionPrefix.test(title) ||
     clippedActionWithConnector.test(title) ||
     proseFragment.test(title) ||
     clippedReasoningFragment.test(title) ||
+    systemLogTitle.test(title) ||
+    explanatoryCommaTitle ||
     danglingConnector.test(title) ||
     /(?:于是|然后|接着|随后|之后|以前|时候|期间)$/.test(title)
   );
@@ -5166,6 +5184,10 @@ function chapterTitleQualityScore(value: string) {
   }
 
   if (/门|灯|影|血|火|雨|夜|井|楼|城|街|院|书|纸|刀|钥|铃|镜|信|账|图|牌|印|声|脚步|来客|陌生|裂|旧|残|断|空|冷|黑|红/.test(title)) {
+    score += 2;
+  }
+
+  if (/茶水间|会议室|工位|办公室|监控|PPT|邮箱|日志|表格|账号|电脑|屏幕|文件|守则|后台|权限/.test(title)) {
     score += 2;
   }
 
@@ -5274,6 +5296,26 @@ function buildTitleCandidatesFromText(value: string) {
 
   if (/(?:持刀|带刀|举刀)[^。！？；;\n]{0,14}(?:闯入|逼近|追来|拦住|堵住)/.test(text)) {
     add("刀下阻拦");
+  }
+
+  for (const match of text.matchAll(/([\u4e00-\u9fa5A-Za-z0-9]{2,10})(?:出了|出现|发生|有|闹出|出了点)[^。！？；;\n]{0,8}(?:问题|错|错误|事故|异常|纰漏)/g)) {
+    add(`${normalizeTitleSubjectFragment(match[1]) || match[1]}出错`);
+  }
+
+  for (const match of text.matchAll(/(?:在|把|带到|叫进|走进)?(茶水间|会议室|办公室|工位|监控室)[^。！？；;\n]{0,18}(?:背锅|认了|承认|质问|威胁|警告|逼|叫|谈话|出错|异常)/g)) {
+    add(`${match[1]}的锅`);
+  }
+
+  if (/PPT[^。！？；;\n]{0,20}(?:出错|错误|异常|数据|背锅|认了)/i.test(text)) {
+    add("那份PPT");
+  }
+
+  if (/监控[^。！？；;\n]{0,24}(?:维护|无记录|缺失|截断|不见|异常)/.test(text)) {
+    add("监控缺口");
+  }
+
+  if (/匿名邮箱|VP信箱|举报邮箱|邮件[^。！？；;\n]{0,16}(?:发出|举报|证据)/.test(text)) {
+    add("发往VP的邮件");
   }
 
   return uniqueList(candidates)
@@ -6029,6 +6071,238 @@ function withCharacterTaskRequirement(value: string, constraints: string[]) {
   }
 
   return `${value} 本章必须落实人物状态：${missing.join("；")}。`;
+}
+
+function userInputHasTaskCardScope(
+  input?: Partial<
+    Pick<
+      StoredWritingTaskCard,
+      "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+    >
+  > | null
+) {
+  return Boolean(
+    input &&
+    [
+      input.title,
+      input.chapterGoal,
+      input.continuity,
+      input.mainPlotProgress,
+      input.pleasurePoint,
+      input.endingHook
+    ].some((value) => value?.trim())
+  );
+}
+
+function buildOpeningChapterScopeReference(projectDescription: string, relatedInspirationText: string) {
+  const references = cleanStateEntries([
+    projectDescription.trim() ? `作品简介：${compactStateText(projectDescription, 220)}` : "",
+    relatedInspirationText ? `相关灵感：${compactStateText(relatedInspirationText, 180)}` : ""
+  ], 2, 240);
+
+  return references.length > 0
+    ? `参考开局阶段素材，但不要整段压进第一章：${references.join("；")}`
+    : "建立主角初始处境、第一轮压制和核心机制的第一次可见介入。";
+}
+
+function countTaskCardActionSignals(value: string) {
+  const patterns = [
+    /发现|查明|查出|锁定|确认|证明|验证|核实/,
+    /触发|绑定|进入|开启|更新|升级|降级/,
+    /举报|揭发|曝光|公开|对质|质问/,
+    /冻结|扣除|惩罚|失败|开除|调岗|降薪/,
+    /获得|拿到|奖励|升职|加薪|权限|技能/,
+    /出现|现身|递来|通知|命令|阻拦/,
+    /反击|打脸|逆转|翻盘|碾压/,
+    /倒计时|期限|限时|危机|追杀|威胁/
+  ];
+
+  return patterns.filter((pattern) => pattern.test(value)).length;
+}
+
+function taskCardLooksOverloaded(card: Pick<
+  StoredWritingTaskCard,
+  "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "endingHook" | "requiredCharacters"
+>) {
+  const text = [
+    card.chapterGoal,
+    card.continuity,
+    card.mainPlotProgress,
+    card.pleasurePoint,
+    card.foreshadowingTasks.join("；"),
+    card.endingHook
+  ].join("；");
+  const punctuationCount = (text.match(/[，,；;。！？!?、]/g) ?? []).length;
+
+  return (
+    card.requiredCharacters.length > 3 ||
+    countTaskCardActionSignals(text) >= 5 ||
+    punctuationCount >= 24 ||
+    text.length >= 720
+  );
+}
+
+function normalizeOpeningTaskCardScope<T extends Pick<
+  StoredWritingTaskCard,
+  | "chapterGoal"
+  | "continuity"
+  | "mainPlotProgress"
+  | "requiredCharacters"
+  | "pleasurePoint"
+  | "foreshadowingTasks"
+  | "rulesNotToBreak"
+  | "endingHook"
+>>(
+  card: T,
+  options: {
+    chapterNumber: number;
+    projectDescription: string;
+    relatedInspirationText: string;
+    userInput?: Partial<
+      Pick<
+        StoredWritingTaskCard,
+        "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+      >
+    > | null;
+  }
+): T {
+  if (options.chapterNumber !== 1 || !taskCardLooksOverloaded(card)) {
+    return card;
+  }
+
+  const scopeReference = buildOpeningChapterScopeReference(
+    options.projectDescription,
+    options.relatedInspirationText
+  );
+  const userInput = options.userInput ?? {};
+  const openingScopeRule =
+    "开局拆章：作品简介、灵感和创作圣经里的后续连锁属于开局阶段队列，不是第一章硬验收；第一章只写一个核心场面、一次机制试错或低成本反击、一处章末压力，后续连锁滚入第2-3章。";
+
+  return {
+    ...card,
+    chapterGoal: userInput.chapterGoal?.trim()
+      ? card.chapterGoal
+      : compactStateText(`开局第一拍：${scopeReference} 本章只完成初始压制、异常规则/核心机制首次可见介入，以及一个阶段性判断或低成本反击。`, 180),
+    continuity: userInput.continuity?.trim()
+      ? card.continuity
+      : "第一章从主角原本生活或入局现场切入，先让读者看见现实压力和被迫背锅/误判/受限的处境，再进入异常规则。",
+    mainPlotProgress: userInput.mainPlotProgress?.trim()
+      ? card.mainPlotProgress
+      : "主线只推进到主角意识到危机不是普通事故，并锁定一个可继续验证的责任方向或规则漏洞；后续处罚、公开对质、身份关系和难度升级留给后续章节承接。",
+    pleasurePoint: userInput.pleasurePoint?.trim()
+      ? card.pleasurePoint
+      : "小爽点：主角在被误判或压制时，用一个可见动作、证据判断或机制试错拿回一点主动权；收益是暂时不再完全被动，而不是立刻大翻盘。",
+    foreshadowingTasks: cleanStateEntries(
+      card.foreshadowingTasks.filter((task) =>
+        !/必须|本章必须|本章要|本章需|务必|立即|当场|直接/.test(task)
+      ),
+      2,
+      110
+    ),
+    rulesNotToBreak: cleanStateEntries(uniqueList([
+      openingScopeRule,
+      ...card.rulesNotToBreak
+    ]), 12, 150),
+    endingHook: userInput.endingHook?.trim()
+      ? card.endingHook
+      : "章末停在新的外部压力、下一步证据入口或规则惩罚的前兆上，给第2章承接，不要求第一章兑现整条开局连锁。"
+  };
+}
+
+function isProtagonistRequiredCharacter(name: string, protagonistNames: string[]) {
+  const compact = baseCharacterName(name);
+
+  return Boolean(
+    compact &&
+    (
+      /主角|女主|主人公|本人/.test(compact) ||
+      protagonistNames.some((item) => areCharacterAliasNames(item, compact))
+    )
+  );
+}
+
+function isNoCpWritingProject(bible: Pick<
+  StoredWritingBible,
+  "corePleasure" | "narrativeTaboos" | "styleGuide" | "immutableSettings" | "targetReader"
+>) {
+  const text = [
+    bible.targetReader,
+    bible.corePleasure,
+    bible.narrativeTaboos,
+    bible.styleGuide,
+    bible.immutableSettings
+  ].join("\n");
+
+  return /无CP|无cp|无配对|无恋爱线|无感情线/.test(text);
+}
+
+function taskCardMentionsRequiredCharacter(
+  card: Pick<
+    StoredWritingTaskCard,
+    "chapterGoal" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "endingHook"
+  >,
+  name: string
+) {
+  const taskText = [
+    card.chapterGoal,
+    card.mainPlotProgress,
+    card.pleasurePoint,
+    card.foreshadowingTasks.join("；"),
+    card.endingHook
+  ].join("\n");
+
+  return taskCardCharacterMentionCandidates(name).some((candidate) => taskText.includes(candidate));
+}
+
+function normalizeTaskCardRequiredCharactersForScope<T extends Pick<
+  StoredWritingTaskCard,
+  "requiredCharacters" | "chapterGoal" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "endingHook"
+>>(
+  card: T,
+  options: {
+    chapterNumber: number;
+    protagonistNames: string[];
+    fallbackCharacters: string[];
+    blockedCharacters?: string[];
+  }
+) {
+  const limit = options.chapterNumber === 1 ? 3 : 4;
+  const blockedSet = new Set(
+    (options.blockedCharacters ?? [])
+      .map(baseCharacterName)
+      .filter(Boolean)
+  );
+  const source = uniqueList([
+    ...card.requiredCharacters,
+    ...options.fallbackCharacters
+  ])
+    .map(baseCharacterName)
+    .filter((name) => isValidTaskCardRequiredCharacter(name));
+  const protagonists = uniqueList(
+    source.filter((name) =>
+      isProtagonistRequiredCharacter(name, options.protagonistNames) &&
+      (!blockedSet.has(name) || taskCardMentionsRequiredCharacter(card, name))
+    )
+  );
+  const mentioned = source.filter((name) =>
+    !isProtagonistRequiredCharacter(name, options.protagonistNames) &&
+    taskCardMentionsRequiredCharacter(card, name)
+  );
+  const remaining = source.filter((name) =>
+    !isProtagonistRequiredCharacter(name, options.protagonistNames) &&
+    !mentioned.includes(name) &&
+    (!blockedSet.has(name) || taskCardMentionsRequiredCharacter(card, name))
+  );
+  const scopedRemaining = options.chapterNumber === 1 ? [] : remaining;
+  const chosenProtagonists = protagonists.length > 0
+    ? protagonists
+    : options.protagonistNames.slice(0, 1).filter((name) => isValidTaskCardRequiredCharacter(name));
+
+  return uniqueList([
+    ...chosenProtagonists,
+    ...mentioned,
+    ...scopedRemaining
+  ]).slice(0, limit);
 }
 
 function compactStateText(value: string, maxLength = 90) {
@@ -13419,7 +13693,7 @@ export async function generateWritingTaskCard(
     }))
     .slice(0, 6);
   const relatedInspirationText = relatedInspirations
-    .map((item) => `灵感「${item.title}」：${compactStateText(item.content, 120)}`)
+    .map((item) => `灵感「${item.title}」：${compactStateText(item.content, 600)}`)
     .join("；");
   const chapterIdsByNumber = new Map(
     store.chapters
@@ -13517,15 +13791,23 @@ export async function generateWritingTaskCard(
   const scheduledCharacters = allCharacters.filter((item) =>
     isCharacterScheduledForChapter(item, targetChapterNumber)
   );
+  const noCpWritingProject = isNoCpWritingProject(bible);
   const protagonistCharacters = allCharacters
-    .filter((item) => /本人|主角|女主|男主/.test([item.identity, item.relationshipToProtagonist].join(" ")))
+    .filter((item) => /本人|主角|女主/.test([item.identity, item.relationshipToProtagonist].join(" ")))
     .map((item) => item.name);
+  const deferredRelationshipCharacters = noCpWritingProject
+    ? allCharacters
+        .filter((item) => /男主|感情线|恋爱|CP/.test([item.identity, item.relationshipToProtagonist].join(" ")))
+        .map((item) => item.name)
+    : [];
+  const openingChapterHasManualScope = targetChapterNumber === 1 && userInputHasTaskCardScope(input);
   const relevantCharacters = uniqueList([
-    ...scheduledCharacters.map((item) => item.name),
+    ...(targetChapterNumber === 1 && !openingChapterHasManualScope ? [] : scheduledCharacters.map((item) => item.name)),
     ...protagonistCharacters
   ]).slice(0, 3);
   const chapterCharacterConstraints = uniqueList(
-    scheduledCharacters.map((character) => buildCharacterTaskInstruction(character))
+    (targetChapterNumber === 1 && !openingChapterHasManualScope ? [] : scheduledCharacters)
+      .map((character) => buildCharacterTaskInstruction(character))
   );
   const job = options?.existingJobId
     ? createDomainWriteRepository(store).requireJobForUser(options.existingJobId, currentUser.id)
@@ -13740,12 +14022,31 @@ export async function generateWritingTaskCard(
         ...fallbackCard,
         title: normalizeChapterTitleForStorage(fallbackCard.title, "未命名章节")
       };
+  const scopedRawResolvedCard = normalizeOpeningTaskCardScope(rawResolvedCard, {
+    chapterNumber: targetChapterNumber,
+    projectDescription: project.description,
+    relatedInspirationText,
+    userInput: input
+  });
+  scopedRawResolvedCard.requiredCharacters = normalizeTaskCardRequiredCharactersForScope(scopedRawResolvedCard, {
+    chapterNumber: targetChapterNumber,
+    protagonistNames: protagonistCharacters,
+    fallbackCharacters: fallbackCard.requiredCharacters,
+    blockedCharacters: deferredRelationshipCharacters
+  });
+
   const resolvedCard = postClosureCooldownGuard.active
-    ? applyPostClosureCooldownToTaskCard(rawResolvedCard, postClosureCooldownGuard, carryOverTasks, input)
-    : applyStageClosureGuardToTaskCard(rawResolvedCard, stageClosureGuard, carryOverTasks);
+    ? applyPostClosureCooldownToTaskCard(scopedRawResolvedCard, postClosureCooldownGuard, carryOverTasks, input)
+    : applyStageClosureGuardToTaskCard(scopedRawResolvedCard, stageClosureGuard, carryOverTasks);
   const cooledCard = postClosureCooldownGuard.active
     ? resolvedCard
     : applyPostClosureCooldownToTaskCard(resolvedCard, postClosureCooldownGuard, carryOverTasks, input);
+  cooledCard.requiredCharacters = normalizeTaskCardRequiredCharactersForScope(cooledCard, {
+    chapterNumber: targetChapterNumber,
+    protagonistNames: protagonistCharacters,
+    fallbackCharacters: fallbackCard.requiredCharacters,
+    blockedCharacters: deferredRelationshipCharacters
+  });
   cooledCard.foreshadowingTasks = cleanTaskCardForeshadowingTasksForStorage(cooledCard.foreshadowingTasks);
 
   const card: StoredWritingTaskCard = {
