@@ -19,7 +19,7 @@ function sleep(ms: number) {
 }
 
 const MAX_POLL_ATTEMPTS = 240;
-const RUN_REQUEST_TIMEOUT_MS = 300000;
+const RUN_REQUEST_TIMEOUT_MS = 720000;
 const STALE_LONG_FORM_JOB_MS = 90 * 1000;
 
 function isAbortError(error: unknown) {
@@ -31,7 +31,11 @@ function isResumableRunningJob(job: NonNullable<JobResponse["job"]>) {
     return false;
   }
 
-  if (job.type !== "generate_long_form_plan" && job.type !== "review_long_form_plan") {
+  if (
+    job.type !== "generate_long_form_plan" &&
+    job.type !== "review_long_form_plan" &&
+    job.type !== "generate_chapter_batch"
+  ) {
     return false;
   }
 

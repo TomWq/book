@@ -49,11 +49,13 @@ import {
   normalizeEditedDraftText,
   polishGeneratedChapterDraftIfNeeded,
   repairChapterDraftAgainstTaskCardWithAi,
+  repairLongFormPlanWithAi,
   reviewLongFormPlanConsistencyWithAi,
   reviewChapterDraftWithAi,
   prepareChapterDraftContentForFastSave,
   prepareChapterDraftContentForForcedCompleteSave,
   prepareChapterDraftContentForSave,
+  repairWritingTaskCardWithAi,
   sanitizeChapterDraftDiction,
   type ChapterDraftContext,
   type ChapterStateUpdateContext,
@@ -441,8 +443,13 @@ function isRunnableAiJob(job: StoredAiJob) {
 
   const resumableTypes = new Set([
     "analyze_chapters",
+    "generate_task_card",
+    "generate_chapter",
+    "review_chapter",
+    "generate_chapter_batch",
     "generate_long_form_plan",
-    "review_long_form_plan"
+    "review_long_form_plan",
+    "edit_second_draft"
   ]);
 
   if (!resumableTypes.has(job.type)) {
@@ -454,7 +461,10 @@ function isRunnableAiJob(job: StoredAiJob) {
     return true;
   }
 
-  const staleAfterMs = job.type === "analyze_chapters" ? 10 * 60 * 1000 : 90 * 1000;
+  const staleAfterMs =
+    job.type === "analyze_chapters" || job.type === "generate_chapter_batch"
+      ? 10 * 60 * 1000
+      : 90 * 1000;
 
   return Date.now() - updatedAt > staleAfterMs;
 }
@@ -468,6 +478,24 @@ function findActiveLongFormPlanJob(store: AppStore, projectId: string) {
     (item) =>
       item.projectId === projectId &&
       (item.type === "generate_long_form_plan" || item.type === "review_long_form_plan") &&
+      isActiveAiJob(item)
+  ) ?? null;
+}
+
+function findActiveChapterBatchJob(store: AppStore, projectId: string) {
+  return store.aiJobs.find(
+    (item) =>
+      item.projectId === projectId &&
+      item.type === "generate_chapter_batch" &&
+      isActiveAiJob(item)
+  ) ?? null;
+}
+
+function findActiveWritingGenerationJob(store: AppStore, projectId: string) {
+  return store.aiJobs.find(
+    (item) =>
+      item.projectId === projectId &&
+      ["generate_task_card", "generate_chapter", "generate_chapter_batch"].includes(item.type) &&
       isActiveAiJob(item)
   ) ?? null;
 }
@@ -2103,6 +2131,9 @@ function createDomainReadRepository(store: AppStore) {
               isCurrentLongFormPlanJob(store, projectId, item)
           )
           .sort((a, b) => Number(isActiveAiJob(b)) - Number(isActiveAiJob(a)) || b.updatedAt.localeCompare(a.updatedAt)),
+        writingBatchJobs: store.aiJobs
+          .filter((item) => item.projectId === projectId && item.type === "generate_chapter_batch")
+          .sort((a, b) => Number(isActiveAiJob(b)) - Number(isActiveAiJob(a)) || b.updatedAt.localeCompare(a.updatedAt)),
         customRelationGraphs: (store.customRelationGraphs ?? [])
           .filter((item) => item.projectId === projectId)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -2555,6 +2586,16 @@ function getJobBilling(job: StoredAiJob) {
   return getJobObject(output.billing);
 }
 
+function getChapterBatchCountFromJob(job: Pick<StoredAiJob, "input" | "output">) {
+  const input = getJobObject(job.input);
+  const output = getJobObject(job.output);
+  return (
+    metricNumber(output.requestedChapters) ||
+    metricNumber(output.completedChapters) ||
+    metricNumber(input.chapterCount)
+  );
+}
+
 function getAiJobUnitCount(job: StoredAiJob) {
   const input = getJobObject(job.input);
   const output = getJobObject(job.output);
@@ -2573,6 +2614,8 @@ function getAiJobUnitCount(job: StoredAiJob) {
     case "edit_second_draft":
     case "generate_outline":
       return 1;
+    case "generate_chapter_batch":
+      return Math.max(1, getChapterBatchCountFromJob(job));
     default:
       return 1;
   }
@@ -3605,6 +3648,13 @@ function getExpectedPost100StageStarts(estimatedChapters: number) {
   return starts;
 }
 
+function getExpectedPost100StageRanges(estimatedChapters: number) {
+  return getExpectedPost100StageStarts(estimatedChapters).map((start) => ({
+    start,
+    end: Math.min(start + 49, estimatedChapters)
+  }));
+}
+
 function normalizeChapterRangeText(value: string) {
   return value.replace(/[—–－~～至到]/g, "-");
 }
@@ -3617,6 +3667,64 @@ function extractChapterRanges(value: string) {
     start: Number(match[1]),
     end: Number(match[2])
   })).filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end));
+}
+
+function stageTextCoversExpectedRanges(value: string, expectedRanges: Array<{ start: number; end: number }>) {
+  const ranges = extractChapterRanges(value);
+
+  if (expectedRanges.length === 0) {
+    return true;
+  }
+
+  return expectedRanges.every((expected) =>
+    ranges.some((range) =>
+      range.start === expected.start || (range.start <= expected.start && range.end >= expected.start)
+    )
+  );
+}
+
+function stageTextHasRequiredFields(value: string) {
+  try {
+    assertLongFormStageFieldCompletenessForText(value, "阶段");
+    return longFormStageChunks(value).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function stageTextHasValidAdjacentProgression(value: string) {
+  try {
+    assertLongFormAdjacentStageProgressionForText(value, "阶段");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function finalStageTextClosureIssue(value: string) {
+  const chunks = longFormStageChunks(value);
+  const finalStage = chunks.at(-1);
+
+  if (!finalStage) {
+    return "缺少终局阶段";
+  }
+
+  const finalText = finalStage.text;
+  const finalTarget = extractLongFormStageField(finalText, ["阶段目标"]);
+  const finalHook = extractLongFormStageField(finalText, ["阶段钩子"]);
+  const finalNext = extractLongFormStageField(finalText, ["进入下一阶段条件"]);
+  const transitionText = `${finalTarget} ${finalHook} ${finalNext}`;
+  const opensNewMainUnit =
+    /进入|开启|转入|切换|入口|下一(?:阶段|卷|单元|主案|地图|世界)|新(?:阶段|卷|单元|主案|地图|世界)|触发/.test(transitionText) &&
+    !/开放式结局|续作|番外|余波/.test(transitionText);
+  const hasClosure =
+    /全书|终局|完结|结局|收束|闭环|回收|落定|最终抉择|阶段余波|主线[^。；\n]{0,16}(?:完成|收束|闭环)|核心[^。；\n]{0,16}(?:回收|落定)/.test(finalText);
+
+  if (opensNewMainUnit || !hasClosure) {
+    return "终局阶段必须收束全书主线，不能继续开启新单元、新阶段或新入口";
+  }
+
+  return "";
 }
 
 function extractPacingStageForChapter(value: string, chapterNumber: number) {
@@ -4106,6 +4214,357 @@ function buildChronologyRewindIssue(content: string, context: ChapterDraftContex
   return "时间线倒退：上一章结尾已经完成并离开当前场面，下一章开头不能倒回同一场面继续做正式处理；应从后续承接场面、休整、手续、通知或现实回响开始。";
 }
 
+function leadingDraftSection(content: string, maxLength = 900) {
+  return content.slice(0, maxLength).replace(/\s+/g, "");
+}
+
+function continuitySourceText(context: ChapterDraftContext) {
+  return [
+    context.previousDraftTail ?? "",
+    context.lastLedger?.events.join("\n") ?? "",
+    context.lastLedger?.newClues.join("\n") ?? "",
+    context.lastLedger?.cliffhanger ?? "",
+    context.lastLedger?.stateChanges.join("\n") ?? "",
+    context.lastLedger?.carryOverTasks?.join("\n") ?? ""
+  ].join("\n");
+}
+
+function buildTransportContinuityIssue(content: string, context: ChapterDraftContext) {
+  const source = continuitySourceText(context);
+
+  if (!source) {
+    return "";
+  }
+
+  const opening = leadingDraftSection(content);
+  const transportPairs = [
+    { label: "船只/舟船", noun: /船|舟|小船|客船|货船|船只|船家|摆渡|渡船|木筏/, ride: /上了[^。！？\n]{0,12}(?:船|舟|木筏)|乘(?:船|舟)|坐(?:船|舟)|登(?:船|舟)|撑篙|摇橹|渡河|夜航/ },
+    { label: "马车/车辆", noun: /马车|车|车辆|轿车|货车|出租车|公交|地铁|列车|飞船|飞舟/, ride: /上了[^。！？\n]{0,12}(?:车|马车|轿车|货车|出租车|公交|地铁|列车|飞船|飞舟)|乘(?:车|马车|轿车|货车|出租车|公交|地铁|列车|飞船|飞舟)|坐(?:车|马车|轿车|货车|出租车|公交|地铁|列车|飞船|飞舟)|登(?:车|马车|列车|飞船|飞舟)/ },
+    { label: "坐骑/骑乘工具", noun: /马匹|马|坐骑|灵兽|飞行兽/, ride: /上马|骑(?:马|坐骑|灵兽|飞行兽)|翻身上马|乘(?:马|坐骑|灵兽|飞行兽)/ }
+  ];
+
+  for (const pair of transportPairs) {
+    const nounSource = `(?:${pair.noun.source})`;
+    const unavailablePattern = new RegExp(`(?:无|没有|没|再无|找不到|租不到|借不到|不能|无法|没人敢|不敢)[^。！？\\n]{0,24}${nounSource}|${nounSource}[^。！？\\n]{0,24}(?:无|没有|没|再无|找不到|租不到|借不到|不能|无法|没人敢|不敢)`);
+    const mustWalkPattern = new RegExp(`(?:只能|只得|必须|不得不)[^。！？\\n]{0,24}(?:步行|走路|沿路|走岸上|走小路|徒步|绕行|改走)`);
+    const explicitBridgePattern = new RegExp(`(?:等到|等来|找到|寻到|租到|借到|征用|调来|叫来|拦下|抢到|修好|换了|另有|又有|新来)[^。！？\\n]{0,24}${nounSource}|${nounSource}[^。！？\\n]{0,24}(?:到了|来了|靠岸|停下|修好|可用|能用|愿意|同意)`);
+
+    if ((unavailablePattern.test(source) || mustWalkPattern.test(source)) && pair.ride.test(opening) && !explicitBridgePattern.test(opening)) {
+      return `跨章交通反写：上一章已写出${pair.label}不可用或只能改走其他路线，本章开头却直接使用同类交通工具。应先写清新的来源、等待、征用、修复、换路线或人物决定，否则不能直接上路。`;
+    }
+  }
+
+  return "";
+}
+
+function buildCharacterPresenceContinuityIssue(content: string, context: ChapterDraftContext) {
+  const source = continuitySourceText(context);
+
+  if (!source || context.characters.length === 0) {
+    return "";
+  }
+
+  const opening = leadingDraftSection(content);
+  const taskRequiredNames = new Set(
+    context.taskCard.requiredCharacters
+      .map(baseCharacterName)
+      .filter((name) => name && isValidAutoCharacterName(name))
+  );
+  const protagonistNames = new Set(
+    context.characters
+      .filter((character) => /本人|主角|女主|男主|主人公/.test([character.identity, character.relationshipToProtagonist].join(" ")))
+      .map((character) => baseCharacterName(character.name))
+      .filter(Boolean)
+  );
+  const namedCharacters = context.characters
+    .map((character) => {
+      const name = baseCharacterName(character.name);
+      const profileText = [
+        character.identity,
+        character.relationshipToProtagonist,
+        character.currentGoal,
+        character.currentState
+      ].join("\n");
+
+      return { name, profileText };
+    })
+    .filter(({ name, profileText }) =>
+      name.length >= 2 &&
+      isValidAutoCharacterName(name) &&
+      !protagonistNames.has(name) &&
+      Array.from(taskRequiredNames).some((requiredName) => areCharacterAliasNames(requiredName, name)) &&
+      !/(已死|死亡|身亡|尸体|遗体|亡故|失踪|旧案|卷宗|档案|回忆|画像|牌位|墓|埋葬|无|已故|生死不明)/.test(profileText)
+    )
+    .slice(0, 18);
+  const homeOrBase = "(?:住处|家|营地|据点|基地|门派|宗门|公司|办公室|学校|宿舍|队里|组里|原地|后方)";
+  const recordMentionPattern = /旧案|卷宗|档案|案卷|记录|供词|口供|证词|账本|残页|纸条|画像|尸体|遗体|失踪|已死|死者|牌位|墓|线索|符号|字迹|笔迹|指纹|掌纹|名字|姓名|传闻|回忆/;
+  const ownedObjectAfterName = "(?:的(?:书房|房间|屋子|屋|院子|住处|办公室|营帐|座位|位置|方向|身后|身边|心腹|手下|属下|人|名字|姓名|身份|案子|卷宗|记录|供词|口供|证词|账本|公文|话|意思)|身边的|手下的|属下的|名下的)";
+  const explicitAwayAction = `(?:回去|回${homeOrBase}|离开|走了|先走|退下|退走|出门|出去了|撤走|离场|报信|传信|调人|调兵|叫人|求援|押送|护送|另行处理|(?:去|前去|赶去|回去|折返去|转身去|先去|另去)[^。！？\\n]{0,8}(?:通报|汇报|禀告|报信|传信|调人|调兵|叫人|求援))`;
+  const delegatedAwayAction = `(?:回去|回${homeOrBase}|离开|先走|退下|退走|出门|出去了|报信|传信|通报|汇报|禀告|调人|调兵|叫人|求援|押送|护送|另行处理|(?:去|前去|赶去|回去|折返去|转身去|先去|另去)[^。！？\\n]{0,8}(?:通报|汇报|禀告|报信|传信|调人|调兵|叫人|求援))`;
+  const protagonistSource = Array.from(protagonistNames)
+    .map(escapeRegExp)
+    .join("|");
+  const jointDepartureAction = "(?:离开|离去|走出|出了|退出|告退|转身离开|一前一后出了|一前一后离开|回到|返回|前往|赶往|去见|去找|呈报|禀报)";
+  const conditionalAwayContextPattern = /(?:若|如果|如若|倘若|一旦|万一|听到|有不测|有事|出事|出了事)[^。！？\n]{0,40}(?:去|叫|报信|通报|求援)/;
+
+  for (const { name } of namedCharacters) {
+    const escaped = escapeRegExp(name);
+    const characterActor = `${escaped}(?![^。！？\\n]{0,10}${ownedObjectAfterName})`;
+    const awayPattern = new RegExp(`${characterActor}[^。！？\\n]{0,18}(?:先行)?${explicitAwayAction}|(?:让|命|派|安排|叫)[^。！？\\n]{0,18}${characterActor}[^。！？\\n]{0,18}${delegatedAwayAction}`, "g");
+    const jointDeparturePattern = protagonistSource
+      ? new RegExp(`(?:(?:${protagonistSource})[^。！？\\n]{0,14}(?:和|与|同|带着|领着|拉着|扶着|陪着)[^。！？\\n]{0,14}${escaped}|${escaped}[^。！？\\n]{0,14}(?:和|与|同|跟着|随同|跟上|跟随|陪着)[^。！？\\n]{0,14}(?:${protagonistSource}))[^。！？\\n]{0,34}${jointDepartureAction}`)
+      : null;
+    const presentPattern = new RegExp(`(?:和|与|同|跟|带着|领着|随同)[^。！？\\n]{0,16}${escaped}|${escaped}[^。！？\\n]{0,24}(?:同行|跟上|跟着|一起|同去|上了|坐在|站在|走在|压低声音|开口|问|说)`);
+    const explicitBridgePattern = new RegExp(`${escaped}[^。！？\\n]{0,42}(?:赶来|赶到|追上|回来|返回|复命|带人赶到|调人赶到|叫人赶到|已经到了|重新会合|汇合|会合|碰头|交接|接应|绕回|折返)|(?:赶来|赶到|追上|回来|返回|复命|带人赶到|调人赶到|叫人赶到|已经到了|重新会合|汇合|会合|碰头|交接|接应|绕回|折返)[^。！？\\n]{0,42}${escaped}`);
+    const recordMention = snippetsAroundName(opening, name, 18, 4).some((snippet) => recordMentionPattern.test(snippet));
+    const actionableAway = Array.from(source.matchAll(awayPattern)).some((match) => {
+      const index = match.index ?? 0;
+      const snippet = source.slice(Math.max(0, index - 80), Math.min(source.length, index + match[0].length + 80));
+
+      return !jointDeparturePattern?.test(snippet) && !conditionalAwayContextPattern.test(snippet);
+    });
+
+    if (actionableAway && presentPattern.test(opening) && !explicitBridgePattern.test(opening) && !recordMention) {
+      return `跨章人物在场反写：上一章已安排${name}离开、报信、调人或另行处理，本章开头又让${name}直接同场行动。应补出赶回、会合、带人赶到或交接原因，否则不能直接写成同行。`;
+    }
+  }
+
+  return "";
+}
+
+type SceneAnchor = {
+  object: string;
+  location: string;
+  sourceText: string;
+};
+
+const genericSceneObjects = [
+  "井",
+  "枯井",
+  "祭坛",
+  "暗格",
+  "密室",
+  "地窖",
+  "柴房",
+  "书房",
+  "档案房",
+  "公库",
+  "仓库",
+  "祠堂",
+  "土地庙",
+  "山洞",
+  "洞口",
+  "后窗",
+  "侧门",
+  "暗门",
+  "院门",
+  "大门"
+];
+
+const sceneLocationSuffixes = [
+  "县衙",
+  "衙门",
+  "府衙",
+  "门派",
+  "市集",
+  "黑市",
+  "学院",
+  "别院",
+  "基地",
+  "营地",
+  "码头",
+  "渡口",
+  "小区",
+  "公司",
+  "学校",
+  "医院",
+  "城",
+  "镇",
+  "村",
+  "府",
+  "宅",
+  "庄",
+  "山",
+  "岭",
+  "谷",
+  "宗",
+  "街",
+  "巷",
+  "坊"
+];
+
+const sceneLocationSuffixSource = sceneLocationSuffixes
+  .sort((a, b) => b.length - a.length)
+  .map(escapeRegExp)
+  .join("|");
+const sceneLocationEntitySource = `(?:[\\u4e00-\\u9fff]{0,8}(?:${sceneLocationSuffixSource}))`;
+const sceneLocationNarrationPrefixPattern = /^(?:(?:又|再|还|先|已|已经|正|正在|刚|刚刚|当即|立刻|连夜|暗中|当众|直接|随即|随后|转而|仍旧|依旧|忽然|忽地|猛地|冷声|沉声|低声|厉声|轻声|扬声|咬牙|皱眉|转头|回头|抬手|压低声音)|(?:指着|指向|看向|望向|盯着))*?(?:提及|提到|说起|说到|谈到|问起|问到|威胁|警告|逼问|喝问|指认|赶往|返回|回到|来到|抵达|前往|去往|夜探|探查|查探|搜查|查看|确认|封锁|守住|围住|盯住|靠近|押往|带到|转入|藏到|改藏|留在|放在|埋在|设在|位于|通向|指向|看向|望向)+/;
+const sceneLocationLightPrefixPattern = new RegExp(`^(?:在|到|去|往|赴|回)(?=[\\u4e00-\\u9fff]{1,8}(?:${sceneLocationSuffixSource}))`);
+const sceneLocationSubjectActionPrefixPattern = /^[\u4e00-\u9fff]{0,8}(?:提及|提到|说起|说到|谈到|问起|问到|威胁|警告|逼问|喝问|指认|指出|指出其|指出它|指出这|指出那|指出此|指出该|赶往|返回|回到|来到|抵达|前往|去往|夜探|探查|查探|搜查|查看|确认|封锁|守住|围住|盯住|靠近|押往|带到|转入|藏到|改藏|留在|放在|埋在|设在|位于|通向|指向|看向|望向|落在|落向|关联到|牵到)+(?:其|它|这|那|此|该)?(?:指向|通向|落在|落向|关联到|牵到)?/;
+const sceneLocationSourcePrefixPattern = new RegExp(`^(?:[\\u4e00-\\u9fff]{1,8}(?:从|自|由|在|到|至|于|往|赴|回)|[\\u4e00-\\u9fff]{0,8}(?:是从|来自|出自|源自|取自|拿自|带自|搜自|查自|抄自|缴自|发自|送到|带到|放到|藏到|埋到|移到|转到|落到|落在|位于|设在|藏在|埋在|放在|留在|收在|存于|存放于|存在于))(?=[\\u4e00-\\u9fff]{0,8}(?:${sceneLocationSuffixSource}))`);
+
+function normalizeSceneAnchorText(value: string) {
+  return compactStateText(value, 28)
+    .replace(/^(?:那|这|此|一|一个|一处|那口|这口|那座|这座|那间|这间|那扇|这扇|那本|这本)+/, "")
+    .replace(/(?:方向|附近|一带|里面|里头|里|外|门口|边上|旁边|后面|深处|尽头)$/, "")
+    .trim();
+}
+
+function stripSceneLocationNarrationPrefix(value: string) {
+  let text = value.trim();
+
+  for (let index = 0; index < 4; index += 1) {
+    const next = text
+      .replace(sceneLocationNarrationPrefixPattern, "")
+      .replace(sceneLocationSubjectActionPrefixPattern, "")
+      .replace(sceneLocationSourcePrefixPattern, "")
+      .replace(sceneLocationLightPrefixPattern, "")
+      .trim();
+
+    if (next === text || !next) {
+      return next || text;
+    }
+
+    text = next;
+  }
+
+  return text;
+}
+
+function sceneLocationCandidatesFromText(value: string) {
+  const text = stripSceneLocationNarrationPrefix(normalizeSceneAnchorText(value));
+  const locationPattern = new RegExp(sceneLocationEntitySource, "g");
+  const candidates = Array.from(text.matchAll(locationPattern))
+    .map((match) => stripSceneLocationNarrationPrefix(normalizeSceneAnchorText(match[0] ?? "")))
+    .filter((candidate) =>
+      Boolean(candidate) &&
+      !/^(?:府尹|府库|府兵|府里|府中|府上|卷宗|宗卷)$/.test(candidate)
+    );
+
+  return uniqueList(candidates);
+}
+
+function normalizeSceneLocationText(value: string) {
+  const text = stripSceneLocationNarrationPrefix(normalizeSceneAnchorText(value));
+  const candidates = sceneLocationCandidatesFromText(text);
+
+  if (candidates.length > 0) {
+    return candidates[candidates.length - 1];
+  }
+
+  return text;
+}
+
+function sceneLocationTopAnchor(value: string) {
+  const text = normalizeSceneLocationText(value);
+
+  if (!text) {
+    return "";
+  }
+
+  const candidates = sceneLocationCandidatesFromText(text);
+  return candidates.length > 0 ? candidates[candidates.length - 1] : text;
+}
+
+function isSameSceneLocation(left: string, right: string) {
+  const a = sceneLocationTopAnchor(left);
+  const b = sceneLocationTopAnchor(right);
+
+  return Boolean(
+    a &&
+    b &&
+    (
+      a === b ||
+      a.includes(b) ||
+      b.includes(a)
+    )
+  );
+}
+
+function extractSceneAnchorsFromText(text: string, limit = 18): SceneAnchor[] {
+  const anchors: SceneAnchor[] = [];
+  const objectSource = [...genericSceneObjects]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp)
+    .join("|");
+  const locationSource = sceneLocationEntitySource;
+  const patterns = [
+    new RegExp(`(${locationSource})[^。！？；\\n]{0,12}(?:的|里|内|外|后院|前院|东侧|西侧|南边|北边|门口)?[^。！？；\\n]{0,8}(${objectSource})`, "g"),
+    new RegExp(`(${objectSource})[^。！？；\\n]{0,16}(?:在|位于|藏在|隐在|埋在|设在|就在|靠近|属于|通向|指向)[^。！？；\\n]{0,12}(${locationSource})`, "g")
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const first = normalizeSceneAnchorText(match[1] ?? "");
+      const second = normalizeSceneAnchorText(match[2] ?? "");
+      const firstIsObject = genericSceneObjects.includes(first);
+      const object = firstIsObject ? first : second;
+      const location = normalizeSceneLocationText(firstIsObject ? second : first);
+
+      if (
+        !object ||
+        !location ||
+        genericSceneObjects.includes(location)
+      ) {
+        continue;
+      }
+
+      anchors.push({
+        object,
+        location,
+        sourceText: compactStateText(match[0] ?? `${location}${object}`, 80)
+      });
+    }
+  }
+
+  return uniqueList(anchors.map((anchor) => JSON.stringify(anchor)))
+    .map((value) => JSON.parse(value) as SceneAnchor)
+    .slice(0, limit);
+}
+
+function hasSceneRelocationBridge(text: string, object: string) {
+  const snippets = snippetsAroundName(text, object, 90, 6).join("\n");
+
+  return /同名|另有|另一处|另一个|误认|认错|不是同一|原来.*不是|其实.*在|转移|搬走|运走|藏到|改藏|移到|从[^。！？；\n]{0,18}挪到|重新确认|问清|查明/.test(snippets);
+}
+
+function buildSceneAnchorRelocationIssueFromText(source: string, currentText: string) {
+  if (!source) {
+    return "";
+  }
+
+  const previousAnchors = extractSceneAnchorsFromText(source, 24);
+
+  if (previousAnchors.length === 0) {
+    return "";
+  }
+
+  const currentAnchors = extractSceneAnchorsFromText(currentText, 24);
+
+  for (const previous of previousAnchors) {
+    const conflict = currentAnchors.find((current) =>
+      current.object === previous.object &&
+      !isSameSceneLocation(current.location, previous.location)
+    );
+
+    if (conflict && !hasSceneRelocationBridge(currentText, previous.object)) {
+      return `跨章场景地点反写：前文已把“${previous.object}”锚定在“${previous.location}”（${previous.sourceText}），本章又写成“${conflict.location}”（${conflict.sourceText}）。若确有两处同名地点、误认或物件被转移，必须先补出确认过程；否则应沿用前文地点。`;
+    }
+  }
+
+  return "";
+}
+
+function buildSceneAnchorRelocationIssue(content: string, context: ChapterDraftContext) {
+  return buildSceneAnchorRelocationIssueFromText(
+    continuitySourceText(context),
+    [
+      taskCardContinuityScopeText(context.taskCard),
+      content
+    ].join("\n")
+  );
+}
+
 function countActionLoopPatternMatches(text: string, pattern: RegExp) {
   return Array.from(text.matchAll(pattern)).length;
 }
@@ -4312,8 +4771,8 @@ function dialogueAnswerLooksMismatched(question: string, answer: string) {
   return false;
 }
 
-function findDialogueQuestionAnswerMismatch(content: string, previousTail?: string) {
-  const dialogues = quoteDialogues([previousTail ?? "", content].filter(Boolean).join("\n"));
+function findDialogueQuestionAnswerMismatch(content: string) {
+  const dialogues = quoteDialogues(content);
 
   for (let index = 0; index < dialogues.length - 1; index += 1) {
     const question = dialogues[index];
@@ -4347,6 +4806,304 @@ function isResolvedEvidenceText(value: string) {
     /确认|证实|吻合|一致|归案|认罪|定罪|供认|承认|已结|已完成|形成证据链|水落石出|非血迹|为朱砂|系/.test(text) &&
     !/未知|不明|为何|为什么|是谁|何人|来源|含义|目的|暗示|可能|疑似|待查|待确认|另有|背后|幕后/.test(text)
   );
+}
+
+function isLowDramaDetailTaskText(value: string) {
+  const text = stripCarryOverPrefix(value).trim();
+
+  if (!text) {
+    return false;
+  }
+
+  const detailNoun =
+    /线索|信息|细节|物件|物品|道具|记录|文件|档案|名单|名册|编号|数字|数值|面板|提示|日志|账本|账页|账单|合同|聊天记录|监控|照片|截图|残页|纸条|符号|标记|图案|痕迹|指纹|掌纹|手印|脚印|血迹|压痕|灰烬|灰层|墨迹|字迹|笔迹|纸纤维|枯叶|木牌|材料|药材|丹药|灵石|装备|钥匙|令牌|地图|坐标|规则|任务|数据|排名|分数|证据|物证|证词|口供/.test(text);
+  const detailAction =
+    /验证|核实|确认|比对|对比|提取|观察|复核|检查|整理|记录|归纳|查明|查清|寻找|找出|发现|标记|登记|扫描|读取|计算|统计|判断|推断|复盘|还原|显现|拓印|分离/.test(text);
+  const dramaticAction =
+    /反击|打脸|冲突|阻拦|逼迫|威胁|羞辱|挑衅|竞争|比试|战斗|对决|救援|追杀|逃亡|谈判|交易|站队|背叛|牺牲|对质|质问|逼问|审问|审讯|抓捕|传唤|定责|定罪|搜查|公开|当场|承认|交代|供认|翻供|反咬|抢夺|销毁|露怯|改口|权限|文书|奖励|晋升|突破|升级|获得|拿到|得到|领取|赢得|失去|消耗|名额|地位|声望|名声|关系|选择|代价|惩罚|结案|回收|兑现|反转|翻盘|曝光|揭穿|碾压|震惊/.test(text);
+
+  return detailNoun && detailAction && !dramaticAction;
+}
+
+function mergeLowDramaDetailTasksForDrama(tasks: string[]) {
+  const concrete = tasks.filter((task) => !isLowDramaDetailTaskText(task));
+  const lowDramaDetails = tasks.filter(isLowDramaDetailTaskText);
+
+  return uniqueList([
+    ...concrete,
+    ...(concrete.length === 0 ? lowDramaDetails.slice(0, 1) : [])
+  ]);
+}
+
+function taskCardReaderLoopText(card: Pick<
+  StoredWritingTaskCard,
+  "chapterGoal" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "endingHook"
+>) {
+  return [
+    card.chapterGoal,
+    card.mainPlotProgress,
+    card.pleasurePoint,
+    card.foreshadowingTasks.join("；"),
+    card.endingHook
+  ].join("；");
+}
+
+function hasActiveOppositionSignal(value: string) {
+  return /质疑|轻视|反对|阻拦|拦下|不准|不许|拒绝|催促|设限|限制|抢先|抢功|误判|错误判断|遮掩|破坏|销毁|抢夺|扣押|封锁|威胁|逼迫|挑衅|羞辱|诱惑|竞争|截胡|追杀|围堵|反扑|上级[^。！？；\n]{0,20}(压|拦|限|命令)|对手[^。！？；\n]{0,20}(抢|拦|反扑|设局)|规则[^。！？；\n]{0,20}(卡|限|罚)|权力[^。！？；\n]{0,20}(阻|压)|被[^。！？；\n]{0,20}(拦|拒|罚|扣|赶|压|质疑|轻视)/.test(value);
+}
+
+function hasReaderEmotionTargetSignal(value: string) {
+  return /读者情绪|情绪目标|情绪债|情绪回报|情绪补偿|憋屈|紧张|期待|心疼|心动|上头|解气|爽感|压抑|丢脸|尴尬|害怕|愤怒|甜|暧昧/.test(value);
+}
+
+function hasActionablePayoffSignal(value: string) {
+  return /授权|权限|许可|准许|调人|带队|领队|通行|资格|名额|资源|奖励|赏金|报酬|晋升|身份|地位|名声|声望|公开|背书|站队|支持|承认|改口|让步|道歉|低头|服软|保住|拿回|主动权|选择权|行动权|对手[^。！？；\n]{0,24}(代价|受罚|损失|失败|露怯|改口|退让)|反派[^。！？；\n]{0,24}(代价|受罚|损失|失败)|惩罚|处罚|定责|结算|阶段结论|关系[^。！？；\n]{0,24}(松动|站队|转变|破裂|缓和|承诺)|资源\/权限|奖励\/惩罚/.test(value);
+}
+
+function isWeakTaskCardPleasurePoint(value: string) {
+  const text = value.trim();
+
+  if (!text) {
+    return true;
+  }
+
+  const softRecognitionOnly = /刮目相看|信服|佩服|半信半疑|主动配合|开始配合|认可|态度变化|专业能力|逻辑推理|分析|判断|发现|锁定|确认/.test(text) &&
+    !hasActionablePayoffSignal(text);
+
+  return (
+    softRecognitionOnly ||
+    (
+      (isLowDramaDetailTaskText(text) || /信息|道具|物件|提示|数值|记录|材料|残片|痕迹/.test(text)) &&
+      !hasActionablePayoffSignal(text)
+    )
+  );
+}
+
+function isWeakTaskCardEndingHook(value: string) {
+  const text = value.trim();
+
+  if (!text) {
+    return true;
+  }
+
+  const clueOnlySignal =
+    /发现|捡起|看见|注意到|露出|出现|留下|写着|显示|指向|隐约可见|传来|收到|弹出|浮现/.test(text) &&
+    /新信息|信息|物件|物品|道具|记录|文件|档案|名单|编号|数字|数值|面板|提示|残页|残片|纸条|符号|标记|图案|痕迹|字迹|地图|坐标|地名|地点|三字/.test(text);
+  const consequenceSignal =
+    /阻拦|拦下|命令|授权|限时|倒计时|期限|追来|闯入|反扑|抢夺|销毁|公开|站队|背叛|处罚|惩罚|奖励|被叫停|被拒绝|要求|选择|立刻|必须|不得不|上级|对手|规则|围堵|封锁|动手|出手|冲突|威胁/.test(text);
+
+  return clueOnlySignal && !consequenceSignal;
+}
+
+function taskCardFieldWasUserProvided(
+  input: Partial<
+    Pick<
+      StoredWritingTaskCard,
+      "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+    >
+  > | null | undefined,
+  field: "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+) {
+  return Boolean(input?.[field]?.trim());
+}
+
+function sanitizeTaskCardInstructionLeak(value: string) {
+  return compactStateText(
+    value
+      .replace(/^小爽点改为可见回报[:：]\s*/, "")
+      .replace(/^章末不要停在新信息本身[；;，,。]?\s*/, "")
+      .replace(/^完成本章收束动作[:：]\s*/, "")
+      .replace(/^用已登记信息完成闭环[:：]\s*/, "")
+      .replace(/^优先收束上一章未完成[:：]\s*/, "")
+      .replace(/^收束既有任务[:：]\s*/, "")
+      .replace(/，?先让[^，。；\n]{0,80}质疑、设限或误判主角，主角用可见行动扭转，收益落成资源、权限、公开支持、关系站队、对手代价、阶段结论或下一步行动权。?$/, "")
+      .replace(/立刻引发行动压力：有人阻拦、对手反扑、期限逼近、关系站队或权力命令落下，迫使主角下一章必须选择。?$/, "引发即时行动压力。")
+      .replace(/[；;，,]?\s*爽点落在[^。！？；\n]{0,220}中的至少一项。?$/, "")
+      .replace(/[，,]?\s*随即引发阻拦、反扑、限时、权力命令或关系站队，迫使主角下一章立刻选择。?$/, "")
+      .replace(/[；;，,]?\s*开头由[^。！？；\n]{0,100}制造质疑、设限、误判或抢先动作，逼主角当场回应。?$/, "")
+      .replace(/[；;，,]?\s*关键发现必须在正面摩擦中兑现，结果落成阶段结论、行动权限、资源\/关系变化或对手代价。?$/, "")
+      .replace(/[，,。；;]?\s*本章开头必须让[^。！？；\n]{0,80}迫使主角当场回应。?$/, "")
+      .replace(/[，,。；;]?\s*推进时必须把关键发现放进正面摩擦里，并让主角的反击换来阶段结论、行动权限、资源\/关系变化或对手代价。?$/, "")
+      .trim(),
+    260
+  );
+}
+
+function normalizeTaskCardPressureSource(value: string) {
+  const text = compactStateText(value, 40);
+
+  if (!text || /待明确|当前压力源|第一阶段压力源|当前阶段|当前主线/.test(text)) {
+    return "外部阻力";
+  }
+
+  return text;
+}
+
+function buildActionablePleasurePoint(value: string, pressureSource: string) {
+  const core = sanitizeTaskCardInstructionLeak(value)
+    .replace(/^围绕原计划[“"]?/, "")
+    .replace(/[”"]?[，,]\s*$/, "")
+    .trim();
+
+  return core;
+}
+
+function withReaderEmotionTarget(value: string) {
+  const core = sanitizeTaskCardInstructionLeak(value);
+
+  if (hasReaderEmotionTargetSignal(core)) {
+    return core;
+  }
+
+  const joined = core
+    ? `读者情绪目标：先让读者感到憋屈、紧张、期待或心疼，再让主角用可见行动还债；${core}`
+    : "读者情绪目标：先让读者感到憋屈、紧张、期待或心疼，再让主角用可见行动还债，并获得外部反馈。";
+
+  return compactStateText(joined, 260);
+}
+
+function buildActionPressureEndingHook(value: string) {
+  const core = sanitizeTaskCardInstructionLeak(value)
+    .replace(/^让[“"]?/, "")
+    .replace(/[”"]?引发即时行动压力。?$/, "")
+    .trim();
+
+  return core;
+}
+
+function buildGenericTaskCardQualityWarning(input: {
+  missingEmotionTarget: boolean;
+  missingOpposition: boolean;
+  weakPleasure: boolean;
+  weakHook: boolean;
+  lowDramaGoal: boolean;
+  overloaded: boolean;
+}) {
+  return cleanStateEntries([
+    input.missingEmotionTarget
+      ? "本章写作边界：任务卡缺少读者情绪目标，正文必须先制造憋屈、紧张、期待、心疼、心动或解气等情绪债，再兑现回报。"
+      : "",
+    input.missingOpposition || input.lowDramaGoal
+      ? "本章写作边界：目标和主线推进不能只停在信息获取，必须在正文中补足外部压制、正面摩擦或规则阻碍。"
+      : "",
+    input.weakPleasure
+      ? "本章写作边界：爽点不能只停在被认可、发现信息或专业展示，必须在正文中兑现行动权、资源支持、公开支持、关系变化、对手代价或阶段结果。"
+      : "",
+    input.weakHook
+      ? "本章写作边界：章末不能只停在新信息，必须在正文中落到人物行动、对手反扑、权力阻碍、期限逼近、关系选择或奖惩变化。"
+      : "",
+    input.overloaded
+      ? "本章写作边界：场面已经过载，正文只保留一个核心戏剧场面，别把追赶、换地点、发现物件和新危机连续堆进同一章。"
+      : ""
+  ], 4, 150);
+}
+
+function evaluateTaskCardReaderLoop(card: Pick<
+  StoredWritingTaskCard,
+  "chapterGoal" | "continuity" | "mainPlotProgress" | "requiredCharacters" | "pleasurePoint" | "foreshadowingTasks" | "endingHook"
+>) {
+  const taskText = taskCardReaderLoopText(card);
+  const missingEmotionTarget = !hasReaderEmotionTargetSignal(taskText);
+  const missingOpposition = !hasActiveOppositionSignal(taskText);
+  const weakPleasure = isWeakTaskCardPleasurePoint(card.pleasurePoint);
+  const weakHook = isWeakTaskCardEndingHook(card.endingHook);
+  const lowDramaGoal = isLowDramaDetailTaskText(card.chapterGoal) || isLowDramaDetailTaskText(card.mainPlotProgress);
+  const overloaded = taskCardLooksOverloaded({
+    chapterGoal: card.chapterGoal,
+    continuity: card.continuity,
+    mainPlotProgress: card.mainPlotProgress,
+    requiredCharacters: card.requiredCharacters,
+    pleasurePoint: card.pleasurePoint,
+    foreshadowingTasks: card.foreshadowingTasks,
+    endingHook: card.endingHook
+  });
+  const qualityIssues = buildGenericTaskCardQualityWarning({
+    missingEmotionTarget,
+    missingOpposition,
+    weakPleasure,
+    weakHook,
+    lowDramaGoal,
+    overloaded
+  });
+
+  return {
+    missingEmotionTarget,
+    missingOpposition,
+    weakPleasure,
+    weakHook,
+    lowDramaGoal,
+    overloaded,
+    qualityIssues,
+    needsRepair: qualityIssues.length > 0
+  };
+}
+
+function strengthenTaskCardReaderLoop<T extends Pick<
+  StoredWritingTaskCard,
+  | "chapterGoal"
+  | "continuity"
+  | "mainPlotProgress"
+  | "requiredCharacters"
+  | "pleasurePoint"
+  | "foreshadowingTasks"
+  | "rulesNotToBreak"
+  | "endingHook"
+>>(
+  card: T,
+  options: {
+    userInput?: Partial<
+      Pick<
+        StoredWritingTaskCard,
+        "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "endingHook"
+      >
+    > | null;
+    pressureSource?: string;
+    allowFieldRepair?: boolean;
+  }
+): T {
+  const emotionTargetRule = "读者情绪目标：本章至少调动憋屈、紧张、期待、心疼、心动、上头或解气之一，并先制造具体情绪债。";
+  const emotionPayoffRule = "情绪还债要求：主角要用可见行动扭转局面，并让对手、旁观者、关键人物或局势给出外部反馈。";
+  const readerRule = "本章写作底线：必须有外部压制、可见反击、行动收益和非纯信息章末钩子；信息、道具、数值、规则只作为冲突工具。";
+  const repairRule = "本章修复重点：如果爽点只停留在被认可、发现信息或专业展示，正文必须补成可见收益；如果章末只停在新信息，正文必须补成人物行动、对手反扑、权力阻碍、期限逼近或关系选择。";
+  const withRule = {
+    ...card,
+    rulesNotToBreak: cleanStateEntries(uniqueList([
+      emotionTargetRule,
+      emotionPayoffRule,
+      readerRule,
+      repairRule,
+      ...card.rulesNotToBreak
+    ]), 14, 150)
+  };
+
+  if (options.allowFieldRepair === false) {
+    return withRule;
+  }
+
+  const evaluation = evaluateTaskCardReaderLoop(withRule);
+  const qualityWarnings = evaluation.qualityIssues;
+
+  const chapterGoal = !taskCardFieldWasUserProvided(options.userInput, "chapterGoal") && (evaluation.missingOpposition || evaluation.lowDramaGoal)
+    ? sanitizeTaskCardInstructionLeak(withRule.chapterGoal)
+    : sanitizeTaskCardInstructionLeak(withRule.chapterGoal);
+  const mainPlotProgress = !taskCardFieldWasUserProvided(options.userInput, "mainPlotProgress") && (evaluation.missingOpposition || evaluation.lowDramaGoal)
+    ? sanitizeTaskCardInstructionLeak(withRule.mainPlotProgress)
+    : sanitizeTaskCardInstructionLeak(withRule.mainPlotProgress);
+  const pleasurePoint = !taskCardFieldWasUserProvided(options.userInput, "pleasurePoint") && (evaluation.weakPleasure || evaluation.missingEmotionTarget)
+    ? withReaderEmotionTarget(buildActionablePleasurePoint(withRule.pleasurePoint, ""))
+    : sanitizeTaskCardInstructionLeak(withRule.pleasurePoint);
+  const endingHook = !taskCardFieldWasUserProvided(options.userInput, "endingHook") && evaluation.weakHook
+    ? buildActionPressureEndingHook(withRule.endingHook)
+    : sanitizeTaskCardInstructionLeak(withRule.endingHook);
+
+  return {
+    ...withRule,
+    rulesNotToBreak: cleanStateEntries(uniqueList([...qualityWarnings, ...withRule.rulesNotToBreak]), 14, 150),
+    chapterGoal,
+    mainPlotProgress,
+    pleasurePoint,
+    endingHook
+  };
 }
 
 function isPlotQueueTaskText(value: string) {
@@ -4465,11 +5222,15 @@ function applyStageClosureGuardToTaskCard<T extends Pick<
     return card;
   }
 
-  const closureRule = "阶段收束模式：本章是封闭证据池，只能使用上一章台账、任务卡和当前项目状态已登记的人物、地点、物证、供词和伏笔；不得新增需要多章追查的新调查对象。";
-  const closureTasks = carryOverTasks.filter((task) => !isInvestigationExpansionSentence(task)).slice(0, 3);
+  const closureRule = "阶段收束模式：本章是封闭信息池，只能使用上一章台账、任务卡和当前项目状态已登记的人物、地点、资源、关系、规则和伏笔；不得新增需要多章推进的新任务对象。";
+  const closureTasks = carryOverTasks
+    .map(normalizeCarryOverTask)
+    .filter((task) => task && !isInvestigationExpansionSentence(task))
+    .slice(0, 3);
   const concreteTasks = uniqueList([
     ...closureTasks,
-    ...card.foreshadowingTasks.filter((task) =>
+    ...card.foreshadowingTasks.map(normalizeCarryOverTask).filter((task) =>
+      task &&
       !isCarryOverRuleText(task) &&
       !isAftermathHookText(task) &&
       (!isExpansionThreadText(task) || isClosureActionText(task))
@@ -4480,26 +5241,28 @@ function applyStageClosureGuardToTaskCard<T extends Pick<
     : "合并已登记信息，完成当前任务链的阶段性落点";
   const closureGoal = compactStateText(
     concreteTasks.length > 0
-      ? `完成本章收束动作：${concreteTaskText}。`
+      ? `${concreteTaskText}，并让当前任务链落到明确结果、责任归属、人物选择或返回行动上。`
       : "把上一章已经摆出的信息推进到可记录的结果、回应、选择或责任归属，让当前任务链出现阶段性落点。",
     300
   );
   const closureProgress = compactStateText(
     concreteTasks.length > 0
-      ? `用已登记信息完成闭环：${concreteTaskText}。`
+      ? `${concreteTaskText}，不得继续扩成新的调查链；本章推进到结果明确、责任归属、状态更新或返回后的阶段性落点。`
       : "用已登记信息完成当前任务链闭环，并推进到结果明确、责任归属、状态更新或返回后的阶段性落点。",
     300
   );
-  const closurePleasure = /对质|定责|证据|回收|完成|返回|收束|闭环/.test(card.pleasurePoint)
+  const closurePleasure = /对质|摊牌|定责|证据|信息|回收|完成|返回|收束|闭环|兑现|奖励|结算|关系|权限|资源/.test(card.pleasurePoint)
     ? card.pleasurePoint
-    : compactStateText("爽点改为收束回报：用既有信息给出结果、责任归属或阶段性真相，让前文压制得到回应；不靠新线索制造爽点。", 300);
+    : compactStateText("爽点改为收束回报：用既有信息给出结果、责任归属、资源/权限兑现或阶段性真相，让前文压制得到回应；不靠新信息制造爽点。", 300);
   const closureForeshadowingTasks = cleanStateEntries(
     uniqueList([
-      ...closureTasks.map((task) => `优先收束上一章未完成：${task}`),
+      ...closureTasks.map((task) => `收束既有任务：${task}`),
       ...card.foreshadowingTasks
+        .map(normalizeCarryOverTask)
+        .filter(Boolean)
         .filter((task) => !isAftermathHookText(task))
         .filter((task) => !isExpansionThreadText(task) || isClosureActionText(task))
-        .filter((task) => /回收|收束|对质|闭环|定责|裁定|交代|比对|确认|完成|解决/.test(task))
+        .filter((task) => /回收|收束|对质|摊牌|闭环|定责|裁定|交代|比对|确认|完成|解决|兑现|奖励|结算|返回/.test(task))
     ]),
     4,
     130
@@ -4508,7 +5271,7 @@ function applyStageClosureGuardToTaskCard<T extends Pick<
     ? "阶段落点"
     : card.title;
   const endingHook = isAftermathHookText(card.endingHook)
-    ? compactStateText(`阶段落点完成后，只留一处余波或未解压力作为后续钩子，本章不展开追查：${card.endingHook}`, 260)
+    ? compactStateText(`阶段落点完成后，只留一处余波或未解压力作为后续钩子，本章不展开深挖：${card.endingHook}`, 260)
     : isExpansionThreadText(card.endingHook) || isInvestigationExpansionSentence(card.endingHook)
       ? "阶段落点完成后，只留一处尚未回应、信息待公开或责任待裁定的压力，不展开新的行动链。"
       : card.endingHook;
@@ -4568,7 +5331,7 @@ function applyPostClosureCooldownToTaskCard<T extends Pick<
       !isAftermathHookText(task) &&
       !isLowCommitmentAnomalyResidueText(task) &&
       !shouldReplaceCooldownField(task) &&
-      !/阶段冷却|冷却规则|不展开新调查链|不得新增|只能使用|封闭证据池/.test(task)
+      !/阶段冷却|冷却规则|不展开新(?:调查链|任务链|行动链)|不得新增|只能使用|封闭(?:证据|信息)池/.test(task)
     ),
     2,
     120
@@ -4583,10 +5346,10 @@ function applyPostClosureCooldownToTaskCard<T extends Pick<
       continuity: card.continuity,
       mainPlotProgress: card.mainPlotProgress
     }),
-    chapterGoal: cooldownField(card.chapterGoal, "写结案后的休整、身份小收益和有效现实回响；如有双层空间切换，现实段要有压力或代价，不进入新调查。", userGoal),
-    continuity: cooldownField(card.continuity, "承接上一章结案后的现实回响、身份变化和轻度情绪余波；按否认/归因、细节动摇、暂时压下的认知链写，不开启查证行动。", userContinuity),
-    mainPlotProgress: cooldownField(card.mainPlotProgress, "完成上一案后的状态整理和收束，不把下一阶段写成本章主任务。", userProgress),
-    pleasurePoint: cooldownField(card.pleasurePoint, "把上一案压力转成阶段性回报：领赏、认可、关系松动或一处轻收益。", userPleasure),
+    chapterGoal: cooldownField(card.chapterGoal, "写阶段结束后的休整、身份/资源小收益和有效现实回响；如有双层空间切换，现实段要有压力或代价，不进入新任务链。", userGoal),
+    continuity: cooldownField(card.continuity, "承接上一阶段结束后的现实回响、身份变化和轻度情绪余波；按否认/归因、细节动摇、暂时压下的认知链写，不开启查证或新任务行动。", userContinuity),
+    mainPlotProgress: cooldownField(card.mainPlotProgress, "完成上一阶段后的状态整理和收束，不把下一阶段写成本章主任务。", userProgress),
+    pleasurePoint: cooldownField(card.pleasurePoint, "把上一阶段压力转成阶段性回报：奖励、认可、资源/权限兑现、关系松动或一处轻收益。", userPleasure),
     foreshadowingTasks: safeForeshadowingTasks,
     rulesNotToBreak: cleanStateEntries(
       uniqueList([
@@ -4601,7 +5364,7 @@ function applyPostClosureCooldownToTaskCard<T extends Pick<
       150
     ),
     endingHook: userHook || (/新案|调查|追查|证人|物证|地点|卷宗|组织/.test(card.endingHook)
-      ? "只留下轻量过渡钩子，不开启新调查链。"
+        ? "只留下轻量过渡钩子，不开启新的多章任务链。"
       : card.endingHook)
   };
 }
@@ -4645,8 +5408,8 @@ function buildStageExpansionReviewIssue(input: {
     type: "阶段收束失控",
     location: expansionEvidence[0],
     severity: "high",
-    problem: `${guard.reason || "任务卡已进入收束模式"}，但正文/台账又把伏笔或线索扩成新的调查链：${expansionEvidence.join("；")}。这会导致当前案件或阶段越写越大。`,
-    suggestion: "把这些信息降级为案后钩子或一两句背景压力，本章优先合并既有证据、人物供词和前文线索，推进对质、定责、回收、返回或阶段性结案。"
+    problem: `${guard.reason || "任务卡已进入收束模式"}，但正文/台账又把伏笔或信息扩成新的多章任务链：${expansionEvidence.join("；")}。这会导致当前阶段越写越大。`,
+    suggestion: "把这些信息降级为阶段后钩子或一两句背景压力，本章优先合并既有信息、人物选择和前文伏笔，推进对抗结果、责任归属、资源兑现、关系变化、回收、返回或阶段落点。"
   };
 }
 
@@ -4658,11 +5421,11 @@ function isHardForeshadowingTask(value: string) {
 
   if (
     !text ||
-    /保持[^，。；\n]*(未回收|部分回收)|只保留为案后钩子|暂不深挖|不在本章深挖|后续暗线压力/.test(text) ||
+    /保持[^，。；\n]*(未回收|部分回收)|只保留为(?:案后|阶段后)钩子|暂不深挖|不在本章深挖|后续暗线压力/.test(text) ||
     /(?:不|暂不|无需|不必|不能|不要)[^，。；\n]{0,24}(?:回收|揭示|揭开|解释|深挖|追查|调查|展开|处理)/.test(text) ||
     /(?:只|仅)[^，。；\n]{0,24}(?:确认|保留|暗示|轻触|点到|作为|留下)[^，。；\n]{0,40}(?:方向|钩子|伏笔|余波|压力|线索)/.test(text) ||
-    /^(阶段收束|围绕既有|既有证据|如出现|不得|禁止|不要|只能|优先合并|不引出|不展开)/.test(text) ||
-    /不能展开调查链|新的调查链|更大暗线|案后钩子|背景压力|封闭证据池/.test(text)
+    /^(阶段收束|围绕既有|既有(?:信息|证据)|如出现|不得|禁止|不要|只能|优先合并|不引出|不展开)/.test(text) ||
+    /不能展开(?:调查链|任务链|行动链)|新的(?:调查链|任务链|行动链)|更大暗线|(?:案后|阶段后)钩子|背景压力|封闭(?:证据|信息)池/.test(text)
   ) {
     return false;
   }
@@ -4685,12 +5448,52 @@ function isHardForeshadowingTask(value: string) {
 }
 
 function buildDraftObligationRepairIssues(content: string, context: ChapterDraftContext) {
-  const taskCard = context.taskCard;
   const chronologyRewindIssue = buildChronologyRewindIssue(content, context);
+  const transportContinuityIssue = buildTransportContinuityIssue(content, context);
 
   return cleanStateEntries([
-    chronologyRewindIssue
+    chronologyRewindIssue,
+    transportContinuityIssue
   ], 8, 180);
+}
+
+function prepareTaskCardForDraftContext(
+  taskCard: StoredWritingTaskCard,
+  input: {
+    store: AppStore;
+    projectId: string;
+    project: Pick<StoredProject, "name" | "description">;
+    bible: Pick<StoredWritingBible, "protagonistDesire" | "immutableSettings" | "corePleasure" | "narrativeTaboos" | "styleGuide"> | null;
+    characters: StoredCharacterProfile[];
+  }
+) {
+  const genderAnchors = genderAnchorsForTaskCard(
+    input.characters,
+    input.store,
+    input.projectId,
+    taskCard.chapterNumber,
+    input.project,
+    input.bible
+  );
+  const relevantGenderAnchors = genderAnchorsRelevantToTaskCard(genderAnchors, taskCard);
+  const projectGenderText = input.bible ? projectGenderAnchorText(input.project, input.bible) : "";
+  const rulesNotToBreak = cleanTaskCardRulesForStorage(
+    [
+      ...taskCard.rulesNotToBreak,
+      ...genderRulesForTaskCard(relevantGenderAnchors)
+    ],
+    Math.max(12, taskCard.rulesNotToBreak.length),
+    130,
+    {
+      taskText: taskCardActionScopeText(taskCard),
+      projectText: projectGenderText,
+      genderAnchors
+    }
+  );
+
+  return rulesNotToBreak === taskCard.rulesNotToBreak
+    ? taskCard
+    : { ...taskCard, rulesNotToBreak };
 }
 
 async function repairDraftObligationsBeforeSave(input: {
@@ -4765,7 +5568,1232 @@ function combinedLongFormPlanText(aiPlan: AiLongFormPlanResult) {
   ].join("\n");
 }
 
-function validateAiLongFormPlan(aiPlan: AiLongFormPlanResult, estimatedChapters: number) {
+const longFormReaderEngineChecks = [
+  {
+    name: "读者追问",
+    pattern: /读者追问|追读问题|读者期待|读者[^。；\n]{0,60}(?:想知道|担心|等待|期待|疑问)|追问|期待|悬念|想看|担心|等待/
+  },
+  {
+    name: "情绪曲线",
+    pattern: /情绪曲线|情绪债|欠债|加压|还债|憋屈|紧张|心疼|心动|上头|解气|情绪补偿|情绪回报|压抑|爽感|爽点|余波/
+  },
+  {
+    name: "压制反击循环",
+    pattern: /压制反击循环|压制\/反击|压制[^。；\n]{0,100}(?:反击|扭转|反转|翻盘|反制|打脸|推翻|破局)|阻力[^。；\n]{0,100}(?:反击|扭转|反转|翻盘|反制|打脸|推翻|破局)|阻挠|阻拦|轻视|质疑|误判|对抗|对质|反扑|主角行动|破局/
+  },
+  {
+    name: "可见外部回报",
+    pattern: /可见外部回报|外部反馈|公开反馈|资源\/权限|资源权限|关系站队|对手代价|选择权|责任归属|阶段结论|人物态度[^。；\n]{0,40}变化|权限|资源|地位|名声|声望|背书|认可|信任|站队|代价|奖励|晋升|获得|取得|兑现/
+  },
+  {
+    name: "反套路变局",
+    pattern: /反套路变局|反按部就班|意外变局|规则收紧|公开评价反噬|奖励[^。；\n]{0,40}选择题|误判[^。；\n]{0,60}反用|收益[^。；\n]{0,60}代价|盟友[^。；\n]{0,40}秘密|反转|变局|意外|误导|陷阱|翻供|反咬|背叛|反噬|新代价/
+  },
+  {
+    name: "追读钩子",
+    pattern: /追读钩子引擎|章末行动压力|阶段钩子|章末|结尾|下一章|下一步[^。；\n]{0,50}(?:选择|压力|行动|追查|兑现|反扑)|迫使[^。；\n]{0,50}(?:继续|选择|行动)|倒计时|限时|新压力|新钩子|悬念/
+  }
+];
+
+function missingLongFormReaderEngineParts(value: string) {
+  return longFormReaderEngineChecks
+    .filter((check) => !check.pattern.test(value))
+    .map((check) => check.name);
+}
+
+const longFormProtectedTruthPattern =
+  /符号|梦境|穿越|现实|幕后|真相|来源|起源|目的|机制|终局|最终|真正|身份|真身|组织|力量|选中|联系/;
+const longFormTruthLockPattern =
+  /其实是|实为|原来是|本质是|确定为|揭示为|来自|源于|目的是|目的在于|真实含义是|真正含义是|最终答案是/;
+const longFormTruthDefinitionOperatorPattern =
+  "就是|即是|即为|代表|对应|标识为|暗号|编号|源自|源于|来源于";
+const longFormTruthDefinitionPatternSource =
+  `(?:确认|确认为|确定|揭露|揭示|证实|说明|表明)?[^。；：:\\n]{0,16}(?:${longFormProtectedTruthPattern.source})[^。；：:\\n]{0,36}(?:${longFormTruthDefinitionOperatorPattern})[^。；：:\\n]{0,90}`;
+const longFormTruthDefinitionPattern = new RegExp(longFormTruthDefinitionPatternSource);
+const longFormTruthDefinitionGlobalPattern = new RegExp(longFormTruthDefinitionPatternSource, "g");
+const longFormTruthSoftQualifierPattern =
+  /是否|疑似|可能|或许|似乎|待确认|未确认|未知|暂未|不定性|不提前|不得|不能|禁止|不要|表面|伪装|嫁祸|误导|仍待|尚待|不在本阶段|不写死|不定论|边界|占位|只(?:做|作为|保留|呈现)[^。；\n]{0,30}(?:线索|压力|伏笔|可能方向|阶段误判|表层用途)|作为[^。；\n]{0,30}(?:线索|伏笔|压力|钩子|悬念|误导)|保留为[^。；\n]{0,18}(?:伏笔|待确认|疑似方向)|留待[^。；\n]{0,18}(?:后期|后续|作者确认)|不得提前|不能提前|禁止提前/;
+const longFormGenericTruthHoldText = "核心底牌仍保留为后期伏笔，只呈现疑似规律、阶段压力和待确认方向，不在本阶段定性";
+
+function splitLongFormClauses(value: string) {
+  return value
+    .split(/[。；\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function preserveLongFormRangePrefix(value: string, replacement: string) {
+  const match = value.match(/^(第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章(?:（[^）]*）)?[:：])/);
+
+  if (!match?.[1]) {
+    return replacement;
+  }
+
+  return `${match[1]}${replacement}`;
+}
+
+function longFormSoftTruthOperator(operator: string) {
+  if (/来自|源于|来源于/.test(operator)) {
+    return "可能关联";
+  }
+
+  if (/目的/.test(operator)) {
+    return "可能意图指向";
+  }
+
+  if (/含义|答案/.test(operator)) {
+    return "待后期确认的可能含义指向";
+  }
+
+  return "可能关联";
+}
+
+function softenLockedTruthMatch(match: string, prefix: string, operator: string, suffix: string) {
+  if (longFormTruthSoftQualifierPattern.test(match)) {
+    return match;
+  }
+
+  return `${prefix}${longFormSoftTruthOperator(operator)}${suffix}`;
+}
+
+function hasPlanExplicitTruthReveal(value: string) {
+  return splitLongFormClauses(value).some((clause) =>
+    !longFormTruthSoftQualifierPattern.test(clause) &&
+    (
+      new RegExp(
+        `(?:${longFormProtectedTruthPattern.source})[^。；\\n]{0,80}(?:${longFormTruthLockPattern.source})`
+      ).test(clause) ||
+      new RegExp(
+        `(?:${longFormTruthLockPattern.source})[^。；\\n]{0,80}(?:${longFormProtectedTruthPattern.source})`
+      ).test(clause) ||
+      longFormTruthDefinitionPattern.test(clause)
+    )
+  );
+}
+
+function assertLongFormOpenTruthsNotLocked(aiPlan: AiLongFormPlanResult) {
+  const protectedTruthHints = [
+    ...aiPlan.openQuestions,
+    ...aiPlan.doNotRevealEarly
+  ].filter((item) => longFormProtectedTruthPattern.test(item));
+
+  if (protectedTruthHints.length === 0) {
+    return;
+  }
+
+  const riskyText = [
+    aiPlan.corePromise,
+    ...aiPlan.volumePlan,
+    aiPlan.first100Pacing,
+    aiPlan.post100Pacing,
+    ...aiPlan.progressionRules
+  ].join("\n");
+
+  if (hasPlanExplicitTruthReveal(riskyText)) {
+    throw new Error("AI 未返回合格长篇规划：把待揭示的核心真相或符号机制写成了确定答案，请重试。");
+  }
+}
+
+function assertLongFormStageContinuity(aiPlan: AiLongFormPlanResult) {
+  const first100Max = extractChapterRanges(aiPlan.first100Pacing)
+    .filter((range) => range.start <= 100)
+    .reduce((max, range) => Math.max(max, range.end), 0);
+  const firstPost100Start = extractChapterRanges(aiPlan.post100Pacing)
+    .filter((range) => range.start > 0)
+    .sort((a, b) => a.start - b.start)[0]?.start ?? 0;
+
+  if (first100Max > 0 && firstPost100Start > 0 && firstPost100Start <= first100Max) {
+    throw new Error(
+      `AI 未返回合格长篇规划：第101章后阶段范围与前100阶段重叠（前段覆盖到第${first100Max}章，后续从第${firstPost100Start}章开始），请重试。`
+    );
+  }
+}
+
+function preserveLongFormStageCoverage(
+  candidate: AiLongFormPlanResult,
+  fallback: AiLongFormPlanResult,
+  estimatedChapters: number
+): AiLongFormPlanResult {
+  const expectedFirst100Ranges = getExpectedFirst100StageRanges(estimatedChapters);
+  const expectedPost100Ranges = getExpectedPost100StageRanges(estimatedChapters);
+  const candidateFirst100Covers = stageTextCoversExpectedRanges(candidate.first100Pacing, expectedFirst100Ranges);
+  const fallbackFirst100Covers = stageTextCoversExpectedRanges(fallback.first100Pacing, expectedFirst100Ranges);
+  const candidateFirst100Complete =
+    candidateFirst100Covers &&
+    stageTextHasRequiredFields(candidate.first100Pacing) &&
+    stageTextHasValidAdjacentProgression(candidate.first100Pacing);
+  const fallbackFirst100Complete =
+    fallbackFirst100Covers &&
+    stageTextHasRequiredFields(fallback.first100Pacing) &&
+    stageTextHasValidAdjacentProgression(fallback.first100Pacing);
+  let nextPlan = candidate;
+
+  if ((!candidateFirst100Covers && fallbackFirst100Covers) || (!candidateFirst100Complete && fallbackFirst100Complete)) {
+    nextPlan = {
+      ...nextPlan,
+      first100Pacing: fallback.first100Pacing
+    };
+  }
+
+  const candidatePost100Covers =
+    estimatedChapters <= 100 ||
+    stageTextCoversExpectedRanges(candidate.post100Pacing, expectedPost100Ranges);
+  const fallbackPost100Covers =
+    estimatedChapters <= 100 ||
+    stageTextCoversExpectedRanges(fallback.post100Pacing, expectedPost100Ranges);
+  const candidatePost100Complete =
+    estimatedChapters <= 100 ||
+    (
+      candidatePost100Covers &&
+      stageTextHasRequiredFields(candidate.post100Pacing) &&
+      stageTextHasValidAdjacentProgression(candidate.post100Pacing) &&
+      !finalStageTextClosureIssue(candidate.post100Pacing)
+    );
+  const fallbackPost100Complete =
+    estimatedChapters <= 100 ||
+    (
+      fallbackPost100Covers &&
+      stageTextHasRequiredFields(fallback.post100Pacing) &&
+      stageTextHasValidAdjacentProgression(fallback.post100Pacing) &&
+      !finalStageTextClosureIssue(fallback.post100Pacing)
+    );
+
+  if (
+    estimatedChapters > 100 &&
+    (
+      (!candidatePost100Covers && fallbackPost100Covers) ||
+      (!candidatePost100Complete && fallbackPost100Complete)
+    )
+  ) {
+    nextPlan = {
+      ...nextPlan,
+      post100Pacing: fallback.post100Pacing
+    };
+  }
+
+  return nextPlan;
+}
+
+function ensureLongFormDoNotChange(
+  aiPlan: AiLongFormPlanResult,
+  input: {
+    bible: StoredWritingBible;
+    plotState: StoredPlotState;
+    existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>;
+  }
+): AiLongFormPlanResult {
+  if (aiPlan.doNotChange.length > 0) {
+    return aiPlan;
+  }
+
+  const fromConfirmedFacts = aiPlan.confirmedFacts
+    .filter((item) => item.replace(/\s+/g, "").length >= 8)
+    .slice(0, 3)
+    .map((item) => `不得改写已确认事实：${item}`);
+  const stableRules = [
+    input.existingStoryProgress
+      ? `不得改写第1-${input.existingStoryProgress.latestChapterNumber}章已发生事件、已公开线索、人物已知信息和最新章节结尾。`
+      : "",
+    input.bible.worldRules
+      ? `不得改写创作圣经中的世界规则：${compactStateText(input.bible.worldRules, 120)}`
+      : "",
+    input.bible.goldenFingerRules
+      ? `不得改写金手指/核心机制限制：${compactStateText(input.bible.goldenFingerRules, 120)}`
+      : "",
+    input.bible.immutableSettings
+      ? `不得改写稳定设定：${compactStateText(input.bible.immutableSettings, 120)}`
+      : "",
+    input.plotState.mainGoal
+      ? `不得否定当前主线目标：${compactStateText(input.plotState.mainGoal, 120)}`
+      : ""
+  ].filter(Boolean);
+  const doNotChange = cleanList([...fromConfirmedFacts, ...stableRules]).slice(0, 6);
+
+  if (doNotChange.length === 0) {
+    return {
+      ...aiPlan,
+      doNotChange: ["不得改写已写章节事实、创作圣经稳定设定、人物已知信息、世界规则和核心机制限制。"]
+    };
+  }
+
+  return {
+    ...aiPlan,
+    doNotChange
+  };
+}
+
+function softenPrematureTruthRevealText(value: string) {
+  return value
+    .replace(
+      new RegExp(
+        `((?:${longFormProtectedTruthPattern.source})[^。；：:\\n]{0,80})(${longFormTruthLockPattern.source})([^。；：:\\n]{0,80})`,
+        "g"
+      ),
+      softenLockedTruthMatch
+    )
+    .replace(
+      new RegExp(
+        `([^。；：:\\n]{0,80})(${longFormTruthLockPattern.source})((?:[^。；：:\\n]{0,80})(?:${longFormProtectedTruthPattern.source})[^。；：:\\n]{0,40})`,
+        "g"
+      ),
+      softenLockedTruthMatch
+    )
+    .replace(longFormTruthDefinitionGlobalPattern, (match) =>
+      longFormTruthSoftQualifierPattern.test(match)
+        ? match
+        : match.replace(
+            new RegExp(
+              `((?:${longFormProtectedTruthPattern.source})[^。；：:\\n]{0,36})(${longFormTruthDefinitionOperatorPattern})([^。；：:\\n]{0,90})`,
+              "g"
+            ),
+            softenLockedTruthMatch
+          )
+    )
+    .replace(/(?:其实是|实为|原来是|本质是|确定为|揭示为)/g, "疑似");
+}
+
+function softenPrematureTruthRevealList(values: string[]) {
+  return values.map(softenPrematureTruthRevealText);
+}
+
+function cleanLongFormGenericTruthHoldNoiseText(value: string) {
+  const escaped = longFormGenericTruthHoldText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  return value
+    .replace(new RegExp(`(?:${escaped}[。；]?\\s*){2,}`, "g"), `${longFormGenericTruthHoldText}。`)
+    .replace(new RegExp(`主角利用前${escaped}`, "g"), `主角利用前期积累的证据链与人物关系`)
+    .replace(new RegExp(`${escaped}[。；]?但主角`, "g"), `${longFormGenericTruthHoldText}；但主角`)
+    .replace(/疑疑似关联关联/g, "疑似关联")
+    .replace(/疑似关联关联/g, "疑似关联")
+    .replace(/可能关联关联/g, "可能关联")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanLongFormGenericTruthHoldNoiseList(values: string[]) {
+  return values
+    .map(cleanLongFormGenericTruthHoldNoiseText)
+    .filter((item) => item.replace(/[。；\s]/g, "") !== longFormGenericTruthHoldText.replace(/[。；\s]/g, ""));
+}
+
+function cleanLongFormGenericTruthHoldNoiseInPlan(aiPlan: AiLongFormPlanResult): AiLongFormPlanResult {
+  return {
+    ...aiPlan,
+    planningBasis: cleanLongFormGenericTruthHoldNoiseText(aiPlan.planningBasis),
+    corePromise: cleanLongFormGenericTruthHoldNoiseText(aiPlan.corePromise),
+    volumePlan: cleanLongFormGenericTruthHoldNoiseList(aiPlan.volumePlan),
+    progressionPacing: cleanLongFormGenericTruthHoldNoiseList(aiPlan.progressionPacing),
+    rewardPacing: cleanLongFormGenericTruthHoldNoiseList(aiPlan.rewardPacing),
+    confirmedFacts: cleanLongFormGenericTruthHoldNoiseList(aiPlan.confirmedFacts),
+    openQuestions: cleanLongFormGenericTruthHoldNoiseList(aiPlan.openQuestions),
+    doNotChange: cleanLongFormGenericTruthHoldNoiseList(aiPlan.doNotChange),
+    doNotRevealEarly: cleanLongFormGenericTruthHoldNoiseList(aiPlan.doNotRevealEarly),
+    tagPromises: cleanLongFormGenericTruthHoldNoiseList(aiPlan.tagPromises),
+    first10Chapters: cleanLongFormGenericTruthHoldNoiseList(aiPlan.first10Chapters),
+    first100Pacing: cleanLongFormGenericTruthHoldNoiseText(aiPlan.first100Pacing),
+    post100Pacing: cleanLongFormGenericTruthHoldNoiseText(aiPlan.post100Pacing),
+    progressionRules: cleanLongFormGenericTruthHoldNoiseList(aiPlan.progressionRules)
+  };
+}
+
+function currentStoryProgressText(existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>) {
+  if (!existingStoryProgress) {
+    return "";
+  }
+
+  return [
+    existingStoryProgress.latestDraftEnding ?? "",
+    ...(existingStoryProgress.currentStatusLines ?? []),
+    ...existingStoryProgress.establishedEvents,
+    ...existingStoryProgress.establishedPayoffs,
+    ...existingStoryProgress.establishedStateChanges,
+    ...existingStoryProgress.openCarryOverTasks,
+    ...existingStoryProgress.recentLedgers.flatMap((ledger) => [
+      ledger.title,
+      ...ledger.events,
+      ledger.payoff,
+      ledger.cliffhanger,
+      ...ledger.stateChanges,
+      ...ledger.carryOverTasks
+    ])
+  ].join("\n");
+}
+
+function hasOpenResolutionSignal(value: string) {
+  return /未完成|未解决|未收束|未结|未归案|未确认|未查明|未落定|未兑现|未获得|未取得|未晋升|未升级|未突破|尚未|还未|仍未|待处理|待确认|待收束|待回收|待兑现|在逃|潜逃|逃走|追捕|追缉|继续追查|后续追查|悬念|钩子|逃脱|逃离/.test(value);
+}
+
+function hasClosedResolutionClaim(value: string) {
+  return /已完成|已解决|已收束|已归案|已落网|已确认|已查明|已兑现|已获得|已取得|已拿到|已晋升|已升级|已突破|正式完成|正式收束|正式结案|已结案|已破案|任务完成|阶段完成|真相大白|真凶伏法|公堂确认|尘埃落定|盖棺定论|认罪|供认不讳|服罪|判斩|判刑|定罪|成功(?:完成|解决|收束|抓获|击败|兑现|获得|取得|拿到|晋升|升级|突破)|彻底(?:解决|收束|查清|击败)|破获|告破|收网|抓获|擒获|伏法/.test(value);
+}
+
+function claimsCompletedFromClueContent(value: string) {
+  const clueCarrierPattern =
+    /纸条|纸片|信|信件|留言|遗言|口供|证词|证言|供词|供述|传话|密报|消息|梦境提示|系统提示|提示|地图|坐标|卷宗|档案|账册|账本|记录|截图|照片|录音|监控|符号|标记|线索/;
+  const clueVerbPattern = /写着|写有|记着|记载|显示|提示|声称|供称|说|指出|指向|暗示|提到|留下|标注|标出/;
+  const completionPattern =
+    /已发现|已获得|已取得|已拿到|已找到|已查明|已确认|确认(?:了)?[^。！？；\n]{0,40}|发现(?:了)?[^。！？；\n]{0,40}|获得(?:了)?[^。！？；\n]{0,40}|拿到(?:了)?[^。！？；\n]{0,40}|找到(?:了)?[^。！？；\n]{0,40}/;
+
+  return clueCarrierPattern.test(value) && clueVerbPattern.test(value) && completionPattern.test(value);
+}
+
+function completedImportantObjects(value: string) {
+  if (!/(发现|获得|取得|拿到|找到|查获|缴获|回收|确认|锁定|得到|搜出|找出)/.test(value)) {
+    return [];
+  }
+
+  const objects = [
+    "账本",
+    "账册",
+    "账页",
+    "残页",
+    "残片",
+    "卷宗",
+    "档案",
+    "地图",
+    "路线图",
+    "名单",
+    "名册",
+    "信件",
+    "密信",
+    "纸条",
+    "纸片",
+    "令牌",
+    "钥匙",
+    "符号",
+    "标记",
+    "图案",
+    "拓片",
+    "物证",
+    "证据",
+    "凶器",
+    "尸体",
+    "匣子",
+    "木匣",
+    "玉佩",
+    "法器",
+    "丹药",
+    "功法",
+    "合同",
+    "截图",
+    "照片",
+    "录音",
+    "监控"
+  ];
+
+  return objects.filter((object) => value.includes(object));
+}
+
+function factLockObjectContradictsCurrentProgress(value: string, progressText: string) {
+  const objects = completedImportantObjects(value);
+
+  if (objects.length === 0 || !progressText) {
+    return false;
+  }
+
+  return objects.some((object) => {
+    const escaped = object.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const openObjectPattern = new RegExp(
+      `(?:未|尚未|还未|待|继续|正在|追|查|找|寻|确认)[^。！？；\\n]{0,24}${escaped}|${escaped}[^。！？；\\n]{0,24}(?:未|尚未|还未|待|继续|追|查|找|寻|确认|在逃|潜逃|逃走|逃离|被带走|带走|销毁|烧毁|毁掉|转移)|(?:带着|携带|拿着|卷走|转移|销毁|烧毁|毁掉)[^。！？；\\n]{0,24}${escaped}|(?:纸条|纸片|信|信件|口供|证词|留言|提示|地图|坐标|卷宗|档案|记录|线索)[^。！？；\\n]{0,36}(?:写着|写有|提示|声称|供称|指出|指向|提到|标注)[^。！？；\\n]{0,36}${escaped}`,
+      "u"
+    );
+
+    return openObjectPattern.test(progressText);
+  });
+}
+
+function isOverbroadLongFormFactLock(value: string) {
+  return (
+    /(?:所有|全部|全体|全员|每个|每位)[^。！？；\n]{0,24}(?:角色|人物|主要角色|重要人物|配角)[^。！？；\n]{0,24}(?:均|都|全部|全为|皆|一致|统一|固定|永远|必定)?[^。！？；\n]{0,20}(?:性别|状态|结局|阵营|立场|关系|身份|命运|存亡)/.test(value) ||
+    /(?:角色|人物|主要角色|重要人物|配角)[^。！？；\n]{0,12}(?:性别|状态|结局|阵营|立场|关系|身份|命运|存亡)[^。！？；\n]{0,20}(?:所有|全部|全体|全员|每个|每位|均|都|全为|皆|一致|统一|固定|永远|必定)/.test(value)
+  );
+}
+
+function isClosedStateLongFormProgressLine(value: string) {
+  return hasClosedResolutionClaim(value) && !hasOpenResolutionSignal(value);
+}
+
+function factLockConflictsWithCurrentStoryProgress(
+  value: string,
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+) {
+  const progressText = currentStoryProgressText(existingStoryProgress);
+  const progressHasOpenResolution = hasOpenResolutionSignal(progressText);
+  const valueClaimsClosedResolution = hasClosedResolutionClaim(value);
+
+  if (progressHasOpenResolution && valueClaimsClosedResolution) {
+    return true;
+  }
+
+  if (hasOpenResolutionSignal(value) && hasClosedResolutionClaim(value)) {
+    return true;
+  }
+
+  if (claimsCompletedFromClueContent(value)) {
+    return true;
+  }
+
+  if (factLockObjectContradictsCurrentProgress(value, progressText)) {
+    return true;
+  }
+
+  if (isOverbroadLongFormFactLock(value)) {
+    return true;
+  }
+
+  return false;
+}
+
+function currentOpenStoryProgressSummary(
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+) {
+  if (!existingStoryProgress) {
+    return "";
+  }
+
+  return cleanStateEntries([
+    ...(existingStoryProgress.currentStatusLines ?? []),
+    ...existingStoryProgress.openCarryOverTasks,
+    ...existingStoryProgress.recentLedgers.flatMap((ledger) => [
+      ledger.cliffhanger,
+      ...ledger.carryOverTasks,
+      ...ledger.stateChanges,
+      ...ledger.events
+    ])
+  ], 3, 120).filter(hasOpenResolutionSignal).join("；");
+}
+
+function sanitizeLongFormPlanningBasisAgainstProgress(
+  value: string,
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+) {
+  if (!value.trim() || !factLockConflictsWithCurrentStoryProgress(value, existingStoryProgress)) {
+    return value;
+  }
+
+  const openSummary = currentOpenStoryProgressSummary(existingStoryProgress);
+  const continuation = existingStoryProgress?.continuationChapterNumber;
+  const suffix = openSummary
+    ? `当前续写点以最新章节状态为准：${openSummary}。`
+    : "当前续写点以最新章节台账和未完成任务为准，不把较早阶段性完成结论当作当前已收束事实。";
+
+  return cleanStateEntries([
+    `基于项目简介、创作圣经、主线状态、人物档案、伏笔表和已有${existingStoryProgress?.latestChapterNumber ?? ""}章台账生成。`,
+    continuation ? `后续规划从第${continuation}章继续优化，不改写已写章节。` : "",
+    suffix
+  ], 3, 180).join("");
+}
+
+function sanitizeGeneratedLongFormFactLocks(
+  aiPlan: AiLongFormPlanResult,
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+): AiLongFormPlanResult {
+  const riskyFacts = [...aiPlan.confirmedFacts, ...aiPlan.doNotChange].filter((item) =>
+    factLockConflictsWithCurrentStoryProgress(item, existingStoryProgress)
+  );
+  const planningBasis = sanitizeLongFormPlanningBasisAgainstProgress(
+    aiPlan.planningBasis,
+    existingStoryProgress
+  );
+
+  if (riskyFacts.length === 0 && planningBasis === aiPlan.planningBasis) {
+    return aiPlan;
+  }
+
+  return {
+    ...aiPlan,
+    planningBasis,
+    confirmedFacts: aiPlan.confirmedFacts.filter((item) =>
+      !factLockConflictsWithCurrentStoryProgress(item, existingStoryProgress)
+    ),
+    doNotChange: aiPlan.doNotChange.filter((item) =>
+      !factLockConflictsWithCurrentStoryProgress(item, existingStoryProgress)
+    ),
+    openQuestions: uniqueList([
+      ...aiPlan.openQuestions,
+      ...riskyFacts.map((item) => `需以后续正文或台账确认后才能写入事实锁：${item}`)
+    ]),
+    doNotRevealEarly: uniqueList([
+      ...aiPlan.doNotRevealEarly,
+      "不得把仍未解决、未收束、未兑现或未逐一确认的状态提前写入 confirmedFacts/doNotChange；纸条、口供、提示、地图、卷宗等线索载体里的内容只能写成线索提示，不能直接写成已发现/已获得/已确认；全员状态、角色结局、奖励权限和阶段结果必须有正文或台账证据后才能成为事实锁。"
+    ])
+  };
+}
+
+function longFormKnownFactText(input: {
+  project: StoredProject;
+  bible: StoredWritingBible;
+  plotState: StoredPlotState;
+  characters: StoredCharacterProfile[];
+  foreshadowings: StoredForeshadowing[];
+  storyAnalysis?: StoredStoryAnalysis | null;
+}) {
+  return [
+    input.project.name,
+    input.project.description,
+    input.bible.workType,
+    input.bible.corePleasure,
+    input.bible.protagonistDesire,
+    input.bible.worldRules,
+    input.bible.goldenFingerRules,
+    input.bible.powerSystem,
+    input.bible.narrativeTaboos,
+    input.bible.immutableSettings,
+    input.bible.styleGuide,
+    input.plotState.currentVolume,
+    input.plotState.currentMap,
+    input.plotState.mainGoal,
+    input.plotState.shortTermGoal,
+    input.plotState.currentStage,
+    input.plotState.currentEnemy,
+    input.plotState.powerSystemState,
+    input.plotState.mapAndForces,
+    input.plotState.resourceState,
+    ...input.plotState.unresolvedQuestions,
+    ...input.plotState.openThreads,
+    ...input.plotState.nextMilestones,
+    ...input.characters.flatMap((character) => [
+      character.name,
+      character.identity,
+      character.currentGoal,
+      character.longTermGoal,
+      character.secret,
+      character.currentState
+    ]),
+    ...input.foreshadowings.flatMap((item) => [
+      item.name,
+      item.hiddenInformation,
+      item.revealMethod,
+      item.relatedLocation
+    ]),
+    input.storyAnalysis?.genre ?? "",
+    input.storyAnalysis?.openingHook ?? "",
+    input.storyAnalysis?.mainLoop ?? "",
+    input.storyAnalysis?.pacing ?? "",
+    input.storyAnalysis?.formula ?? ""
+  ].join("\n");
+}
+
+function softenUnprovenLongFormSpecificsText(value: string, knownText: string) {
+  return value
+    .replace(/(?:揭露|揭开|解释|说明)?(?:穿越|梦境|现实异常|现实|符号|核心机制|特殊机制)[^。；\n]{0,30}(?:真相|来源|本质|关联实验|实验|筛选|选中|操控|利用|测试)[^。；\n]{0,50}/g, (match) =>
+      knownText.includes(match) ? match : "待确认机制伏笔"
+    )
+    .replace(/(?:待确认)?(?:幕后|终局|上层|未知|神秘)[^。；\n]{0,18}(?:力量|势力|组织|压力|机制|存在|黑手|首脑)?[^。；\n]{0,30}(?:利用|筛选|操控|制造|安排|选中|实验|测试)[^。；\n]{0,50}/g, (match) =>
+      knownText.includes(match) ? match : "待确认终局压力"
+    )
+    .replace(/(?:符号|梦境|穿越|现实异常|现实|核心机制|特殊机制|幕后|真相|终局|系统|副本|金手指)[^。；\n]{0,24}(?:组织|势力|机构|据点|总部|分支|上层|首脑|黑手|幕后人)/g, (match) =>
+      knownText.includes(match) ? match : "待确认幕后压力"
+    )
+    .replace(/(?:未知|神秘|幕后|远期|上层|高层|最终)[\u4e00-\u9fa5]{0,8}(?:组织|势力|机构|据点|总部|分支|首脑|黑手|幕后人)/g, (match) =>
+      knownText.includes(match) ? match : "待确认幕后压力"
+    )
+    .replace(/(?:嗜血|血煞|血影|魔影|黑莲|邪月|暗星|星门|时轮|天机|长生|神罚|鬼王|万魂)[\u4e00-\u9fa5]{0,4}(?:山庄|教|门|阁|殿|会|盟|楼|谷|宫|宗|司|堂|帮|寨|组织)/g, (match) =>
+      knownText.includes(match) ? match : "待命名原创势力/据点"
+    )
+    .replace(/观星会|天机阁|黑莲教|长生教|星门会|暗星会|司天监密会/g, (match) =>
+      knownText.includes(match) ? match : "疑似幕后势力"
+    )
+    .replace(/秦朝|大秦|秦陵|秦皇陵|昆仑墟|函谷关/g, (match) =>
+      knownText.includes(match) ? match : "疑似远期旧事"
+    )
+    .replace(/邪神|远古邪神|神祇|神明|魔神|外神/g, (match) =>
+      knownText.includes(match) ? match : "待确认终局压力"
+    )
+    .replace(/AI核心|AI主脑|AI代码|服务器|黑客|数据库|政府秘密机构|全球通缉|底层代码|代码残影|系统bug|bug标记|超脑系统|超脑|管理员权限|系统管理员|底层系统|系统权限|虚实切换|NPC/g, (match) =>
+      knownText.includes(match) ? match : "现实异常线索"
+    )
+    .replace(/梦境坐标|维度编号|现实中上司投射|上司投射|天道盘|天外陨石|外星文明|高等科技|接口标识|古镜/g, (match) =>
+      knownText.includes(match) ? match : "待确认机制线索"
+    )
+    .replace(/DNA|血脉|王室血脉|纯阴之命|祭品|献祭/g, (match) =>
+      knownText.includes(match) ? match : "待确认身份伏笔"
+    )
+    .replace(/未来的自己|平行世界自己的意识体|意识副本|轮回的唯一变量/g, (match) =>
+      knownText.includes(match) ? match : "待确认终局可能性"
+    )
+    .replace(/永夜将至|末世预言|灭世|世界崩塌/g, (match) =>
+      knownText.includes(match) ? match : "远期危机预告");
+}
+
+function softenUnprovenLongFormSpecificsList(values: string[], knownText: string) {
+  return values.map((item) => softenUnprovenLongFormSpecificsText(item, knownText));
+}
+
+function softenUnprovenLongFormSpecificsInPlan(
+  aiPlan: AiLongFormPlanResult,
+  input: {
+    project: StoredProject;
+    bible: StoredWritingBible;
+    plotState: StoredPlotState;
+    characters: StoredCharacterProfile[];
+    foreshadowings: StoredForeshadowing[];
+    storyAnalysis?: StoredStoryAnalysis | null;
+  }
+): AiLongFormPlanResult {
+  const knownText = longFormKnownFactText(input);
+  const softened = {
+    ...aiPlan,
+    planningBasis: softenUnprovenLongFormSpecificsText(aiPlan.planningBasis, knownText),
+    corePromise: softenUnprovenLongFormSpecificsText(aiPlan.corePromise, knownText),
+    volumePlan: softenUnprovenLongFormSpecificsList(aiPlan.volumePlan, knownText),
+    progressionPacing: softenUnprovenLongFormSpecificsList(aiPlan.progressionPacing, knownText),
+    rewardPacing: softenUnprovenLongFormSpecificsList(aiPlan.rewardPacing, knownText),
+    confirmedFacts: softenUnprovenLongFormSpecificsList(aiPlan.confirmedFacts, knownText),
+    openQuestions: softenUnprovenLongFormSpecificsList(aiPlan.openQuestions, knownText),
+    doNotChange: softenUnprovenLongFormSpecificsList(aiPlan.doNotChange, knownText),
+    doNotRevealEarly: softenUnprovenLongFormSpecificsList(aiPlan.doNotRevealEarly, knownText),
+    tagPromises: softenUnprovenLongFormSpecificsList(aiPlan.tagPromises, knownText),
+    first10Chapters: softenUnprovenLongFormSpecificsList(aiPlan.first10Chapters, knownText),
+    first100Pacing: softenUnprovenLongFormSpecificsText(aiPlan.first100Pacing, knownText),
+    post100Pacing: softenUnprovenLongFormSpecificsText(aiPlan.post100Pacing, knownText),
+    progressionRules: softenUnprovenLongFormSpecificsList(aiPlan.progressionRules, knownText)
+  };
+
+  if (softened !== aiPlan) {
+    softened.openQuestions = uniqueList([
+      ...softened.openQuestions,
+      "远期组织名、终局危机、机制来源、身份答案和现实异常均需以后续正文证据逐层确认；未在事实源明确前只作为功能占位。"
+    ]);
+    softened.doNotRevealEarly = uniqueList([
+      ...softened.doNotRevealEarly,
+      "不得把远期组织名、神魔/AI/血脉/未来自我等终局解释提前写成确定答案，除非项目事实源已明确。"
+    ]);
+  }
+
+  return softened;
+}
+
+function softenPrematureTruthRevealsInPlan(aiPlan: AiLongFormPlanResult): AiLongFormPlanResult {
+  return {
+    ...aiPlan,
+    planningBasis: softenPrematureTruthRevealText(aiPlan.planningBasis),
+    corePromise: softenPrematureTruthRevealText(aiPlan.corePromise),
+    volumePlan: softenPrematureTruthRevealList(aiPlan.volumePlan),
+    progressionPacing: softenPrematureTruthRevealList(aiPlan.progressionPacing),
+    rewardPacing: softenPrematureTruthRevealList(aiPlan.rewardPacing),
+    confirmedFacts: softenPrematureTruthRevealList(aiPlan.confirmedFacts),
+    doNotChange: softenPrematureTruthRevealList(aiPlan.doNotChange),
+    tagPromises: softenPrematureTruthRevealList(aiPlan.tagPromises),
+    first10Chapters: softenPrematureTruthRevealList(aiPlan.first10Chapters),
+    first100Pacing: softenPrematureTruthRevealText(aiPlan.first100Pacing),
+    post100Pacing: softenPrematureTruthRevealText(aiPlan.post100Pacing),
+    progressionRules: softenPrematureTruthRevealList(aiPlan.progressionRules),
+    openQuestions: uniqueList([
+      ...aiPlan.openQuestions,
+      "核心真相、特殊机制来源、多层世界关系、幕后力量和终局解释均为待确认核心伏笔，未到后期不得定性。"
+    ]),
+    doNotRevealEarly: uniqueList([
+      ...softenPrematureTruthRevealList(aiPlan.doNotRevealEarly),
+      "不得提前定性核心真相、特殊机制来源、幕后组织、主角是否被选中、多层世界关系或终局解释。"
+    ])
+  };
+}
+
+function expectedOpeningBlueprintStartChapter(existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>) {
+  return existingStoryProgress?.continuationChapterNumber ?? 1;
+}
+
+function expectedOpeningBlueprintChapterNumbers(existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>) {
+  const start = expectedOpeningBlueprintStartChapter(existingStoryProgress);
+  return Array.from({ length: 10 }, (_, index) => start + index);
+}
+
+function getExpectedFirst100StageRanges(estimatedChapters: number) {
+  const frontStageEnd = Math.min(100, estimatedChapters);
+  const windowSize = 50;
+  const ranges: Array<{ start: number; end: number }> = [];
+
+  for (let start = 1; start <= frontStageEnd; start += windowSize) {
+    ranges.push({ start, end: Math.min(start + windowSize - 1, frontStageEnd) });
+  }
+
+  return ranges;
+}
+
+function assertLongFormReaderEngine(aiPlan: AiLongFormPlanResult, estimatedChapters: number) {
+  const first100Missing = missingLongFormReaderEngineParts(aiPlan.first100Pacing);
+  const stageSupportText = [
+    aiPlan.corePromise,
+    ...aiPlan.rewardPacing,
+    ...aiPlan.progressionRules,
+    aiPlan.first100Pacing
+  ].join("\n");
+  const first100SupportMissing = missingLongFormReaderEngineParts(stageSupportText);
+
+  if (first100Missing.length >= 5 && first100SupportMissing.length >= 3) {
+    throw new Error(
+      `AI 未返回合格长篇规划：第1-${Math.min(100, estimatedChapters)}章阶段缺少读者追读引擎（${first100Missing.join("、")}），请重试。`
+    );
+  }
+
+  if (estimatedChapters > 100) {
+    const post100Missing = missingLongFormReaderEngineParts(aiPlan.post100Pacing);
+    const post100SupportMissing = missingLongFormReaderEngineParts([
+      aiPlan.corePromise,
+      ...aiPlan.rewardPacing,
+      ...aiPlan.progressionRules,
+      aiPlan.post100Pacing
+    ].join("\n"));
+
+    if (post100Missing.length >= 5 && post100SupportMissing.length >= 3) {
+      throw new Error(
+        `AI 未返回合格长篇规划：第101章后阶段缺少读者追读引擎（${post100Missing.join("、")}），请重试。`
+      );
+    }
+  }
+
+  const rewardText = aiPlan.rewardPacing.join("\n");
+  const hasOnlyInformationReward =
+    /线索|信息|物证|道具|碎片|地图|提示|记录|数值/.test(rewardText) &&
+    !/收益轮换|类型轮换|外部反馈|公开反馈|资源\/权限|资源权限|权限|名声|声望|背书|站队|关系变化|人物态度|对手代价|选择权|资格|责任归属|阶段结论/.test(rewardText);
+
+  if (hasOnlyInformationReward) {
+    throw new Error("AI 未返回合格长篇规划：收益节奏过度依赖信息/线索/道具，缺少可见外部回报和收益轮换，请重试。");
+  }
+
+  if (!/收益轮换|类型轮换|外部反馈|公开反馈/.test(rewardText)) {
+    throw new Error("AI 未返回合格长篇规划：rewardPacing 缺少收益类型轮换或外部反馈规则，请重试。");
+  }
+
+  const planText = combinedLongFormPlanText(aiPlan);
+  const globalMissing = missingLongFormReaderEngineParts(planText);
+
+  if (globalMissing.length >= 3) {
+    throw new Error(`AI 未返回合格长篇规划：整体缺少读者追读引擎（${globalMissing.join("、")}），请重试。`);
+  }
+
+  assertLongFormOpenTruthsNotLocked(aiPlan);
+  assertLongFormStageContinuity(aiPlan);
+}
+
+function longFormStageChunks(value: string) {
+  const normalized = normalizeChapterRangeText(value.trim());
+  const pattern = /第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g;
+  const matches = Array.from(normalized.matchAll(pattern));
+
+  return matches.map((match, index) => {
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    const startIndex = match.index ?? 0;
+    const nextIndex = matches[index + 1]?.index ?? normalized.length;
+
+    return {
+      start,
+      end,
+      text: normalized.slice(startIndex, nextIndex).trim()
+    };
+  }).filter((chunk) => Number.isFinite(chunk.start) && Number.isFinite(chunk.end) && chunk.text.length > 0);
+}
+
+function normalizeLongFormStageClause(value: string) {
+  return value
+    .replace(/^第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章(?:（[^）]*）)?[：:]?/, "")
+    .replace(/^[\s；。]*(?:阶段目标|读者追问|情绪曲线|主要压力\/对手|主要压力|压制反击循环|成长上限|地图\/势力推进|爽点节奏|收益轮换|反套路变局|伏笔|支线收束|关系变化|阶段钩子|追读钩子引擎|进入下一阶段条件)[：:]/, "")
+    .replace(/\d+/g, "")
+    .replace(/[，,。；;：:、（）()【】《》“”"'\s]/g, "")
+    .trim();
+}
+
+function longFormStageClauseSet(chunk: string) {
+  return new Set(
+    chunk
+      .split(/[。；;\n]/)
+      .map(normalizeLongFormStageClause)
+      .filter((clause) => clause.length >= 12)
+  );
+}
+
+function countLongFormStageOverlap(left: Set<string>, right: Set<string>) {
+  let count = 0;
+
+  left.forEach((item) => {
+    if (right.has(item)) {
+      count += 1;
+    }
+  });
+
+  return count;
+}
+
+function assertLongFormStageVarietyForText(value: string, label: string) {
+  const chunks = longFormStageChunks(value);
+
+  if (chunks.length < 3) {
+    return;
+  }
+
+  const templatePatterns = [
+    /承接核心承诺/,
+    /读者等待前期压力如何反转/,
+    /旧压力升级为资源、权限、关系或对手代价/,
+    /先压制和误判，再用行动反击/,
+    /阶段收益带来新代价或规则收紧/,
+    /阶段结论、资源兑现或关系变化后进入下一阶段/,
+    /顺承上一阶段已建立的地图、势力和行动压力/
+  ];
+  const repeatedTemplatePhraseCount = templatePatterns.filter((pattern) =>
+    chunks.filter((chunk) => pattern.test(chunk.text)).length >= 3
+  ).length;
+  const clauseSets = chunks.map((chunk) => longFormStageClauseSet(chunk.text));
+  const clauseCounts = new Map<string, number>();
+
+  clauseSets.forEach((set) => {
+    set.forEach((clause) => {
+      clauseCounts.set(clause, (clauseCounts.get(clause) ?? 0) + 1);
+    });
+  });
+
+  const repeatedClauses = Array.from(clauseCounts.entries())
+    .filter(([clause, count]) => count >= 3 && clause.length >= 16)
+    .map(([clause]) => clause);
+  let similarPairCount = 0;
+
+  for (let leftIndex = 0; leftIndex < clauseSets.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < clauseSets.length; rightIndex += 1) {
+      const left = clauseSets[leftIndex];
+      const right = clauseSets[rightIndex];
+      const baseSize = Math.min(left.size, right.size);
+
+      if (baseSize >= 6 && countLongFormStageOverlap(left, right) / baseSize >= 0.62) {
+        similarPairCount += 1;
+      }
+    }
+  }
+
+  if (
+    repeatedTemplatePhraseCount >= 3 ||
+    repeatedClauses.length >= 5 ||
+    similarPairCount >= Math.max(2, chunks.length - 2)
+  ) {
+    throw new Error(
+      `AI 未返回合格长篇规划：${label}阶段规划存在多段模板化重复，缺少阶段差异、情绪曲线和具体推进，请重试。`
+    );
+  }
+}
+
+function extractLongFormStageField(chunkText: string, labels: string[]) {
+  const body = normalizeChapterRangeText(chunkText)
+    .replace(/^第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章(?:（[^）]*）)?[：:]?/, "")
+    .trim();
+  const fields = body.split(/[。；;\n]/).map((item) => item.trim()).filter(Boolean);
+
+  for (const field of fields) {
+    const match = field.match(/^([^：:]{2,18})[：:](.+)$/);
+    const fieldLabel = match?.[1]?.trim();
+
+    if (fieldLabel && labels.includes(fieldLabel)) {
+      return match?.[2]?.trim() ?? "";
+    }
+  }
+
+  return "";
+}
+
+const longFormRequiredStageFieldGroups = [
+  ["阶段目标"],
+  ["读者追问"],
+  ["情绪曲线"],
+  ["主要压力/对手", "主要压力"],
+  ["压制反击循环"],
+  ["成长上限"],
+  ["地图/势力推进"],
+  ["爽点节奏"],
+  ["收益轮换"],
+  ["反套路变局"],
+  ["伏笔"],
+  ["支线收束"],
+  ["关系变化"],
+  ["阶段钩子"],
+  ["追读钩子引擎"],
+  ["进入下一阶段条件"]
+];
+
+function assertLongFormStageFieldCompletenessForText(value: string, label: string) {
+  const chunks = longFormStageChunks(value);
+
+  for (const chunk of chunks) {
+    const missing = longFormRequiredStageFieldGroups
+      .filter((group) => {
+        const field = extractLongFormStageField(chunk.text, group);
+        return field.replace(/\s+/g, "").length < 4;
+      })
+      .map((group) => group[0]);
+
+    if (missing.length > 0) {
+      throw new Error(
+        `AI 未返回完整长篇规划：${label}第${chunk.start}-${chunk.end}章阶段缺少${missing.slice(0, 4).join("、")}，请重试。`
+      );
+    }
+  }
+}
+
+function normalizeLongFormStageMeaning(value: string) {
+  return normalizeLongFormStageClause(value)
+    .replace(/(?:本阶段|阶段|目标|主角|女主|男主|继续|逐步|完成|推进|进入|开启|触发|准备|处理|解决)/g, "")
+    .trim();
+}
+
+function textBigramSet(value: string) {
+  const normalized = normalizeLongFormStageMeaning(value);
+  const grams = new Set<string>();
+
+  if (normalized.length < 2) {
+    return grams;
+  }
+
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    grams.add(normalized.slice(index, index + 2));
+  }
+
+  return grams;
+}
+
+function longFormStageTextSimilarity(left: string, right: string) {
+  const leftSet = textBigramSet(left);
+  const rightSet = textBigramSet(right);
+  const baseSize = Math.min(leftSet.size, rightSet.size);
+
+  if (baseSize < 6) {
+    return 0;
+  }
+
+  let overlap = 0;
+  leftSet.forEach((gram) => {
+    if (rightSet.has(gram)) {
+      overlap += 1;
+    }
+  });
+
+  return overlap / baseSize;
+}
+
+function stageTransitionOpensNewUnit(value: string) {
+  return /进入|开启|转入|切换|入口|下一(?:阶段|卷|单元|主案|地图)|新(?:阶段|卷|单元|主案|地图)|触发/.test(value);
+}
+
+function stageTargetAlreadyClosing(value: string) {
+  return /^(收束|结案|完结|终局|扳倒|彻底|最终|定罪|伏法|平定|覆灭|一网打尽|洗冤)/.test(
+    value.trim()
+  );
+}
+
+function stageChunkIsTerminal(chunk: { start: number; end: number; text: string }) {
+  return /剩余结尾|终局|终章|全书|完结|结局|无下一阶段|主线已闭合|主线收束/.test(chunk.text);
+}
+
+function assertLongFormAdjacentStageProgressionForText(value: string, label: string) {
+  const chunks = longFormStageChunks(value);
+
+  for (let index = 1; index < chunks.length; index += 1) {
+    const previous = chunks[index - 1];
+    const current = chunks[index];
+    const previousTarget = extractLongFormStageField(previous.text, ["阶段目标"]);
+    const currentTarget = extractLongFormStageField(current.text, ["阶段目标"]);
+
+    if (
+      previousTarget &&
+      currentTarget &&
+      longFormStageTextSimilarity(previousTarget, currentTarget) >= 0.78
+    ) {
+      throw new Error(
+        `AI 未返回合格长篇规划：${label}第${previous.start}-${previous.end}章与第${current.start}-${current.end}章阶段目标重复，必须改成递进关系而不是复写同一主目标，请重试。`
+      );
+    }
+
+    const previousTransition = [
+      extractLongFormStageField(previous.text, ["阶段钩子"]),
+      extractLongFormStageField(previous.text, ["进入下一阶段条件"])
+    ].join(" ");
+
+    if (
+      previousTransition &&
+      currentTarget &&
+      !stageChunkIsTerminal(current) &&
+      stageTransitionOpensNewUnit(previousTransition) &&
+      stageTargetAlreadyClosing(currentTarget)
+    ) {
+      throw new Error(
+        `AI 未返回合格长篇规划：${label}第${previous.start}-${previous.end}章刚开启下一阶段，但第${current.start}-${current.end}章直接写成收束/结案/扳倒，阶段衔接不成立，请重试。`
+      );
+    }
+  }
+}
+
+function assertLongFormFinalStageClosure(aiPlan: AiLongFormPlanResult, estimatedChapters: number) {
+  const chunks = longFormStageChunks(aiPlan.post100Pacing);
+  const finalStage = chunks
+    .filter((chunk) => chunk.end >= Math.max(101, estimatedChapters - 3))
+    .sort((a, b) => b.end - a.end)[0];
+
+  if (!finalStage) {
+    return;
+  }
+
+  const finalText = finalStage.text;
+  const finalTarget = extractLongFormStageField(finalText, ["阶段目标"]);
+  const finalHook = extractLongFormStageField(finalText, ["阶段钩子"]);
+  const finalNext = extractLongFormStageField(finalText, ["进入下一阶段条件"]);
+  const transitionText = `${finalTarget} ${finalHook} ${finalNext}`;
+  const opensNewMainUnit =
+    /进入|开启|转入|切换|入口|下一(?:阶段|卷|单元|主案|地图|世界)|新(?:阶段|卷|单元|主案|地图|世界)|触发/.test(transitionText) &&
+    !/开放式结局|续作|番外|余波/.test(transitionText);
+  const hasClosure =
+    /全书|终局|完结|结局|收束|闭环|回收|落定|最终抉择|阶段余波|主线[^。；\n]{0,16}(?:完成|收束|闭环)|核心[^。；\n]{0,16}(?:回收|落定)/.test(finalText);
+
+  if (opensNewMainUnit || !hasClosure) {
+    throw new Error(
+      `AI 未返回合格长篇规划：终局阶段第${finalStage.start}-${finalStage.end}章必须收束全书主线，不能继续开启新单元、新阶段或新入口，请重试。`
+    );
+  }
+}
+
+function assertLongFormStageVariety(aiPlan: AiLongFormPlanResult, estimatedChapters: number) {
+  assertLongFormStageFieldCompletenessForText(aiPlan.first100Pacing, "前100章");
+  assertLongFormStageVarietyForText(aiPlan.first100Pacing, "前100章");
+  assertLongFormAdjacentStageProgressionForText(aiPlan.first100Pacing, "前100章");
+
+  if (aiPlan.post100Pacing.trim()) {
+    assertLongFormStageFieldCompletenessForText(aiPlan.post100Pacing, "第101章后");
+    assertLongFormStageVarietyForText(aiPlan.post100Pacing, "第101章后");
+    assertLongFormAdjacentStageProgressionForText(aiPlan.post100Pacing, "第101章后");
+    assertLongFormFinalStageClosure(aiPlan, estimatedChapters);
+  }
+}
+
+function longFormVolumeRangeAndLabel(value: string) {
+  const rangeMatch =
+    value.match(/(?:第[一二三四五六七八九十百]+卷)?[「『【《]([^」』】》]{2,24})[」』】》][^\d]{0,20}(\d+)\s*-\s*(\d+)\s*章/) ??
+    value.match(/(?:第[一二三四五六七八九十百]+卷)?\s*([^：:，,。；;\d]{2,16})[^\d]{0,16}(\d+)\s*-\s*(\d+)\s*章/);
+
+  if (!rangeMatch) {
+    return null;
+  }
+
+  const label = rangeMatch[1]?.trim().replace(/^(目标|阶段|卷名)/, "");
+  const start = Number(rangeMatch[2]);
+  const end = Number(rangeMatch[3]);
+
+  if (!label || !Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  return { label, start, end };
+}
+
+function assertLongFormVolumeStageAlignment(aiPlan: AiLongFormPlanResult) {
+  const futureVolumes = aiPlan.volumePlan
+    .map(longFormVolumeRangeAndLabel)
+    .filter((item): item is { label: string; start: number; end: number } => Boolean(item))
+    .filter((item) => item.start > 100 && item.label.length >= 2);
+  const first100Text = aiPlan.first100Pacing;
+
+  const leakedLabels = futureVolumes
+    .filter((volume) => first100Text.includes(volume.label))
+    .map((volume) => `「${volume.label}」（卷纲第${volume.start}-${volume.end}章）`);
+
+  if (leakedLabels.length > 0) {
+    throw new Error(
+      `AI 未返回合格长篇规划：前100阶段提前使用后续卷/主案 ${leakedLabels.slice(0, 3).join("、")}，请重试。`
+    );
+  }
+}
+
+function collectLongFormPlanValidationIssues(
+  aiPlan: AiLongFormPlanResult,
+  estimatedChapters: number,
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+) {
+  try {
+    validateAiLongFormPlan(aiPlan, estimatedChapters, existingStoryProgress);
+    return [];
+  } catch (error) {
+    return [error instanceof Error ? error.message : "长篇规划校验失败"];
+  }
+}
+
+function buildExistingStoryProgressForLongFormPlan(store: AppStore, projectId: string) {
+  const ledgers = store.chapterLedgers
+    .filter((item) => item.projectId === projectId)
+    .sort((a, b) => a.chapterNumber - b.chapterNumber || a.updatedAt.localeCompare(b.updatedAt));
+  const latestDraft = getLatestChapterDraft(store, projectId);
+  const latestChapterNumber = Math.max(
+    latestDraft?.chapterNumber ?? 0,
+    ledgers.at(-1)?.chapterNumber ?? 0,
+    0
+  );
+
+  if (latestChapterNumber <= 0 && ledgers.length === 0) {
+    return null;
+  }
+
+  const recentLedgers = ledgers.slice(-8).map((ledger) => ({
+    chapterNumber: ledger.chapterNumber,
+    title: ledger.title,
+    events: cleanStateEntries(ledger.events, 5, 120),
+    payoff: compactStateText(ledger.payoff, 120),
+    cliffhanger: compactStateText(ledger.cliffhanger, 140),
+    stateChanges: cleanStateEntries(ledger.stateChanges, 5, 120),
+    carryOverTasks: cleanCarryOverTasksForNextChapter(ledger.carryOverTasks, 4, 120)
+  }));
+  const recentChapterNumbers = new Set(recentLedgers.map((ledger) => ledger.chapterNumber));
+  const establishedEvents = cleanStateEntries(
+    ledgers.flatMap((ledger) =>
+      ledger.events.map((event) => `第${ledger.chapterNumber}章：${event}`)
+    ).filter((event) => !isClosedStateLongFormProgressLine(event)),
+    18,
+    150
+  );
+  const establishedPayoffs = cleanStateEntries(
+    ledgers
+      .map((ledger) => ledger.payoff ? `第${ledger.chapterNumber}章：${ledger.payoff}` : "")
+      .filter((payoff) => !isClosedStateLongFormProgressLine(payoff))
+      .filter(Boolean),
+    12,
+    130
+  );
+  const establishedStateChanges = cleanStateEntries(
+    ledgers.flatMap((ledger) =>
+      ledger.stateChanges.map((change) => `第${ledger.chapterNumber}章：${change}`)
+    ).filter((change) => !isClosedStateLongFormProgressLine(change)),
+    16,
+    140
+  );
+  const currentStatusLines = cleanStateEntries(
+    ledgers
+      .filter((ledger) => recentChapterNumbers.has(ledger.chapterNumber))
+      .flatMap((ledger) => [
+        ...ledger.events,
+        ledger.payoff,
+        ledger.cliffhanger,
+        ...ledger.stateChanges,
+        ...(ledger.carryOverTasks ?? [])
+      ].filter(Boolean).map((line) => `第${ledger.chapterNumber}章：${line}`)),
+    16,
+    150
+  );
+  const latestLedger = ledgers.at(-1) ?? null;
+
+  return {
+    latestChapterNumber,
+    continuationChapterNumber: latestChapterNumber + 1,
+    latestDraftEnding: latestDraft ? actualDraftEnding(latestDraft.content) : "",
+    recentLedgers,
+    establishedEvents,
+    establishedPayoffs,
+    establishedStateChanges,
+    currentStatusLines,
+    openCarryOverTasks: latestLedger
+      ? cleanCarryOverTasksForNextChapter(latestLedger.carryOverTasks, 8, 130)
+      : []
+  };
+}
+
+function validateAiLongFormPlan(
+  aiPlan: AiLongFormPlanResult,
+  estimatedChapters: number,
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+) {
   if (!aiPlan.first100Pacing.trim()) {
     throw new Error(`AI 未返回完整长篇规划：缺少第1-${Math.min(100, estimatedChapters)}章阶段节奏，请重试。`);
   }
@@ -4788,16 +6816,31 @@ function validateAiLongFormPlan(aiPlan: AiLongFormPlanResult, estimatedChapters:
     throw new Error("AI 未返回合格长篇规划：缺少待确认点或禁止提前揭示约束，请重试。");
   }
 
-  const first10ChapterNumbers = new Set(
-    aiPlan.first10Chapters.map(extractLeadingChapterNumber).filter((chapterNumber) => chapterNumber >= 1 && chapterNumber <= 10)
+  const first100Ranges = extractChapterRanges(aiPlan.first100Pacing);
+  const expectedFirst100Ranges = getExpectedFirst100StageRanges(estimatedChapters);
+  const missingFirst100Starts = expectedFirst100Ranges
+    .map((range) => range.start)
+    .filter((start) =>
+      !first100Ranges.some((range) => range.start === start || (range.start <= start && range.end >= start))
+    );
+
+  if (missingFirst100Starts.length > 0) {
+    throw new Error(
+      `AI 未返回完整长篇规划：前${Math.min(100, estimatedChapters)}章阶段缺少第${missingFirst100Starts.join("、")}章起始段，请重试。`
+    );
+  }
+
+  const blueprintChapterNumbers = new Set(
+    aiPlan.first10Chapters.map(extractLeadingChapterNumber).filter((chapterNumber) => chapterNumber > 0)
   );
-  const missingFirst10Chapters = Array.from({ length: 10 }, (_, index) => index + 1).filter(
-    (chapterNumber) => !first10ChapterNumbers.has(chapterNumber)
+  const expectedBlueprintChapters = expectedOpeningBlueprintChapterNumbers(existingStoryProgress);
+  const missingFirst10Chapters = expectedBlueprintChapters.filter(
+    (chapterNumber: number) => !blueprintChapterNumbers.has(chapterNumber)
   );
 
   if (missingFirst10Chapters.length > 0) {
     throw new Error(
-      `AI 未返回完整长篇规划：前10章蓝图缺少第${missingFirst10Chapters.join("、")}章，请重试。`
+      `AI 未返回完整长篇规划：连续10章蓝图缺少第${missingFirst10Chapters.join("、")}章，请重试。`
     );
   }
 
@@ -4806,6 +6849,9 @@ function validateAiLongFormPlan(aiPlan: AiLongFormPlanResult, estimatedChapters:
       throw new Error(`AI 未返回合格长篇规划：本书预计约${estimatedChapters}章，不应生成第101章后的阶段，请重试。`);
     }
 
+    assertLongFormReaderEngine(aiPlan, estimatedChapters);
+    assertLongFormStageVariety(aiPlan, estimatedChapters);
+    assertLongFormVolumeStageAlignment(aiPlan);
     return;
   }
 
@@ -4822,13 +6868,17 @@ function validateAiLongFormPlan(aiPlan: AiLongFormPlanResult, estimatedChapters:
   );
   const maxCoveredChapter = ranges.reduce((max, range) => Math.max(max, range.end), 0);
   const mentionsFinalStage =
-    maxCoveredChapter >= estimatedChapters || /剩余结尾|终局|完结|终章/.test(post100Pacing);
+    maxCoveredChapter >= Math.max(101, estimatedChapters - 3) || /剩余结尾|终局|完结|终章/.test(post100Pacing);
 
   if (missingStarts.length > 0 || !mentionsFinalStage) {
     throw new Error(
       `AI 未返回完整长篇规划：第101章后需要按每50章阶段覆盖到约第${estimatedChapters}章，请重试。`
     );
   }
+
+  assertLongFormReaderEngine(aiPlan, estimatedChapters);
+  assertLongFormStageVariety(aiPlan, estimatedChapters);
+  assertLongFormVolumeStageAlignment(aiPlan);
 }
 
 function applyInitialProjectState(
@@ -5481,6 +7531,90 @@ function cleanLongFormFactLockList(items: string[]) {
   return uniqueList(items.filter((item) => !isBareConfirmationAnswer(item)));
 }
 
+function isLongFormSafetyBoundaryQuestion(value: string) {
+  return /需以后续正文|才能写入事实锁|未在事实源明确|只作为功能占位|不得定性|不得提前|待确认核心伏笔|未到后期|核心真相|特殊机制来源|多层世界关系|终局解释|终局危机|机制来源|身份答案|现实异常/.test(value);
+}
+
+function longFormOpenQuestionPriority(value: string) {
+  const text = value.trim();
+
+  if (/当前|下一章|本章|短期|本卷|当前阶段|当前案件|当前案|续写点|上一章|未收束|未解决|待追踪|追查|追踪|潜逃|逃脱|关键人物|关键线索|关键物证|遗留任务|行动线/.test(text)) {
+    return 0;
+  }
+
+  if (/符号|梦境|现实线|现实|穿越|快穿|后续单元|新单元|触发|幕后|核心|主线|终局|机制/.test(text)) {
+    return 1;
+  }
+
+  if (isLongFormSafetyBoundaryQuestion(text)) {
+    return 3;
+  }
+
+  return 2;
+}
+
+function compactGeneratedLongFormOpenQuestions(values: string[], limit = 8) {
+  const unique = cleanLongFormFactLockList(values);
+  const safety = unique.filter(isLongFormSafetyBoundaryQuestion);
+  const regular = unique.filter((item) => !isLongFormSafetyBoundaryQuestion(item));
+  const sortedRegular = regular.sort((a, b) =>
+    longFormOpenQuestionPriority(a) - longFormOpenQuestionPriority(b) || a.length - b.length
+  );
+  const selected = sortedRegular.slice(0, Math.max(0, limit - (safety.length > 0 ? 1 : 0)));
+
+  if (safety.length > 0 && selected.length < limit) {
+    selected.push("核心真相、机制来源、幕后力量、终局解释与现实异常只作长期伏笔，未到后期不得定性。");
+  }
+
+  return uniqueList(selected).slice(0, limit);
+}
+
+function softenRigidLongFormChapterCountRule(value: string) {
+  return value.replace(
+    /每案[^。！？；\n]{0,24}(?:不得|不能|不可|不应|禁止|必须|需|需要|应)[^。！？；\n]{0,12}(?:超过|超出|多于|少于|控制在|在)[^。！？；\n]{0,24}\d+\s*章[^。！？；\n]*/g,
+    "单案篇幅按题材承诺和已写进度弹性控制；若连载中已超过原节奏，应优先收束当前阶段、补足情绪回报并尽快进入下一地图/单元，不得反向改写前文"
+  );
+}
+
+function cleanNestedLongFormStageReferences(value: string, allowedRanges?: Array<{ start: number; end: number }>) {
+  const allowedLabels = new Set(
+    (allowedRanges ?? []).map((range) => `第${range.start}-${range.end}章`.replace(/\s+/g, ""))
+  );
+
+  return value
+    .replace(
+      /顺承上一阶段：第\s*\d+\s*-\s*\d+\s*章[^；。！？\n]{0,160}/g,
+      "顺承上一阶段已建立的地图、势力和行动压力"
+    )
+    .replace(
+      /(?:；)?(?:成长边界|卡点)：第\s*\d+\s*-\s*\d+\s*章[^；。！？\n]{0,120}(?=；|。|！|？|\n|$)/g,
+      ""
+    )
+    .replace(/(?:承接核心承诺：[^；。！？\n]{0,160}[；。]){2,}/g, (match) => {
+      const first = match.match(/承接核心承诺：[^；。！？\n]{0,160}[；。]/)?.[0] ?? "";
+      return first;
+    })
+    .replace(/第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g, (match, start, end) => {
+      const label = `第${start}-${end}章`.replace(/\s+/g, "");
+
+      return allowedLabels.has(label) ? match : "本阶段";
+    })
+    .replace(/第\s*\d+\s*章(?:左右|前后)?/g, "本阶段某一节点")
+    .replace(/前\s*\d+\s*章/g, "前段")
+    .replace(/中\s*\d+\s*章/g, "中段")
+    .replace(/后\s*\d+\s*章/g, "后段")
+    .replace(/最后\s*\d+\s*章/g, "阶段末")
+    .replace(/；{2,}/g, "；")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanGeneratedLongFormProgressionRules(values: string[]) {
+  return cleanList(values)
+    .map(softenRigidLongFormChapterCountRule)
+    .filter(Boolean);
+}
+
 function isQuestionLikeFactLock(value: string) {
   const text = value.trim();
 
@@ -5594,7 +7728,7 @@ function buildFallbackChapterDraftContent(taskCard: StoredWritingTaskCard) {
 
 function normalizeDraftTargetWordCount(value?: number) {
   if (!Number.isFinite(value)) {
-    return 2500;
+    return 1600;
   }
 
   return Math.min(3000, Math.max(800, Math.floor(Number(value))));
@@ -5748,11 +7882,15 @@ function isCurrentLongFormPlanJob(store: AppStore, projectId: string, job: Store
 
   const jobPlanId = getLongFormPlanJobPlanId(job);
 
+  if (job.type === "generate_long_form_plan" && !jobPlanId) {
+    return true;
+  }
+
   if (jobPlanId === latestPlanId) {
     return true;
   }
 
-  return job.type === "generate_long_form_plan" && !jobPlanId && (job.status === "pending" || job.status === "running");
+  return false;
 }
 
 function removeOutdatedLongFormPlanJobs(
@@ -5796,6 +7934,31 @@ function failAiJob(job: StoredAiJob, error: string, output?: unknown) {
   job.output = output;
   job.updatedAt = timestamp;
   job.finishedAt = timestamp;
+}
+
+function failActiveChildAiJobs(
+  store: AppStore,
+  parentJobId: string,
+  error: string
+) {
+  const timestamp = now();
+
+  store.aiJobs
+    .filter((item) =>
+      item.retryOfJobId === parentJobId &&
+      (item.status === "pending" || item.status === "running")
+    )
+    .forEach((item) => {
+      item.status = "failed";
+      item.error = error;
+      item.output = {
+        ...getJobObject(item.output),
+        failed: true,
+        parentJobFailed: true
+      };
+      item.updatedAt = timestamp;
+      item.finishedAt = timestamp;
+    });
 }
 
 function normalizeProjectChapterOrder(store: AppStore, projectId: string) {
@@ -5929,7 +8092,7 @@ function inferCharacterGenderFromProjectEvidence(
     character.currentState
   ].join("\n");
   const taskText = store.writingTaskCards
-    .filter((item) => item.projectId === projectId && item.chapterNumber <= chapterNumber)
+    .filter((item) => item.projectId === projectId && item.chapterNumber < chapterNumber)
     .flatMap((item) => snippetsAroundName(JSON.stringify(item), name))
     .join("\n");
   const ledgerText = store.chapterLedgers
@@ -5947,16 +8110,56 @@ function inferCharacterGenderFromProjectEvidence(
   return inferCharacterGenderFromText(name, [profileText, taskText, ledgerText, draftText, currentDraftText].join("\n"));
 }
 
+function resolveCharacterGenderForProject(
+  store: AppStore,
+  projectId: string,
+  character: StoredCharacterProfile,
+  chapterNumber: number,
+  currentDraftContent = "",
+  project?: Pick<StoredProject, "name" | "description"> | null,
+  bible?: Pick<StoredWritingBible, "protagonistDesire" | "immutableSettings" | "corePleasure" | "narrativeTaboos" | "styleGuide"> | null
+) {
+  const resolvedProject =
+    project ?? store.projects.find((item) => item.id === projectId) ?? null;
+  const resolvedBible =
+    bible ?? store.writingBibles.find((item) => item.projectId === projectId) ?? null;
+  const projectGender = explicitProjectGenderForCharacter(character, resolvedProject, resolvedBible);
+
+  if (projectGender) {
+    return projectGender;
+  }
+
+  const profileGender = explicitGenderFromText(character.identity);
+
+  if (profileGender) {
+    return profileGender;
+  }
+
+  const inferredGender = inferCharacterGenderFromProjectEvidence(
+    store,
+    projectId,
+    character,
+    chapterNumber,
+    currentDraftContent
+  );
+
+  return inferredGender && !genderExplicitlyContradictsProfile(character, inferredGender)
+    ? inferredGender
+    : null;
+}
+
 function charactersForChapterContext(
   store: AppStore,
   projectId: string,
   chapterNumber: number
 ) {
+  const project = store.projects.find((item) => item.id === projectId) ?? null;
+  const bible = store.writingBibles.find((item) => item.projectId === projectId) ?? null;
   const characters = store.characterProfiles
     .filter((item) => item.projectId === projectId && isValidAutoCharacterName(item.name))
     .map((character) => {
       const cleaned = characterForChapterContext(character, chapterNumber);
-      const gender = inferCharacterGenderFromProjectEvidence(store, projectId, cleaned, chapterNumber);
+      const gender = resolveCharacterGenderForProject(store, projectId, cleaned, chapterNumber, "", project, bible);
       return withCharacterGenderConstraint(cleaned, gender);
     });
 
@@ -6191,7 +8394,7 @@ function normalizeOpeningTaskCardScope<T extends Pick<
       : "主线只推进到主角意识到危机不是普通事故，并锁定一个可继续验证的责任方向或规则漏洞；后续处罚、公开对质、身份关系和难度升级留给后续章节承接。",
     pleasurePoint: userInput.pleasurePoint?.trim()
       ? card.pleasurePoint
-      : "小爽点：主角在被误判或压制时，用一个可见动作、证据判断或机制试错拿回一点主动权；收益是暂时不再完全被动，而不是立刻大翻盘。",
+      : "小爽点：主角在被误判或压制时，用一个可见动作、信息判断或机制试错拿回一点主动权；收益是暂时不再完全被动，而不是立刻大翻盘。",
     foreshadowingTasks: cleanStateEntries(
       card.foreshadowingTasks.filter((task) =>
         !/必须|本章必须|本章要|本章需|务必|立即|当场|直接/.test(task)
@@ -6199,13 +8402,13 @@ function normalizeOpeningTaskCardScope<T extends Pick<
       2,
       110
     ),
-    rulesNotToBreak: cleanStateEntries(uniqueList([
+    rulesNotToBreak: cleanTaskCardRulesForStorage(uniqueList([
       openingScopeRule,
       ...card.rulesNotToBreak
-    ]), 12, 150),
+    ]), 12, 150, { taskText: taskCardActionScopeText(card) }),
     endingHook: userInput.endingHook?.trim()
       ? card.endingHook
-      : "章末停在新的外部压力、下一步证据入口或规则惩罚的前兆上，给第2章承接，不要求第一章兑现整条开局连锁。"
+      : "章末停在新的外部压力、下一步行动入口或规则惩罚的前兆上，给第2章承接，不要求第一章兑现整条开局连锁。"
   };
 }
 
@@ -6337,6 +8540,178 @@ function cleanStateEntries(values: string[], limit = 8, maxLength = 90) {
   ).slice(0, limit);
 }
 
+function taskCardRuleConflictsWithActionScope(rule: string, taskText: string) {
+  const text = rule.trim();
+
+  if (!text || !taskText) {
+    return false;
+  }
+
+  const movementSignal =
+    /出发|出门|出城|离开|前往|赶往|追至|抵达|到达|进入|踏入|冲入|奔向|回到|返回|门外|城外|山外|河边|渡口|码头|新地点|新场景|新区域|新地图|新副本|新世界/.test(taskText);
+
+  if (!movementSignal) {
+    return false;
+  }
+
+  return (
+    /(?:不得|不能|不可|禁止|不许|不应|不要|不写|只写|仅写|只在|仅在|尚未|还未|仍在)[^。！？；\n]{0,50}(?:离开|出发|出城|出门|进入|前往|赶往|追至|到达|抵达|回到|返回|场景|地点|区域|地图|副本|世界|行动范围)/.test(text) ||
+    /(?:尚未|还未|仍在)[^。！？；\n]{0,24}(?:出发|出城|出门|离开|进入|抵达|到达)/.test(text)
+  );
+}
+
+function taskCardRuleConflictsWithProjectGender(rule: string, projectText: string) {
+  const text = rule.trim();
+
+  if (!text || !projectText) {
+    return false;
+  }
+
+  const projectGender = projectPrimaryGenderFromText(projectText);
+  const mentionsProtagonist = /主角|主人公|女主|男主|本人/.test(text);
+
+  if (projectGender === "female" && mentionsProtagonist && hasMaleGenderMarker(text)) {
+    return true;
+  }
+
+  if (projectGender === "male" && mentionsProtagonist && hasFemaleGenderMarker(text)) {
+    return true;
+  }
+
+  return false;
+}
+
+function taskCardRuleConflictsWithCharacterGender(rule: string, anchors: CharacterGenderAnchor[] = []) {
+  const text = rule.trim();
+
+  if (!text || anchors.length === 0) {
+    return false;
+  }
+
+  return anchors.some((anchor) => {
+    const name = baseCharacterName(anchor.name);
+
+    if (!name || !taskCardCharacterMentionCandidates(name).some((candidate) => text.includes(candidate))) {
+      return false;
+    }
+
+    return anchor.gender === "female"
+      ? hasMaleGenderMarker(text)
+      : hasFemaleGenderMarker(text);
+  });
+}
+
+function cleanTaskCardRulesForStorage(
+  values: string[] | undefined,
+  limit = 10,
+  maxLength = 120,
+  options?: { taskText?: string; projectText?: string; genderAnchors?: CharacterGenderAnchor[] }
+) {
+  const taskText = options?.taskText ?? "";
+  const projectText = options?.projectText ?? "";
+  const genderAnchors = options?.genderAnchors ?? [];
+
+  return cleanStateEntries(
+    (values ?? []).filter((item) => {
+      const text = item.trim();
+
+      return (
+        !/^(任务卡质检|本章写作边界|本章写作底线|本章修复重点|读者体验底线)/.test(text) &&
+        !taskCardRuleConflictsWithActionScope(text, taskText) &&
+        !taskCardRuleConflictsWithProjectGender(text, projectText) &&
+        !taskCardRuleConflictsWithCharacterGender(text, genderAnchors)
+      );
+    }),
+    limit,
+    maxLength
+  );
+}
+
+function genderAnchorsForTaskCard(
+  characters: StoredCharacterProfile[],
+  store: AppStore,
+  projectId: string,
+  chapterNumber: number,
+  project?: Pick<StoredProject, "name" | "description"> | null,
+  bible?: Pick<StoredWritingBible, "protagonistDesire" | "immutableSettings" | "corePleasure" | "narrativeTaboos" | "styleGuide"> | null
+) {
+  const anchors: CharacterGenderAnchor[] = [];
+
+  characters.forEach((character) => {
+    const gender = resolveCharacterGenderForProject(
+      store,
+      projectId,
+      character,
+      chapterNumber,
+      "",
+      project,
+      bible
+    );
+    const name = baseCharacterName(character.name);
+
+    if (!gender || !name || anchors.some((item) => areCharacterAliasNames(item.name, name))) {
+      return;
+    }
+
+    anchors.push({ name, gender });
+  });
+
+  return anchors.slice(0, 30);
+}
+
+function genderAnchorsRelevantToTaskCard(
+  anchors: CharacterGenderAnchor[],
+  card: Pick<
+    StoredWritingTaskCard,
+    "requiredCharacters" | "chapterGoal" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "endingHook"
+  >,
+  limit = 6
+) {
+  const requiredNames = new Set(
+    card.requiredCharacters
+      .map(baseCharacterName)
+      .filter(Boolean)
+  );
+
+  return uniqueList([
+    ...anchors
+      .filter((anchor) => requiredNames.has(baseCharacterName(anchor.name)))
+      .map((anchor) => anchor.name),
+    ...anchors
+      .filter((anchor) => taskCardMentionsRequiredCharacter(card, anchor.name))
+      .map((anchor) => anchor.name)
+  ])
+    .map((name) => anchors.find((anchor) => areCharacterAliasNames(anchor.name, name)))
+    .filter((anchor): anchor is CharacterGenderAnchor => Boolean(anchor))
+    .slice(0, limit);
+}
+
+function genderRulesForTaskCard(anchors: CharacterGenderAnchor[]) {
+  return anchors.map((anchor) => characterGenderConstraintText(anchor.name, anchor.gender));
+}
+
+function taskCardActionScopeText(card: Pick<
+  StoredWritingTaskCard,
+  "chapterGoal" | "mainPlotProgress" | "endingHook"
+>) {
+  return [card.chapterGoal, card.mainPlotProgress, card.endingHook].join("\n");
+}
+
+function projectGenderAnchorText(
+  project: Pick<StoredProject, "name" | "description">,
+  bible: Pick<StoredWritingBible, "protagonistDesire" | "immutableSettings" | "corePleasure" | "narrativeTaboos" | "styleGuide">
+) {
+  return [
+    project.name,
+    project.description,
+    bible.protagonistDesire,
+    bible.immutableSettings,
+    bible.corePleasure,
+    bible.narrativeTaboos,
+    bible.styleGuide
+  ].join("\n");
+}
+
 function splitLedgerSegments(value: string) {
   return value
     .split(/[；;]\s*/)
@@ -6377,6 +8752,30 @@ function cleanLedgerEntries(values: string[], limit = 8, maxLength = 90, overlap
     limit,
     maxLength
   );
+}
+
+function cleanLedgerDriverEntries(values: string[], limit = 6, maxLength = 100, overlapSources: string[] = []) {
+  const entries = cleanLedgerEntries(values, limit * 2, maxLength, overlapSources);
+  const dramatic = entries.filter((item) => !isLowDramaDetailTaskText(item));
+  const lowDramaDetails = entries.filter(isLowDramaDetailTaskText);
+
+  return uniqueList([
+    ...dramatic,
+    ...(lowDramaDetails.length > 0 && dramatic.length === 0 ? lowDramaDetails.slice(0, 1) : [])
+  ]).slice(0, limit);
+}
+
+function cleanLedgerNewCharacters(values: string[], content: string, knownCharacterNames = new Set<string>(), limit = 8) {
+  return uniqueList(
+    values
+      .map(baseCharacterName)
+      .filter((name) =>
+        isValidAutoCharacterName(name) &&
+        !isLikelyNonCharacterMention(name) &&
+        characterAppearsInDraft(content, name) &&
+        !knownCharacterNames.has(baseCharacterName(name))
+      )
+  ).slice(0, limit);
 }
 
 function ledgerEvidenceAppearsInDraft(value: string, content: string) {
@@ -6529,15 +8928,22 @@ function baseCharacterName(name: string) {
   return name.replace(/[（(].*?[）)]/g, "").trim();
 }
 
+const commonChineseSurnames = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄穆萧尹姚邵汪祁毛禹狄米贝明臧计伏成戴谈宋庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田胡凌霍虞万支柯管卢莫房裘解应宗丁宣邓郁杭洪包左石崔吉龚程邢裴陆荣翁荀惠曲封靳松段焦侯全班秋仲伊宫宁仇栾甘祖武符刘景詹龙叶白蒲卓蔺蒙池乔胥闻翟姬申冉桑牛通边燕尚温庄晏柴瞿阎连茹习艾鱼容向古易慎戈廖终居衡步都耿满弘匡国文寇广东欧沃利越师巩聂晁冷辛阚曾沙丰关相查红游竺权益桓";
+
 const characterRoleAliasNames = new Set([
   "捕头",
   "捕快",
   "知县",
   "县令",
+  "县尉",
   "师爷",
+  "主簿",
   "仵作",
   "衙役",
   "管家",
+  "管事",
+  "账房",
+  "亲信",
   "掌柜",
   "伙计",
   "郎中",
@@ -6572,10 +8978,139 @@ const characterRoleAliasNames = new Set([
   "队长"
 ]);
 
+const characterRoleAliasNameList = Array.from(characterRoleAliasNames).sort((a, b) => b.length - a.length);
+const characterOrdinalAliasPattern = /^(?:一|二|三|四|五|六|七|八|九|十|甲|乙|丙|丁|戊|己|庚|辛|壬|癸|老一|老二|老三|老四|老五|老六|老七|老八|老九|老十|叔|伯|爷|哥|姐|嫂|娘)$/;
+
 function stripCharacterHonorificName(name: string) {
   return baseCharacterName(name)
     .replace(/(?:大人|老爷|先生|姑娘|小姐|夫人|娘子|公子|前辈|师父|师傅|老师)$/g, "")
     .trim();
+}
+
+function isCommonChineseSurname(value: string) {
+  return value.length === 1 && commonChineseSurnames.includes(value);
+}
+
+function splitSurnameRoleAliasName(name: string) {
+  const base = stripCharacterHonorificName(name);
+
+  if (!base) {
+    return null;
+  }
+
+  for (const role of characterRoleAliasNameList) {
+    if (base.endsWith(role)) {
+      const prefix = base.slice(0, -role.length);
+
+      if (isCommonChineseSurname(prefix)) {
+        return { surname: prefix, role, form: "suffix" as const };
+      }
+    }
+
+    if (base.startsWith(role)) {
+      const suffix = base.slice(role.length);
+
+      if (suffix.length >= 2 && isCommonChineseSurname(suffix[0] ?? "")) {
+        return { surname: suffix[0] ?? "", role, form: "prefix" as const };
+      }
+    }
+  }
+
+  return null;
+}
+
+function splitRolePrefixedPersonalName(name: string) {
+  const base = stripCharacterHonorificName(name);
+
+  if (!base) {
+    return null;
+  }
+
+  for (const role of characterRoleAliasNameList) {
+    if (!base.startsWith(role)) {
+      continue;
+    }
+
+    const suffix = base.slice(role.length);
+
+    if (suffix.length >= 2 && isCommonChineseSurname(suffix[0] ?? "")) {
+      return { surname: suffix[0] ?? "", role, coreName: suffix };
+    }
+  }
+
+  return null;
+}
+
+function splitSurnameRoleTitleName(name: string) {
+  const base = stripCharacterHonorificName(name);
+
+  if (!base) {
+    return null;
+  }
+
+  for (const role of characterRoleAliasNameList) {
+    if (!base.endsWith(role)) {
+      continue;
+    }
+
+    const prefix = base.slice(0, -role.length);
+
+    if (isCommonChineseSurname(prefix)) {
+      return { surname: prefix, role };
+    }
+  }
+
+  return null;
+}
+
+function isSurnameRoleAliasName(name: string) {
+  return Boolean(splitSurnameRoleAliasName(name));
+}
+
+function isSurnameOrdinalAliasName(name: string) {
+  const base = stripCharacterHonorificName(name);
+  const surname = base[0] ?? "";
+  const rest = base.slice(1);
+
+  return base.length >= 2 && isCommonChineseSurname(surname) && characterOrdinalAliasPattern.test(rest);
+}
+
+function shouldUseBareRoleAlias(base: string, role: string, baseWithoutOrdinal = base) {
+  const text = base.endsWith(role) ? base : baseWithoutOrdinal.endsWith(role) ? baseWithoutOrdinal : "";
+
+  if (!text) {
+    return false;
+  }
+
+  const prefix = text.slice(0, -role.length);
+
+  return prefix.length === 0 || !isCommonChineseSurname(prefix);
+}
+
+function characterCoreNameVariants(name: string) {
+  const base = stripCharacterHonorificName(name);
+  const variants = [base];
+  const baseWithoutOrdinal = base.replace(/[甲乙丙丁戊己庚辛壬癸A-Z]$/i, "");
+
+  if (baseWithoutOrdinal !== base && baseWithoutOrdinal.length >= 2) {
+    variants.push(baseWithoutOrdinal);
+  }
+
+  for (const role of characterRoleAliasNameList) {
+    if (base.length > role.length + 1 && base.startsWith(role)) {
+      variants.push(base.slice(role.length));
+    }
+
+    if (base.endsWith(role)) {
+      const prefix = base.slice(0, -role.length);
+
+      if (prefix.length >= 2) {
+        variants.push(prefix);
+      }
+    }
+  }
+
+  return uniqueList(variants.filter((candidate) => candidate.length >= 2));
 }
 
 function taskCardCharacterMentionCandidates(name: string) {
@@ -6585,19 +9120,15 @@ function taskCardCharacterMentionCandidates(name: string) {
     return [];
   }
 
-  const candidates = [base];
+  const candidates = characterCoreNameVariants(base);
   const baseWithoutOrdinal = base.replace(/[甲乙丙丁戊己庚辛壬癸A-Z]$/i, "");
 
-  if (baseWithoutOrdinal !== base && baseWithoutOrdinal.length >= 2) {
-    candidates.push(baseWithoutOrdinal);
-  }
-
-  characterRoleAliasNames.forEach((role) => {
+  characterRoleAliasNameList.forEach((role) => {
     if (base.length > role.length + 1 && base.startsWith(role)) {
       candidates.push(base.slice(role.length));
     }
 
-    if (base.endsWith(role) || baseWithoutOrdinal.endsWith(role)) {
+    if (shouldUseBareRoleAlias(base, role, baseWithoutOrdinal)) {
       candidates.push(role);
     }
   });
@@ -6624,11 +9155,41 @@ function areCharacterAliasNames(left: string, right: string) {
     return true;
   }
 
+  const leftVariants = characterCoreNameVariants(leftBase);
+  const rightVariants = characterCoreNameVariants(rightBase);
+
+  if (leftVariants.some((variant) => rightVariants.includes(variant))) {
+    return true;
+  }
+
+  const leftSurnameRoleTitle = splitSurnameRoleTitleName(leftBase);
+  const rightSurnameRoleTitle = splitSurnameRoleTitleName(rightBase);
+  const leftRolePrefixedName = splitRolePrefixedPersonalName(leftBase);
+  const rightRolePrefixedName = splitRolePrefixedPersonalName(rightBase);
+
+  if (
+    leftSurnameRoleTitle &&
+    rightRolePrefixedName &&
+    leftSurnameRoleTitle.surname === rightRolePrefixedName.surname &&
+    leftSurnameRoleTitle.role === rightRolePrefixedName.role
+  ) {
+    return true;
+  }
+
+  if (
+    rightSurnameRoleTitle &&
+    leftRolePrefixedName &&
+    rightSurnameRoleTitle.surname === leftRolePrefixedName.surname &&
+    rightSurnameRoleTitle.role === leftRolePrefixedName.role
+  ) {
+    return true;
+  }
+
   const [shorter, longer] = leftBase.length <= rightBase.length
     ? [leftBase, rightBase]
     : [rightBase, leftBase];
 
-  return characterRoleAliasNames.has(shorter) && longer.endsWith(shorter);
+  return characterRoleAliasNames.has(shorter) && longer.endsWith(shorter) && !isSurnameRoleAliasName(longer);
 }
 
 function preferCharacterName(left: string, right: string) {
@@ -6647,6 +9208,14 @@ function preferCharacterName(left: string, right: string) {
   const rightStripped = stripCharacterHonorificName(rightBase);
 
   if (leftStripped && leftStripped === rightStripped && leftBase !== rightBase) {
+    return leftBase.length <= rightBase.length ? left : right;
+  }
+
+  const leftVariants = characterCoreNameVariants(leftBase);
+  const rightVariants = characterCoreNameVariants(rightBase);
+  const variantsOverlap = leftVariants.some((variant) => rightVariants.includes(variant));
+
+  if (variantsOverlap && leftBase !== rightBase) {
     return leftBase.length <= rightBase.length ? left : right;
   }
 
@@ -6708,9 +9277,58 @@ function dedupeCharacterAliasesForUse(characters: StoredCharacterProfile[]) {
 }
 
 type CharacterGender = "female" | "male";
+type CharacterGenderAnchor = { name: string; gender: CharacterGender };
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasFemaleGenderMarker(value: string) {
+  return (
+    /性别[:：]?\s*(?:为|是)?\s*(?:女|女性)|(?:女性|女)角色|女性主角|女性配角|女主人公|女主|女配|主角[^。；\n]{0,12}(?:女|女性)|叙述代词(?:必须|固定)?用[“"‘']?她[”"’']?(?:\/|、|和|及|与)?[“"‘']?她的[”"’']?|用[“"‘']?她[”"’']?(?:\/|、|和|及|与)?[“"‘']?她的[”"’']?/.test(value)
+  );
+}
+
+function hasMaleGenderMarker(value: string) {
+  return (
+    /性别[:：]?\s*(?:为|是)?\s*(?:男|男性)|(?:男性|男)角色|男性主角|男性配角|男主人公|(?:^|[，。；;\s：:])男主|男配|主角[^。；\n]{0,12}(?:男|男性)|叙述代词(?:必须|固定)?用[“"‘']?他[”"’']?(?:\/|、|和|及|与)?[“"‘']?他的[”"’']?|用[“"‘']?他[”"’']?(?:\/|、|和|及|与)?[“"‘']?他的[”"’']?/.test(value)
+  );
+}
+
+function explicitGenderFromText(value: string): CharacterGender | null {
+  const female = hasFemaleGenderMarker(value);
+  const male = hasMaleGenderMarker(value);
+
+  if (female && !male) {
+    return "female";
+  }
+
+  if (male && !female) {
+    return "male";
+  }
+
+  return null;
+}
+
+function projectPrimaryGenderFromText(value: string): CharacterGender | null {
+  const explicit = explicitGenderFromText(value);
+
+  if (explicit) {
+    return explicit;
+  }
+
+  const female = /女性主角|女主人公|女主|女强/.test(value);
+  const male = /男性主角|男主人公|(?:^|[，。；;\s：:])男主/.test(value);
+
+  if (female && !male) {
+    return "female";
+  }
+
+  if (male && !female) {
+    return "male";
+  }
+
+  return null;
 }
 
 function stripAutoGenderConstraints(value: string) {
@@ -6747,18 +9365,18 @@ function scoreCharacterGenderEvidence(name: string, text: string) {
   const escaped = escapeRegExp(baseName);
   const cleaned = stripAutoGenderConstraints(text);
   const explicitFemalePatterns = [
-    new RegExp(`(?:性别[:：]?\\s*女性|女性角色|女主|女业主|女修士|女修).{0,12}${escaped}`, "g"),
-    new RegExp(`${escaped}.{0,16}(?:性别[:：]?\\s*女性|女性角色|女主|女业主|女修士|女修)`, "g"),
-    new RegExp(`${escaped}[（(][^）)]*(?:女性|女主|女业主|女修士|女修)[）)]`, "g"),
-    new RegExp(`(?:女子|女人|妇人|少女|姑娘|中年女人|中年女子|女捕头|女捕快).{0,30}${escaped}`, "g"),
-    new RegExp(`${escaped}.{0,30}(?:女子|女人|妇人|少女|姑娘|中年女人|中年女子|女捕头|女捕快)`, "g")
+    new RegExp(`(?:性别[:：]?\\s*女性|女性角色|女性主角|女主|女主人公).{0,12}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,16}(?:性别[:：]?\\s*女性|女性角色|女性主角|女主|女主人公)`, "g"),
+    new RegExp(`${escaped}[（(][^）)]*(?:女性|女性主角|女主|女主人公)[）)]`, "g"),
+    new RegExp(`(?:女子|女人|妇人|少女|姑娘|女孩|女性|女士|中年女人|中年女子).{0,30}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,30}(?:女子|女人|妇人|少女|姑娘|女孩|女性|女士|中年女人|中年女子)`, "g")
   ];
   const explicitMalePatterns = [
-    new RegExp(`(?:性别[:：]?\\s*男性|男性角色|男主|男业主|男修士|男修|男保安).{0,12}${escaped}`, "g"),
-    new RegExp(`${escaped}.{0,16}(?:性别[:：]?\\s*男性|男性角色|男主|男业主|男修士|男修|男保安)`, "g"),
-    new RegExp(`${escaped}[（(][^）)]*(?:男性|男主|男业主|男修士|男修|男保安)[）)]`, "g"),
-    new RegExp(`(?:男子|男人|汉子|老者|青年男子|中年男人|中年男子|男捕头|男捕快).{0,30}${escaped}`, "g"),
-    new RegExp(`${escaped}.{0,30}(?:男子|男人|汉子|老者|青年男子|中年男人|中年男子|男捕头|男捕快)`, "g")
+    new RegExp(`(?:性别[:：]?\\s*男性|男性角色|男性主角|男主|男主人公).{0,12}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,16}(?:性别[:：]?\\s*男性|男性角色|男性主角|男主|男主人公)`, "g"),
+    new RegExp(`${escaped}[（(][^）)]*(?:男性|男性主角|男主|男主人公)[）)]`, "g"),
+    new RegExp(`(?:男子|男人|汉子|少年|男性|先生|老者|青年男子|中年男人|中年男子).{0,30}${escaped}`, "g"),
+    new RegExp(`${escaped}.{0,30}(?:男子|男人|汉子|少年|男性|先生|老者|青年男子|中年男人|中年男子)`, "g")
   ];
   const pronounFemalePatterns = [
     new RegExp(`${escaped}.{0,16}(?:她|她的)`, "g")
@@ -6796,16 +9414,10 @@ function characterGenderConstraintText(name: string, gender: CharacterGender) {
     : `${name}：性别男性，叙述代词必须用“他/他的”，禁止写成“她/她的”。`;
 }
 
-function explicitGenderFromText(value: string): CharacterGender | null {
-  if (/性别[:：]?\s*女性|女性角色|女捕头|女捕快|她\/她的|用“她/.test(value)) {
-    return "female";
-  }
+function genderExplicitlyContradictsProfile(character: StoredCharacterProfile, gender: CharacterGender) {
+  const explicit = explicitGenderFromText(character.identity);
 
-  if (/性别[:：]?\s*男性|男性角色|男捕头|男捕快|他\/他的|用“他/.test(value)) {
-    return "male";
-  }
-
-  return null;
+  return Boolean(explicit && explicit !== gender);
 }
 
 function withCharacterGenderConstraint(character: StoredCharacterProfile, gender: CharacterGender | null) {
@@ -6826,6 +9438,58 @@ function withCharacterGenderConstraint(character: StoredCharacterProfile, gender
   };
 }
 
+function explicitProjectGenderForCharacter(
+  character: StoredCharacterProfile,
+  project: Pick<StoredProject, "name" | "description"> | null | undefined,
+  bible: Pick<StoredWritingBible, "protagonistDesire" | "immutableSettings" | "corePleasure" | "narrativeTaboos" | "styleGuide"> | null | undefined
+): CharacterGender | null {
+  const name = baseCharacterName(character.name);
+
+  if (!name) {
+    return null;
+  }
+
+  const projectText = [
+    project?.name ?? "",
+    project?.description ?? "",
+    bible?.protagonistDesire ?? "",
+    bible?.immutableSettings ?? "",
+    bible?.corePleasure ?? "",
+    bible?.narrativeTaboos ?? "",
+    bible?.styleGuide ?? ""
+  ].join("\n");
+  const explicit = projectPrimaryGenderFromText(projectText);
+  const characterOwnText = [
+    character.relationshipToProtagonist,
+    stripAutoGenderConstraints(character.identity)
+  ].join("\n");
+  const escapedName = escapeRegExp(name);
+  const namedAsProtagonist =
+    new RegExp(`${escapedName}[^。；\\n]{0,16}(?:本人|主角|女主|男主|主人公)`).test(projectText) ||
+    new RegExp(`(?:本人|主角|女主|男主|主人公)[^。；\\n]{0,16}${escapedName}`).test(projectText);
+  const isProtagonist = /本人|主角|女主|男主|主人公/.test(characterOwnText) || namedAsProtagonist;
+  const hasProjectAnchor = projectText.includes(name) || namedAsProtagonist || /本人|主角|女主|男主|主人公/.test(characterOwnText);
+
+  if (!isProtagonist || !explicit || !hasProjectAnchor) {
+    return null;
+  }
+
+  if (!/本人|主角|女主|男主|主人公/.test(characterOwnText) && !namedAsProtagonist) {
+    return null;
+  }
+
+  return explicit;
+}
+
+function charactersForLongFormContext(
+  store: AppStore,
+  projectId: string,
+  continuationChapterNumber: number
+) {
+  return charactersForChapterContext(store, projectId, continuationChapterNumber)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 function isInvalidAutoCharacterToken(value: string) {
   const compact = baseCharacterName(value).replace(/\s+/g, "");
 
@@ -6836,6 +9500,8 @@ function isInvalidAutoCharacterToken(value: string) {
   return (
     /^(你刚才|然后|两个字|一句话|这句话|那句话|刚才|刚刚|现在|随后|终于|忽然|突然|已经|没有|不是|什么|怎么|为何|为什么|这里|那里|这边|那边|这个|那个|这些|那些|我们|你们|他们|她们|咱们|自己|对方|众人|旁人)$/.test(compact) ||
     /^(你|我|他|她|它|您|咱|谁|哪|这|那|只|才|刚|又|再|正|已|还|都|便|就|可|但|却|而|从|往|把|被|给|将|并)/.test(compact) ||
+    /(?:转头|回头|低头|抬头|开口|低声|沉声|冷声|惨叫|喝道|说道|问道|笑道|怒道|一愣|脸色|眼神|脚步)$/.test(compact) ||
+    (compact.length >= 3 && /惨$/.test(compact)) ||
     /(句话|两个字|声音|话音|目光|眼睛|心里|脸上|手上|桌上|门外|屋里|书房|油灯|火苗|布带|凶器|掌纹|指纹|符号|证据|物证)$/.test(compact)
   );
 }
@@ -6934,7 +9600,7 @@ function characterNameAppearsInText(text: string, name: string) {
 }
 
 function continuityCandidateNames(
-  taskCard: StoredWritingTaskCard | undefined,
+  taskCard: Pick<StoredWritingTaskCard, "requiredCharacters"> | undefined,
   characters: StoredCharacterProfile[]
 ) {
   const protagonistNames = characters
@@ -6951,14 +9617,54 @@ function continuityCandidateNames(
     .slice(0, 18);
 }
 
+function extractNamedCharactersFromText(text: string, limit = 24) {
+  const names = new Set<string>();
+  const explicitRolePattern = new RegExp(`((?:[\\u4e00-\\u9fff]{1,3})?(?:管家|管事|账房|师爷|主簿|县尉|知县|捕头|捕快|衙役|亲信|掌柜|伙计)[\\u4e00-\\u9fff]{1,3}|[${commonChineseSurnames}](?:一|二|三|四|五|六|七|八|九|十|甲|乙|丙|丁|戊|己|庚|辛|壬|癸|老六|老七|爷))`, "g");
+  const westernNamePattern = /[A-Z][a-zA-Z]{1,18}(?:\s+[A-Z][a-zA-Z]{1,18})?/g;
+
+  for (const match of text.matchAll(explicitRolePattern)) {
+    const name = baseCharacterName(match[1] ?? "");
+    if (isValidAutoCharacterName(name) && !isLikelyNonCharacterMention(name)) {
+      names.add(name);
+    }
+  }
+
+  for (const match of text.matchAll(westernNamePattern)) {
+    const name = baseCharacterName(match[0] ?? "");
+    if (name.length >= 2 && name.length <= 24) {
+      names.add(name);
+    }
+  }
+
+  return Array.from(names).slice(0, limit);
+}
+
+function continuityCandidateNamesForProject(
+  store: AppStore,
+  projectId: string,
+  chapterNumber: number,
+  taskCard: Pick<StoredWritingTaskCard, "requiredCharacters"> | undefined,
+  characters: StoredCharacterProfile[]
+) {
+  const taskScopedCandidates = continuityCandidateNames(taskCard, []);
+  const profileCandidates = continuityCandidateNames(undefined, characters);
+
+  return uniqueList([
+    ...taskScopedCandidates,
+    ...profileCandidates
+  ])
+    .filter((name) => isValidAutoCharacterName(name) && !isLikelyNonCharacterMention(name))
+    .slice(0, 28);
+}
+
 function previousCharacterNamesForChapter(
   store: AppStore,
   projectId: string,
   chapterNumber: number,
-  taskCard?: StoredWritingTaskCard,
+  taskCard?: Pick<StoredWritingTaskCard, "requiredCharacters">,
   characters: StoredCharacterProfile[] = []
 ) {
-  const candidates = continuityCandidateNames(taskCard, characters);
+  const candidates = continuityCandidateNamesForProject(store, projectId, chapterNumber, taskCard, characters);
   const previousDraftText = store.chapterDrafts
     .filter((draft) => draft.projectId === projectId && draft.chapterNumber < chapterNumber)
     .map((draft) => draft.content)
@@ -6974,21 +9680,482 @@ function previousCharacterNamesForChapter(
     .filter((name) => isValidAutoCharacterName(name) && !isLikelyNonCharacterMention(name));
 }
 
-function buildCrossChapterContinuityFacts(
+type CharacterContinuityLockKind = "detained" | "dead" | "away";
+
+type CharacterContinuityLock = {
+  name: string;
+  aliases: string[];
+  kind: CharacterContinuityLockKind;
+  chapterNumber: number;
+  source: "任务卡" | "台账" | "正文" | "人物档案";
+  fact: string;
+};
+
+function taskCardContinuityHistoryEntries(card: Pick<
+  StoredWritingTaskCard,
+  "chapterGoal" | "continuity" | "mainPlotProgress" | "pleasurePoint" | "foreshadowingTasks" | "endingHook"
+>) {
+  return [
+    card.chapterGoal,
+    card.continuity,
+    card.mainPlotProgress,
+    card.pleasurePoint,
+    ...card.foreshadowingTasks,
+    card.endingHook
+  ].filter(Boolean);
+}
+
+function characterContinuityMentionAliases(name: string, aliases: string[] = []) {
+  return uniqueList([
+    baseCharacterName(name),
+    ...aliases,
+    ...[name, ...aliases].flatMap((item) => taskCardCharacterMentionCandidates(item))
+  ])
+    .map(baseCharacterName)
+    .filter((item) => item.length >= 2);
+}
+
+function textMentionsCharacterContinuityAlias(text: string, name: string, aliases: string[] = []) {
+  return characterContinuityMentionAliases(name, aliases).some((alias) => text.includes(alias));
+}
+
+function sentenceAroundCharacterAlias(text: string, name: string, radius = 90, extraAliases: string[] = []) {
+  const aliases = characterContinuityMentionAliases(name, extraAliases);
+  const snippets = aliases.flatMap((alias) => snippetsAroundName(text, alias, radius, 2));
+  return snippets[0] ?? "";
+}
+
+function characterContinuitySnippets(text: string, name: string, radius = 80, limit = 8, extraAliases: string[] = []) {
+  const aliases = characterContinuityMentionAliases(name, extraAliases);
+  return uniqueList(aliases.flatMap((alias) => snippetsAroundName(text, alias, radius, limit))).slice(0, limit);
+}
+
+function hasContinuityBridgeForLockedCharacter(value: string) {
+  if (/(?:现已|正在|仍在|继续|此时|当下)[^。！？；\n]{0,24}(?:逃|外逃|潜逃|北逃|南逃|东逃|西逃|离镇|转移|灭口|杀人|接应|藏匿)|(?:灭口后|杀人后|北上逃逸|南下逃逸|东逃西窜)/.test(value)) {
+    return false;
+  }
+
+  return /释放|获释|放走|放归|保释|越狱|逃出(?:大牢|牢房|监牢|羁押|看押|囚车)|逃离(?:大牢|牢房|监牢|羁押|看押|囚车)|从(?:大牢|牢房|监牢|羁押|看押|囚车)[^。！？；\n]{0,20}逃|劫走|被劫|被救走|调包|替身|误认|认错|不是(?:本人|真身)|假死|复活|此前|先前|早前|之前|被抓前|被捕前|收押前|归案前|入狱前|三天前|数日前|早就|预先|狱中传信|牢中传信|隔空指使|重新会合|赶回|返回现场/.test(value);
+}
+
+function lockedCharacterFreeActionPattern(name: string, kind: CharacterContinuityLockKind, extraAliases: string[] = []) {
+  const aliases = characterContinuityMentionAliases(name, extraAliases)
+    .map(escapeRegExp)
+    .join("|");
+
+  if (!aliases) {
+    return null;
+  }
+
+  const freeAction =
+    kind === "away"
+      ? "(?:直接同场|同场行动|同行|跟上|一起|同去|随同|带着|领着|站在|坐在|开口|问|说)"
+      : "(?:在逃|潜逃|外逃|逃往|逃向|逃跑|北逃|南逃|东逃|西逃|逃脱|藏匿|藏身|躲藏|躲在|藏在|身在|就在|现身|亲自|等货|带货|转移|带走|运走|接应|换船|乘船|上船|离岸|安排|指使|派人|设伏|伏击|拦截|杀人|灭口|递信|涂改|销毁|焚烧|烧毁|点燃|烧账本|藏账本|转移证据|指挥|操控|带队|赶往|前往|出现在|潜入|翻墙)";
+
+  const pursuitAction =
+    kind === "away"
+      ? ""
+      : "|(?:(?:北上|南下|东行|西行|沿路|循迹)?(?:追捕|追查|追踪|追赶|追击|追缉|搜捕|围捕|缉拿|抓捕|追往|赶往|锁定|寻找|找到|查找))[^。！？；\\n]{0,24}(?:" + aliases + ")[^。！？；\\n]{0,28}(?:去向|行踪|藏匿|藏身|落脚|等货|接应|转移|乘船|北逃|外逃|潜逃)?";
+
+  return new RegExp(
+    `(?:(?:${aliases})[^。！？；\\n]{0,34}${freeAction}|${freeAction}[^。！？；\\n]{0,34}(?:${aliases})${pursuitAction})`
+  );
+}
+
+function lockedCharacterActionScopeIssue(cardText: string, lock: CharacterContinuityLock) {
+  if (!textMentionsCharacterContinuityAlias(cardText, lock.name, lock.aliases)) {
+    return "";
+  }
+
+  const pattern = lockedCharacterFreeActionPattern(lock.name, lock.kind, lock.aliases);
+
+  if (!pattern) {
+    return "";
+  }
+
+  const snippets = characterContinuitySnippets(cardText, lock.name, 90, 8, lock.aliases);
+  const conflictSnippet = snippets.find((snippet) =>
+    pattern.test(snippet) && !hasContinuityBridgeForLockedCharacter(snippet)
+  );
+
+  if (!conflictSnippet) {
+    return "";
+  }
+
+  const statusText =
+    lock.kind === "detained"
+      ? "已被抓获/收押"
+      : lock.kind === "dead"
+        ? "已死亡"
+        : "已离场/转交";
+
+  return `任务卡人物状态反写：${lock.fact}，但当前任务卡又把${statusText}的${lock.name}写成自由行动或现场行动（${compactStateText(conflictSnippet, 70)}）。若确需使用，必须先写清释放、越狱、被劫、调包、替身、误认、赶回或会合原因；否则应改为审讯、供词、同伙、物证或后续影响。`;
+}
+
+function taskCardContinuityScopeText(card: Pick<
+  StoredWritingTaskCard,
+  "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "requiredCharacters" | "pleasurePoint" | "foreshadowingTasks" | "rulesNotToBreak" | "endingHook"
+>) {
+  return [
+    card.title,
+    card.chapterGoal,
+    card.continuity,
+    card.mainPlotProgress,
+    card.requiredCharacters.join("；"),
+    card.pleasurePoint,
+    card.foreshadowingTasks.join("；"),
+    card.rulesNotToBreak.join("；"),
+    card.endingHook
+  ].join("\n");
+}
+
+function buildTaskCardContinuityLockIssues(
+  card: Pick<
+    StoredWritingTaskCard,
+    "title" | "chapterGoal" | "continuity" | "mainPlotProgress" | "requiredCharacters" | "pleasurePoint" | "foreshadowingTasks" | "rulesNotToBreak" | "endingHook"
+  >,
+  locks: CharacterContinuityLock[]
+) {
+  const cardText = taskCardContinuityScopeText(card);
+  return cleanStateEntries(
+    locks.map((lock) => lockedCharacterActionScopeIssue(cardText, lock)),
+    4,
+    180
+  );
+}
+
+function buildTaskCardContinuityRules(locks: CharacterContinuityLock[]) {
+  return locks
+    .map((lock, index) => ({ lock, index }))
+    .filter(({ lock }) => lock.kind === "detained" || lock.kind === "dead")
+    .sort((a, b) => {
+      const priorityA = a.lock.kind === "detained" || a.lock.kind === "dead" ? 1 : 0;
+      const priorityB = b.lock.kind === "detained" || b.lock.kind === "dead" ? 1 : 0;
+      return priorityB - priorityA || a.index - b.index;
+    })
+    .slice(0, 6)
+    .map(({ lock }) => `连续性硬事实：${lock.fact}；本章不得反写成自由行动。`);
+}
+
+const continuityReleasedSource = "释放|获释|放走|放了|放归|保释|越狱|逃出(?:大牢|牢房|监牢|羁押|看押|囚车)|逃离(?:大牢|牢房|监牢|羁押|看押|囚车)|从(?:大牢|牢房|监牢|羁押|看押|囚车)[^。！？；\\n]{0,20}逃|劫走|被劫|被救走|调包|替身|误认|认错|不是(?:本人|真身)|假死|复活";
+const continuityDeadSource = "已死|死亡|身亡|亡故|死了|断气|咽气|毙命|殒命|遇害|被杀|自尽|尸体|遗体|死者";
+const continuityDetainedSource = "抓获|擒获|抓住|被抓|被捕|落网|归案|伏法|缉拿归案|收押|羁押|看押|关押|押回|押入|押进|押送|押着|押住|押解|押上囚车|押回大牢|押回牢房|押入大牢|押入牢房|投入大牢|关进大牢|关入牢房|入狱|大牢|牢房|监牢|囚车|五花大绑|反绑|捆住|绑住|被锁|被扣押|扣押|按住|按在|架着|控制住|提审|受审|被审";
+const continuityAwaySource = "离开|离队|先走|走了|先行|回去|返回|报信|传信|通报|汇报|禀告|调人|调兵|求援|护送|转交|移交|另行处理";
+
+function hardStatusKindFromText(value: string): CharacterContinuityLockKind | "released" | null {
+  const text = value.trim();
+
+  if (!text) {
+    return null;
+  }
+
+  if (new RegExp(continuityReleasedSource).test(text)) {
+    return "released";
+  }
+
+  if (new RegExp(continuityDeadSource).test(text)) {
+    return "dead";
+  }
+
+  if (new RegExp(continuityDetainedSource).test(text)) {
+    return "detained";
+  }
+
+  if (new RegExp(continuityAwaySource).test(text)) {
+    return "away";
+  }
+
+  return null;
+}
+
+function characterScopedStatusPattern(aliases: string, statusSource: string, radius = 28) {
+  return new RegExp(
+    `(?:(?:${aliases})[^。！？；\\n]{0,${radius}}(?:${statusSource})|(?:${statusSource})[^。！？；\\n]{0,${radius}}(?:${aliases}))`
+  );
+}
+
+function characterScopedDeadPattern(aliases: string) {
+  const deadBefore = "(?:死者(?:为|是|名叫|叫)?|尸体|遗体|已死|死亡|身亡|亡故|死了|断气|咽气|毙命|殒命|遇害|被杀|自尽)";
+  const deadAfter = "(?:已死|死亡|身亡|亡故|死了|断气|咽气|毙命|殒命|遇害|被杀|自尽|尸体|遗体|这个死者|这名死者)";
+
+  return new RegExp(
+    `(?:(?:${deadBefore})[^。！？；\\n]{0,16}(?:${aliases})|(?:${aliases})[^。！？；\\n]{0,16}(?:${deadAfter}))`
+  );
+}
+
+function characterScopedDetainedPattern(aliases: string) {
+  const detainedBefore = "(?:抓获|擒获|抓住|被抓|被捕|缉拿归案|收押|羁押|看押|关押|押回|押入|押进|押送|押着|押住|押解|押上囚车|押回大牢|押回牢房|押入大牢|押入牢房|投入大牢|关进大牢|关入牢房|入狱|五花大绑|反绑|捆住|绑住|被锁|被扣押|扣押|按住|按在|架着|控制住|提审|受审|被审)";
+  const detainedAfter = "(?:已被抓|被抓|被捕|落网|归案|伏法|缉拿归案|收押|被收押|羁押|被羁押|看押|被看押|关押|被关押|押回|被押回|押入|被押入|押进|被押进|押送|被押送|押上囚车|押回大牢|押回牢房|押入大牢|押入牢房|投入大牢|关进大牢|关入牢房|入狱|五花大绑|反绑|捆住|绑住|被锁|被扣押|扣押|按住|按在|架着|控制住|提审|受审|被审)";
+
+  return new RegExp(
+    `(?:(?:${detainedBefore})[^。！？；\\n]{0,20}(?:${aliases})|(?:${aliases})[^。！？；\\n]{0,24}(?:${detainedAfter}))`
+  );
+}
+
+function hardStatusKindForCharacterInText(value: string, name: string): CharacterContinuityLockKind | "released" | null {
+  const text = value.trim();
+  const aliases = characterContinuityMentionAliases(name)
+    .map(escapeRegExp)
+    .join("|");
+
+  if (!text || !aliases || !textMentionsCharacterContinuityAlias(text, name)) {
+    return null;
+  }
+
+  if (characterScopedStatusPattern(aliases, continuityReleasedSource, 34).test(text)) {
+    return "released";
+  }
+
+  if (
+    characterScopedDeadPattern(aliases).test(text)
+  ) {
+    return "dead";
+  }
+
+  if (characterScopedDetainedPattern(aliases).test(text)) {
+    return "detained";
+  }
+
+  if (characterScopedStatusPattern(aliases, continuityAwaySource, 24).test(text)) {
+    return "away";
+  }
+
+  return null;
+}
+
+function shouldRecordHardContinuityFact(kind: CharacterContinuityLockKind) {
+  return kind === "detained" || kind === "dead";
+}
+
+function continuityAliasGroupForName(name: string, candidates: string[]) {
+  const base = baseCharacterName(name);
+
+  if (!base) {
+    return [];
+  }
+
+  const aliasGroup = new Set<string>([base]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    for (const candidate of candidates.map(baseCharacterName).filter(Boolean)) {
+      if (
+        !aliasGroup.has(candidate) &&
+        Array.from(aliasGroup).some((alias) => areCharacterAliasNames(alias, candidate))
+      ) {
+        aliasGroup.add(candidate);
+        changed = true;
+      }
+    }
+  }
+
+  return uniqueList([
+    ...Array.from(aliasGroup),
+    ...Array.from(aliasGroup).flatMap((candidate) => taskCardCharacterMentionCandidates(candidate))
+  ])
+    .map(baseCharacterName)
+    .filter((candidate) =>
+      candidate.length >= 2 &&
+      isValidAutoCharacterName(candidate) &&
+      !isLikelyNonCharacterMention(candidate)
+    );
+}
+
+function canonicalContinuityNameForGroup(names: string[]) {
+  const personalName = names.find(isSurnameOrdinalAliasName);
+
+  if (personalName) {
+    return personalName;
+  }
+
+  return names.reduce((preferred, name) => preferCharacterName(preferred, name), names[0] ?? "");
+}
+
+function applyContinuityLockFromText(
+  locksByName: Map<string, CharacterContinuityLock>,
+  input: {
+    candidates: string[];
+    text: string;
+    chapterNumber: number;
+    source: CharacterContinuityLock["source"];
+  }
+) {
+  for (const name of input.candidates) {
+    const aliases = continuityAliasGroupForName(name, input.candidates);
+    const canonicalName = canonicalContinuityNameForGroup(aliases);
+    const status = hardStatusKindForCharacterInText(input.text, name);
+
+    if (!status) {
+      continue;
+    }
+
+    if (status === "released") {
+      aliases.forEach((alias) => locksByName.delete(alias));
+      if (canonicalName) {
+        locksByName.delete(canonicalName);
+      }
+      continue;
+    }
+
+    if (!shouldRecordHardContinuityFact(status)) {
+      continue;
+    }
+
+    const fact = compactStateText(input.text, 130);
+    aliases.forEach((alias) => locksByName.delete(alias));
+    locksByName.set(canonicalName || name, {
+      name: canonicalName || name,
+      aliases,
+      kind: status,
+      chapterNumber: input.chapterNumber,
+      source: input.source,
+      fact: `第 ${input.chapterNumber} 章${input.source}：${fact}`
+    });
+  }
+}
+
+function profileChapterNumber(value: string) {
+  const match = value.match(/第\s*(\d+)\s*章/);
+
+  return match?.[1] ? Number(match[1]) : 0;
+}
+
+function buildCharacterContinuityLocks(
   store: AppStore,
   projectId: string,
   chapterNumber: number,
-  taskCard: StoredWritingTaskCard | undefined,
+  taskCard: Pick<StoredWritingTaskCard, "requiredCharacters"> | undefined,
   characters: StoredCharacterProfile[]
 ) {
-  const candidates = continuityCandidateNames(taskCard, characters);
+  const candidates = continuityCandidateNamesForProject(store, projectId, chapterNumber, taskCard, characters);
 
   if (candidates.length === 0) {
     return [];
   }
 
-  const relationPattern = /见|认识|知道|称|问|说|递|接过|呈|禀|命|传|审|查|压|放|看|派|汇报|回|阻|承认|质问|处理|过目|存档|候着|同宗|乡绅|大人|捕头|捕快/;
-  const facts: string[] = [];
+  const locksByName = new Map<string, CharacterContinuityLock>();
+  const chaptersWithRealizedText = new Set([
+    ...store.chapterDrafts
+      .filter((draft) => draft.projectId === projectId && draft.chapterNumber < chapterNumber)
+      .map((draft) => draft.chapterNumber),
+    ...store.chapterLedgers
+      .filter((ledger) => ledger.projectId === projectId && ledger.chapterNumber < chapterNumber)
+      .map((ledger) => ledger.chapterNumber)
+  ]);
+  const continuityEntries: Array<{
+    chapterNumber: number;
+    sourceOrder: number;
+    source: CharacterContinuityLock["source"];
+    text: string;
+  }> = [
+    ...store.writingTaskCards
+      .filter((card) =>
+        card.projectId === projectId &&
+        card.chapterNumber < chapterNumber &&
+        !chaptersWithRealizedText.has(card.chapterNumber)
+      )
+      .flatMap((card) =>
+        taskCardContinuityHistoryEntries(card).map((text) => ({
+          chapterNumber: card.chapterNumber,
+          sourceOrder: 0,
+          source: "任务卡" as const,
+          text
+        }))
+      ),
+    ...store.chapterDrafts
+      .filter((draft) => draft.projectId === projectId && draft.chapterNumber < chapterNumber)
+      .flatMap((draft) =>
+        splitDraftSentences(draft.content).map((text) => ({
+          chapterNumber: draft.chapterNumber,
+          sourceOrder: 1,
+          source: "正文" as const,
+          text
+        }))
+      ),
+    ...store.chapterLedgers
+      .filter((ledger) => ledger.projectId === projectId && ledger.chapterNumber < chapterNumber)
+      .flatMap((ledger) =>
+        [
+          ...ledger.events,
+          ...ledger.newClues,
+          ledger.payoff,
+          ledger.cliffhanger,
+          ...ledger.stateChanges,
+          ...(ledger.carryOverTasks ?? [])
+        ].map((text) => ({
+          chapterNumber: ledger.chapterNumber,
+          sourceOrder: 2,
+          source: "台账" as const,
+          text
+        }))
+      )
+  ].sort((a, b) => a.chapterNumber - b.chapterNumber || a.sourceOrder - b.sourceOrder);
+
+  for (const entry of continuityEntries) {
+    applyContinuityLockFromText(locksByName, {
+      candidates,
+      text: entry.text,
+      chapterNumber: entry.chapterNumber,
+      source: entry.source
+    });
+  }
+
+  for (const character of characters) {
+    const name = baseCharacterName(character.name);
+    const profileText = `${name}：${[
+      character.currentState,
+      character.currentGoal,
+      character.lastAppearance
+    ].join("；")}`;
+
+    if (!name || locksByName.has(name) || !hardStatusKindForCharacterInText(profileText, name)) {
+      continue;
+    }
+
+    applyContinuityLockFromText(locksByName, {
+      candidates: [name],
+      text: profileText,
+      chapterNumber: profileChapterNumber(character.lastAppearance) || Math.max(1, chapterNumber - 1),
+      source: "人物档案"
+    });
+  }
+
+  const taskMentionNames = new Set(
+    taskCard?.requiredCharacters
+      .flatMap((name) => characterContinuityMentionAliases(name))
+      .map(baseCharacterName)
+      .filter(Boolean) ?? []
+  );
+
+  return Array.from(locksByName.values())
+    .sort((a, b) => {
+      const mentionedA = [a.name, ...a.aliases].some((name) => taskMentionNames.has(baseCharacterName(name))) ? 1 : 0;
+      const mentionedB = [b.name, ...b.aliases].some((name) => taskMentionNames.has(baseCharacterName(name))) ? 1 : 0;
+      const hardA = a.kind === "detained" || a.kind === "dead" ? 1 : 0;
+      const hardB = b.kind === "detained" || b.kind === "dead" ? 1 : 0;
+      return mentionedB - mentionedA || hardB - hardA || b.chapterNumber - a.chapterNumber;
+    })
+    .slice(0, 28);
+}
+
+function buildCrossChapterContinuityFacts(
+  store: AppStore,
+  projectId: string,
+  chapterNumber: number,
+  taskCard: Pick<StoredWritingTaskCard, "requiredCharacters"> | undefined,
+  characters: StoredCharacterProfile[]
+) {
+  const candidates = continuityCandidateNamesForProject(store, projectId, chapterNumber, taskCard, characters);
+
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const relationPattern = /见|认识|知道|称|问|说|递|接过|呈|禀|命|传|审|查|压|放|看|派|汇报|回|阻|承认|质问|处理|过目|存档|候着|同宗|同门|同事|上级|下属|同伴|盟友|队友|敌人|对手|负责人|带队|领队/;
+  const facts: string[] = buildCharacterContinuityLocks(store, projectId, chapterNumber, taskCard, characters)
+    .map((lock) => lock.fact);
   const ledgers = store.chapterLedgers
     .filter((ledger) => ledger.projectId === projectId && ledger.chapterNumber < chapterNumber)
     .sort((a, b) => a.chapterNumber - b.chapterNumber);
@@ -7010,7 +10177,7 @@ function buildCrossChapterContinuityFacts(
   for (const draft of drafts) {
     for (const sentence of splitDraftSentences(draft.content)) {
       const mentioned = candidates.filter((name) => characterNameAppearsInText(sentence, name));
-      const hasParticipantPronoun = /苏|主角|她|他|属下|卑职|大人|捕头|捕快/.test(sentence);
+      const hasParticipantPronoun = /主角|主人公|她|他|本人|我|下属|上级|同伴|队友|盟友|负责人|带队|领队|对手|敌人/.test(sentence);
 
       if (mentioned.length === 0 || !relationPattern.test(sentence)) {
         continue;
@@ -7786,6 +10953,11 @@ function stripCarryOverPrefix(value: string) {
       .replace(/^继续推进主线[:：]\s*/, "")
       .replace(/^延续章节目标[:：]\s*/, "")
       .replace(/^承接未兑现钩子[:：]\s*/, "")
+      .replace(/^优先收束上一章未完成[:：]\s*/, "")
+      .replace(/^收束既有任务[:：]\s*/, "")
+      .replace(/^完成本章收束动作[:：]\s*/, "")
+      .replace(/^用已登记信息完成闭环[:：]\s*/, "")
+      .replace(/^处理剧情驱动[:：]\s*/, "")
       .trim();
 
     if (next === text) {
@@ -7813,7 +10985,9 @@ function isLowValueCarryOverTask(value: string) {
     /收益来源|触发条件|符合关键机制|越级风险|无越级|压制来源|代价|小收益|爽点|情绪回报|读者/,
     /任务卡|章节目标|本章目标|主线推进|章末钩子|写清|说明|体现|凸显|强化.*心理/,
     /保持.*状态|暂不解释|不要.*揭开|暗示.*但不|为后续.*埋|留待下章|留待后续/,
-    /通过.*暗示|通过.*强化|服务.*核心承诺|回扣.*主线/
+    /通过.*暗示|通过.*强化|服务.*核心承诺|回扣.*主线/,
+    /只作为后续暗线压力|不作为下一章必须深挖|新的(?:调查链|任务链|行动链)|阶段后钩子|背景压力/,
+    /^(完成本章收束动作|用已登记信息完成闭环|优先收束上一章未完成|收束既有任务)/
   ];
 
   return lowValuePatterns.some((pattern) => pattern.test(text));
@@ -7822,15 +10996,17 @@ function isLowValueCarryOverTask(value: string) {
 function isCarryOverRuleText(value: string) {
   const text = stripCarryOverPrefix(value);
 
-  return /阶段收束|封闭证据池|不引出新的调查链|不得新增|只能使用|不能展开调查链|不展开调查链|不再把伏笔升级|规则|硬规则|模式|优先合并既有|围绕既有证据|既有证据、人物供词和前文线索/.test(text);
+  return /阶段收束|封闭(?:证据|信息)池|不引出新的(?:调查链|任务链|行动链)|不得新增|只能使用|不能展开(?:调查链|任务链|行动链)|不展开(?:调查链|任务链|行动链)|不再把伏笔升级|规则|硬规则|模式|优先合并既有|围绕既有(?:证据|信息)|既有(?:证据|信息)、人物(?:供词|选择)和前文(?:线索|伏笔)/.test(text);
 }
 
 function cleanCarryOverTasksForNextChapter(tasks: string[] | undefined, limit = 3, maxLength = 110) {
   return cleanStateEntries(
-    (tasks ?? [])
-      .filter((task) => !isCarryOverRuleText(task))
-      .map(normalizeCarryOverTask)
-      .filter(Boolean),
+    mergeLowDramaDetailTasksForDrama(
+      (tasks ?? [])
+        .filter((task) => !isCarryOverRuleText(task))
+        .map(normalizeCarryOverTask)
+        .filter(Boolean)
+    ),
     limit,
     maxLength
   );
@@ -7871,7 +11047,7 @@ function cleanTaskCardForeshadowingTasksForStorage(tasks: string[] | undefined) 
       !isCarryOverRuleText(task) &&
       !isAftermathHookText(task) &&
       !isLowCommitmentAnomalyResidueText(task) &&
-      !/不展开新调查链|不得新增|只能使用|封闭证据池|阶段冷却|冷却规则|阶段落点完成后/.test(task)
+      !/不展开新(?:调查链|任务链|行动链)|不得新增|只能使用|封闭(?:证据|信息)池|阶段冷却|冷却规则|阶段落点完成后/.test(task)
     ),
     8,
     130
@@ -7885,15 +11061,15 @@ function normalizeCarryOverTask(value: string) {
     return "";
   }
 
-  const actionPattern = /查明|追问|验证|核实|确认|锁定|找到|取得|提取|比对|对质|审讯|审问|抓捕|传唤|回收|结案|返回|揭示|处理|保护|交代|供出|指认|保存|带走|移交|公开审理/;
-  const cluePattern = /线索|证据|物证|证词|口供|嫌疑|同伙|凶器|尸体|现场|标记|图案|符号|案卷|记录|文件|档案|钥匙|残片|痕迹|脚印|手印|血迹|旧案|旧事|资料|名单|编号/;
+  const actionPattern = /查明|追问|验证|核实|确认|锁定|找到|取得|提取|比对|对质|质问|逼问|审讯|审问|抓捕|传唤|回收|结案|返回|揭示|处理|保护|交代|供出|指认|保存|带走|移交|公开|公开审理|谈判|交易|比试|竞争|试炼|反击|兑现|奖励|晋升|突破|升级|救援|站队|摊牌|惩罚/;
+  const driverPattern = /线索|信息|细节|物件|物品|道具|记录|文件|档案|名单|名册|编号|数字|数值|面板|提示|日志|账本|账页|账单|合同|聊天记录|监控|照片|截图|残页|纸条|符号|标记|图案|痕迹|钥匙|材料|药材|丹药|灵石|装备|令牌|地图|坐标|规则|任务|数据|排名|分数|证据|物证|证词|口供|嫌疑|同伙|凶器|尸体|现场|旧案|旧事|资料/;
 
   if (actionPattern.test(text)) {
     return text;
   }
 
-  if (cluePattern.test(text)) {
-    return `验证线索：${text}`;
+  if (driverPattern.test(text)) {
+    return `处理剧情驱动：${text}`;
   }
 
   return "";
@@ -8009,7 +11185,7 @@ function buildCarryOverTasksFromDraft(
 
   if (taskCard.endingHook && !draftEndingAppearsToCarryHook(draft.content, taskCard.endingHook)) {
     if (closureMode && isExpansionThreadText(taskCard.endingHook) && !isClosureActionText(taskCard.endingHook)) {
-      const labeled = carryOverLabel("保留案后钩子", "只作为后续暗线压力，不作为下一章必须深挖的新调查链");
+      const labeled = carryOverLabel("保留阶段后钩子", "只作为后续暗线压力，不作为下一章必须深挖的新任务链");
 
       if (labeled) {
         carryOverTasks.push(labeled);
@@ -8221,11 +11397,11 @@ function buildLedgerFromDraft(
   return {
     events,
     newCharacters: uniqueList([...appearedRequiredCharacters, ...appearedActionCharacters]).slice(0, 8),
-    newClues: cleanLedgerEntries(
+    newClues: cleanLedgerDriverEntries(
       closureMode
         ? clueLines.filter((line) => !isOpenEndedSceneEntranceText(line) && !isInvestigationExpansionSentence(line))
         : clueLines,
-      8,
+      6,
       110,
       events
     ),
@@ -8337,7 +11513,7 @@ function mergeAiLedgerFields(
 ) {
   const events = cleanLedgerEntries(aiUpdate.events.length > 0 ? aiUpdate.events : fallback.events, 8);
   const aiCluesFromDraft = aiUpdate.newClues.filter((clue) => ledgerEvidenceAppearsInDraft(clue, draft.content));
-  const newClues = cleanLedgerEntries(aiCluesFromDraft.length > 0 ? aiCluesFromDraft : fallback.newClues, 10);
+  const newClues = cleanLedgerDriverEntries(aiCluesFromDraft.length > 0 ? aiCluesFromDraft : fallback.newClues, 6, 110);
   const payoff = compactStateText(aiUpdate.payoff || fallback.payoff, 110);
   const cliffhanger = compactStateText(fallback.cliffhanger || aiUpdate.cliffhanger, 130);
   const aiStateChangesFromDraft = aiUpdate.stateChanges.filter((change) =>
@@ -8347,13 +11523,11 @@ function mergeAiLedgerFields(
   return {
     events,
     newCharacters: uniqueList(
-      (aiUpdate.newCharacters.length > 0 ? aiUpdate.newCharacters : fallback.newCharacters)
-        .filter((item) =>
-          isValidAutoCharacterName(item) &&
-          !isLikelyNonCharacterMention(item) &&
-          characterAppearsInDraft(draft.content, item) &&
-          !knownCharacterNames.has(baseCharacterName(item))
-        )
+      cleanLedgerNewCharacters(
+        aiUpdate.newCharacters.length > 0 ? aiUpdate.newCharacters : fallback.newCharacters,
+        draft.content,
+        knownCharacterNames
+      )
     ).slice(0, 8),
     newClues,
     payoff,
@@ -8442,10 +11616,11 @@ function createLedgerRecord(
   timestamp: string
 ): StoredChapterLedger {
   const events = cleanLedgerEntries(extracted.events, 8);
-  const newClues = cleanLedgerEntries(extracted.newClues, 10);
+  const newClues = cleanLedgerDriverEntries(extracted.newClues, 6, 110);
   const payoff = compactStateText(extracted.payoff, 110);
   const cliffhanger = compactStateText(extracted.cliffhanger, 130);
   const carryOverTasks = cleanCarryOverTasksForNextChapter(extracted.carryOverTasks, 6, 130);
+  const newCharacters = cleanLedgerNewCharacters(extracted.newCharacters, draft.content);
 
   return {
     id: randomUUID(),
@@ -8454,7 +11629,7 @@ function createLedgerRecord(
     chapterNumber: draft.chapterNumber,
     title: draft.title,
     events,
-    newCharacters: extracted.newCharacters,
+    newCharacters,
     newClues,
     payoff,
     cliffhanger,
@@ -8595,7 +11770,7 @@ function applyLedgerToWritingState(
   const revealKeywords = ["回收", "揭开", "真相", "曝光", "确认", "水落石出"];
 
   if (plotState) {
-    const cleanClues = cleanStateEntries(
+    const cleanClues = cleanLedgerDriverEntries(
       ledger.newClues.filter((item) => !isLowCommitmentAnomalyResidueText(item)),
       8
     );
@@ -8603,7 +11778,11 @@ function applyLedgerToWritingState(
       ledger.stateChanges.filter((item) => !isLowCommitmentAnomalyResidueText(item)),
       8
     );
-    const queueClues = cleanPlotQueueEntries(cleanClues, 4, 110);
+    const queueClues = cleanPlotQueueEntries(
+      cleanClues.filter((item) => !isLowDramaDetailTaskText(item)),
+      3,
+      110
+    );
     const queueChanges = cleanPlotQueueEntries(cleanChanges, 4, 110);
     const relationshipChanges = cleanStateEntries(extracted?.relationshipChanges ?? [], 10);
     const mapAndForceUpdates = cleanMapAndForceEntries(extracted?.mapAndForceUpdates ?? [], 10);
@@ -8613,21 +11792,22 @@ function applyLedgerToWritingState(
       ? ""
       : compactStateText(ledger.cliffhanger, 110);
     const carryOverTasks = cleanCarryOverTasksForNextChapter(ledger.carryOverTasks, 3, 110);
+    const dramaticCarryOverTasks = carryOverTasks.filter((task) => !isLowDramaDetailTaskText(task));
     const queueHook = isPlotQueueTaskText(cleanHook) ? cleanHook : "";
     const stageChange = queueChanges[0];
 
     plotState.currentStage = stageChange || plotState.currentStage;
-    plotState.shortTermGoal = carryOverTasks[0]
-      ? `承接第 ${ledger.chapterNumber} 章未完成任务：${carryOverTasks[0]}`
+    plotState.shortTermGoal = dramaticCarryOverTasks[0]
+      ? `承接第 ${ledger.chapterNumber} 章未完成任务：${dramaticCarryOverTasks[0]}`
       : queueHook ? `承接第 ${ledger.chapterNumber} 章钩子：${queueHook}` : plotState.shortTermGoal;
     plotState.unresolvedQuestions = uniqueList([
-      ...carryOverTasks,
+      ...dramaticCarryOverTasks,
       ...queueClues,
       queueHook,
       ...plotState.unresolvedQuestions
     ]).slice(0, 20);
     plotState.openThreads = uniqueList([
-      ...carryOverTasks,
+      ...dramaticCarryOverTasks,
       ...queueClues,
       queueHook,
       ...(plotState.openThreads ?? [])
@@ -8646,12 +11826,12 @@ function applyLedgerToWritingState(
         )
     );
     plotState.nextMilestones = uniqueList([
-      ...carryOverTasks.map((task) => `继续处理第 ${ledger.chapterNumber} 章未完成任务：${task}`),
+      ...dramaticCarryOverTasks.map((task) => `继续处理第 ${ledger.chapterNumber} 章未完成任务：${task}`),
       queueHook ? `处理第 ${ledger.chapterNumber} 章钩子：${queueHook}` : "",
       ...queueChanges.slice(0, 3),
       ...plotState.nextMilestones
     ]).slice(0, 12);
-    plotState.nextStageGoal = carryOverTasks[0] || queueHook || plotState.nextStageGoal;
+    plotState.nextStageGoal = dramaticCarryOverTasks[0] || queueHook || plotState.nextStageGoal;
     plotState.powerSystemState = appendStateText(
       plotState.powerSystemState,
       cleanPowerSystemEntries([
@@ -8934,6 +12114,41 @@ function resetWritingMemoryAfterChapterDelete(
     const baseName = baseCharacterName(name);
     return Boolean(baseName && baseName.length >= 2 && supportText.includes(baseName));
   };
+  const fieldLineIsSupported = (line: string) => {
+    const text = line.trim();
+    const compact = compactStateText(text, 80).replace(/…$/, "");
+
+    if (!text || /^(待补充|待确认|未知|新建作品|新书开局待写)$/.test(text)) {
+      return true;
+    }
+
+    return supportText.includes(text) || (compact.length >= 8 && supportText.includes(compact));
+  };
+  const looksLikeDerivedCharacterState = (value: string) =>
+    /第\s*[一二三四五六七八九十百千万\d]+\s*章|章节|台账|任务卡|钩子|出场|状态更新|线索|伏笔|追捕|追查|追踪|北追|南追|东追|西追|北上|南下|东行|西行|逃逸|在逃|潜逃|外逃|未归|禁足|看守|灭口|被召回|分兵|押送|收押|羁押|提审|受审|未现身|间接推断|赶往|前往|返回/.test(value);
+  const unsupportedDerivedCharacterField = (value: string) => {
+    const text = value.trim();
+
+    if (!text || hasDeletedChapterRef(text) || !looksLikeDerivedCharacterState(text)) {
+      return false;
+    }
+
+    const lines = splitLines(text);
+    const checkedLines = lines.length > 0 ? lines : [text];
+    return checkedLines.some((line) => !fieldLineIsSupported(line));
+  };
+  const retainedCharacterState = (name: string) => {
+    const entries = characterSpecificEntries(name, remainingLedgers);
+    const latestEntry = entries.at(-1);
+
+    if (latestEntry) {
+      return `保留到第 ${latestLedger?.chapterNumber ?? Math.max(1, startChapter - 1)} 章：${latestEntry}`;
+    }
+
+    return latestLedger
+      ? `已回滚到第 ${latestLedger.chapterNumber} 章后的状态，待根据重写章节更新。`
+      : "新书开局待写";
+  };
   const pruneMainCharacterLine = (line: string) => {
     if (!/主要人物/.test(line)) {
       return line;
@@ -9014,6 +12229,7 @@ function resetWritingMemoryAfterChapterDelete(
       }
 
       const chapterBoundFields = [
+        character.identity,
         character.lastAppearance,
         character.currentState,
         character.knownInformation,
@@ -9021,23 +12237,50 @@ function resetWritingMemoryAfterChapterDelete(
         character.relationshipToProtagonist
       ];
       const touchedDeletedChapter = chapterBoundFields.some(hasDeletedChapterRef);
+      const unsupportedIdentity = unsupportedDerivedCharacterField(character.identity);
+      const unsupportedCurrentState = unsupportedDerivedCharacterField(character.currentState);
+      const unsupportedCurrentGoal = unsupportedDerivedCharacterField(character.currentGoal);
+      const unsupportedLastAppearance = unsupportedDerivedCharacterField(character.lastAppearance);
 
-      if (!touchedDeletedChapter) {
+      if (
+        !touchedDeletedChapter &&
+        !unsupportedIdentity &&
+        !unsupportedCurrentState &&
+        !unsupportedCurrentGoal &&
+        !unsupportedLastAppearance
+      ) {
         return character;
       }
 
       const knownInformation = stripDeletedChapterLines(character.knownInformation).join("\n");
+      const retainedState = retainedCharacterState(character.name);
 
       return {
         ...character,
-        currentGoal: noPreviousChapters ? "待根据重写章节更新" : compactStateText(character.currentGoal, 80) || "待补充",
+        identity: unsupportedIdentity
+          ? stripDeletedChapterLines(character.identity)
+              .filter((line) => !unsupportedDerivedCharacterField(line))
+              .join("\n") || `${baseCharacterName(character.name)}，身份待根据重写章节更新`
+          : character.identity,
+        currentGoal:
+          noPreviousChapters || unsupportedCurrentGoal
+            ? "待根据重写章节更新"
+            : compactStateText(character.currentGoal, 80) || "待补充",
         knownInformation:
           knownInformation ||
           (noPreviousChapters
             ? "只知道开局阶段已经明确的信息，不能提前知道未揭露真相。"
             : character.knownInformation),
-        lastAppearance: noPreviousChapters ? "新建作品" : character.lastAppearance,
-        currentState: noPreviousChapters ? "新书开局待写" : character.currentState,
+        lastAppearance:
+          noPreviousChapters
+            ? "新建作品"
+            : unsupportedLastAppearance
+              ? `回滚到第 ${latestLedger?.chapterNumber ?? Math.max(1, startChapter - 1)} 章后`
+              : character.lastAppearance,
+        currentState:
+          noPreviousChapters || unsupportedCurrentState
+            ? retainedState
+            : character.currentState,
         updatedAt: timestamp
       };
     });
@@ -9626,6 +12869,8 @@ export function formatAiJobType(type: string) {
       return "生成大纲";
     case "generate_task_card":
       return "生成任务卡";
+    case "generate_chapter_batch":
+      return "批量连写章节";
     case "generate_long_form_plan":
       return "生成长篇规划";
     case "review_long_form_plan":
@@ -12027,6 +15272,15 @@ export function calculateAiJobProgress(
     }
   }
 
+  if (job.type === "generate_chapter_batch") {
+    const chapterCount = Number(input?.chapterCount ?? output?.requestedChapters ?? 0);
+    const completedChapters = Number(output?.completedChapters ?? 0);
+
+    if (chapterCount > 0) {
+      return Math.max(5, Math.min(99, Math.round((completedChapters / chapterCount) * 100)));
+    }
+  }
+
   return job.status === "running" ? 55 : 5;
 }
 
@@ -12109,6 +15363,7 @@ export async function getProjectWritingState(projectId: string) {
     foreshadowings: result.foreshadowings,
     longFormPlans: result.longFormPlans,
     longFormPlanJobs: result.longFormPlanJobs,
+    writingBatchJobs: result.writingBatchJobs,
     customRelationGraphs: result.customRelationGraphs,
     taskCards: result.taskCards,
     drafts: result.drafts,
@@ -13428,12 +16683,15 @@ export async function generateLongFormPlan(
   const storyAnalysis = store.storyAnalyses
     .filter((item) => item.projectId === projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
-  const characters = store.characterProfiles
-    .filter((item) => item.projectId === projectId)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const foreshadowings = store.foreshadowings
     .filter((item) => item.projectId === projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const existingStoryProgress = buildExistingStoryProgressForLongFormPlan(store, projectId);
+  const characters = charactersForLongFormContext(
+    store,
+    projectId,
+    existingStoryProgress?.continuationChapterNumber ?? 1
+  );
   const activeJob = options?.existingJobId ? null : findActiveLongFormPlanJob(store, projectId);
 
   if (activeJob) {
@@ -13446,7 +16704,11 @@ export async function generateLongFormPlan(
         userId: currentUser.id,
         projectId,
         type: "generate_long_form_plan",
-        payload: { targetTotalWords, estimatedChapters },
+        payload: {
+          targetTotalWords,
+          estimatedChapters,
+          continuationChapterNumber: existingStoryProgress?.continuationChapterNumber
+        },
         model: getActiveAiModel(store, "local-long-form-plan", currentUser.id),
         retryOfJobId: options?.retryOfJobId
       });
@@ -13470,6 +16732,7 @@ export async function generateLongFormPlan(
   }
 
   let aiPlan: AiLongFormPlanResult;
+  let repairedAiPlan: Awaited<ReturnType<typeof repairLongFormPlanWithAi>> | null = null;
 
   try {
     aiPlan = await generateLongFormPlanWithAi({
@@ -13481,9 +16744,100 @@ export async function generateLongFormPlan(
       plotState,
       characters,
       foreshadowings,
+      storyAnalysis,
+      existingStoryProgress
+    });
+    const generatedPlanBeforePostProcess = aiPlan;
+    aiPlan = softenUnprovenLongFormSpecificsInPlan(aiPlan, {
+      project,
+      bible,
+      plotState,
+      characters,
+      foreshadowings,
       storyAnalysis
     });
-    validateAiLongFormPlan(aiPlan, estimatedChapters);
+    aiPlan = cleanLongFormGenericTruthHoldNoiseInPlan(aiPlan);
+    aiPlan = sanitizeGeneratedLongFormFactLocks(aiPlan, existingStoryProgress);
+    aiPlan = preserveLongFormStageCoverage(aiPlan, generatedPlanBeforePostProcess, estimatedChapters);
+    aiPlan = ensureLongFormDoNotChange(aiPlan, { bible, plotState, existingStoryProgress });
+    const validationIssues = collectLongFormPlanValidationIssues(aiPlan, estimatedChapters, existingStoryProgress);
+
+    if (validationIssues.length > 0) {
+      const locallyRepairedPlan = preserveLongFormStageCoverage(
+        softenPrematureTruthRevealsInPlan(aiPlan),
+        aiPlan,
+        estimatedChapters
+      );
+      const localPlanWithFactLocks = ensureLongFormDoNotChange(locallyRepairedPlan, {
+        bible,
+        plotState,
+        existingStoryProgress
+      });
+      const localRepairIssues = collectLongFormPlanValidationIssues(
+        localPlanWithFactLocks,
+        estimatedChapters,
+        existingStoryProgress
+      );
+
+      if (localRepairIssues.length === 0) {
+        aiPlan = localPlanWithFactLocks;
+      } else {
+        repairedAiPlan = await repairLongFormPlanWithAi({
+          context: {
+            projectName: project.name,
+            projectDescription: project.description,
+            targetTotalWords,
+            estimatedChapters,
+            bible,
+            plotState,
+            characters,
+            foreshadowings,
+            storyAnalysis,
+            existingStoryProgress
+          },
+          plan: localPlanWithFactLocks,
+          issues: localRepairIssues
+        });
+        const repairedPlanBeforePostProcess = repairedAiPlan;
+        repairedAiPlan = softenUnprovenLongFormSpecificsInPlan(repairedAiPlan, {
+          project,
+          bible,
+          plotState,
+          characters,
+          foreshadowings,
+          storyAnalysis
+        });
+        repairedAiPlan = cleanLongFormGenericTruthHoldNoiseInPlan(repairedAiPlan);
+        repairedAiPlan = sanitizeGeneratedLongFormFactLocks(repairedAiPlan, existingStoryProgress);
+        repairedAiPlan = preserveLongFormStageCoverage(
+          repairedAiPlan,
+          repairedPlanBeforePostProcess,
+          estimatedChapters
+        );
+        repairedAiPlan = preserveLongFormStageCoverage(
+          repairedAiPlan,
+          localPlanWithFactLocks,
+          estimatedChapters
+        );
+        repairedAiPlan = ensureLongFormDoNotChange(repairedAiPlan, { bible, plotState, existingStoryProgress });
+        aiPlan = repairedAiPlan;
+      }
+    }
+
+    const planBeforeFinalPostProcess = aiPlan;
+    aiPlan = softenUnprovenLongFormSpecificsInPlan(aiPlan, {
+      project,
+      bible,
+      plotState,
+      characters,
+      foreshadowings,
+      storyAnalysis
+    });
+    aiPlan = cleanLongFormGenericTruthHoldNoiseInPlan(aiPlan);
+    aiPlan = sanitizeGeneratedLongFormFactLocks(aiPlan, existingStoryProgress);
+    aiPlan = preserveLongFormStageCoverage(aiPlan, planBeforeFinalPostProcess, estimatedChapters);
+    aiPlan = ensureLongFormDoNotChange(aiPlan, { bible, plotState, existingStoryProgress });
+    validateAiLongFormPlan(aiPlan, estimatedChapters, existingStoryProgress);
   } catch (error) {
     const message = error instanceof Error ? error.message : "长篇规划 AI 生成失败";
     failAiJob(job, message);
@@ -13503,14 +16857,20 @@ export async function generateLongFormPlan(
     progressionPacing: cleanList(aiPlan.progressionPacing).slice(0, 20),
     rewardPacing: cleanList(aiPlan.rewardPacing).slice(0, 16),
     confirmedFacts: cleanList(aiPlan.confirmedFacts).slice(0, 16),
-    openQuestions: cleanList(aiPlan.openQuestions).slice(0, 12),
+    openQuestions: compactGeneratedLongFormOpenQuestions(aiPlan.openQuestions, 8),
     doNotChange: cleanList(aiPlan.doNotChange).slice(0, 16),
     doNotRevealEarly: cleanList(aiPlan.doNotRevealEarly).slice(0, 12),
     tagPromises: cleanList(aiPlan.tagPromises).slice(0, 10),
     first10Chapters: cleanList(aiPlan.first10Chapters).slice(0, 12),
-    first100Pacing: aiPlan.first100Pacing,
-    post100Pacing: aiPlan.post100Pacing,
-    progressionRules: cleanList(aiPlan.progressionRules).slice(0, 24),
+    first100Pacing: cleanNestedLongFormStageReferences(
+      aiPlan.first100Pacing,
+      getExpectedFirst100StageRanges(estimatedChapters)
+    ),
+    post100Pacing: cleanNestedLongFormStageReferences(
+      aiPlan.post100Pacing,
+      getExpectedPost100StageRanges(estimatedChapters)
+    ),
+    progressionRules: cleanGeneratedLongFormProgressionRules(aiPlan.progressionRules).slice(0, 24),
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -13531,9 +16891,10 @@ export async function generateLongFormPlan(
     usedFallback: false,
     longFormPlanId: plan.id,
     reviewJobId: reviewJob.id,
+    usedLongFormPlanRepair: Boolean(repairedAiPlan),
     targetTotalWords,
     estimatedChapters
-  }, getAiTokenUsage(aiPlan)));
+  }, combineAiTokenUsages([getAiTokenUsage(aiPlan), getAiTokenUsage(repairedAiPlan)])));
   await writeStore(store);
   return plan;
 }
@@ -13589,12 +16950,15 @@ export async function reviewLongFormPlan(
   const storyAnalysis = store.storyAnalyses
     .filter((item) => item.projectId === projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
-  const characters = store.characterProfiles
-    .filter((item) => item.projectId === projectId)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const foreshadowings = store.foreshadowings
     .filter((item) => item.projectId === projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const existingStoryProgress = buildExistingStoryProgressForLongFormPlan(store, projectId);
+  const characters = charactersForLongFormContext(
+    store,
+    projectId,
+    existingStoryProgress?.continuationChapterNumber ?? 1
+  );
 
   let review;
 
@@ -13608,7 +16972,8 @@ export async function reviewLongFormPlan(
       plotState,
       characters,
       foreshadowings,
-      storyAnalysis
+      storyAnalysis,
+      existingStoryProgress
     }, {
       planningBasis: plan.planningBasis,
       corePromise: plan.corePromise,
@@ -13770,10 +17135,10 @@ export async function generateWritingTaskCard(
     "女强可以害怕或不适，但不要连续章节重复同一种表现；平稳查证章节可以用专注、疲惫、沉默或行动选择体现压力。",
     "时间与体力必须连续：连续查案、战斗、赶路、审讯或夜探后，要安排可见代价或恢复窗口，例如吃饭、喝水、换药、短睡、轮值、等待天亮、暂回住处、现实醒来缓冲；不能让主角无休止跨场景奔走。",
     "转场必须有时间成本和行动理由：一章内最多保留 2-3 个有效地点，赶路、等待、天色变化和休整可以压缩，但不能完全消失。",
-    "行动闭环要求：本章不能只靠换地点和发现新线索来推进；必须至少完成一个小闭环，即提出一个具体问题，现场验证或遭遇阻力，并得到阶段结论、排除项、锁定范围、人物反应或状态变化。",
-    "连续查证章节要轮换节奏：上一章已经发现新线索时，本章优先验证、对质、排除或复盘；只有得到阶段结论后，章末才可以抛出下一步压力。",
+    "行动闭环要求：本章不能只靠换地点和发现新信息来推进；必须至少完成一个小闭环，即提出一个具体问题，现场验证或遭遇阻力，并得到阶段结论、排除项、锁定范围、人物反应或状态变化。",
+    "连续信息获取章节要轮换节奏：上一章已经发现新信息时，本章优先验证、对抗、排除或复盘；只有得到阶段结论后，章末才可以抛出下一步压力。",
     /穿越|快穿|入梦|梦境|重生|异世/.test(`${project.description}\n${bible.worldRules}\n${bible.immutableSettings}`)
-      ? "涉及梦境/穿越/异世时，必须区分主观经历时间、异世界时间与现实时间；可以中途醒来再入梦，但必须承接同一案件或同一任务进度，不得擅自跳成新世界或重置关系。"
+      ? "涉及梦境/穿越/异世时，必须区分主观经历时间、异世界时间与现实时间；可以中途醒来再入梦，但必须承接同一任务或同一阶段进度，不得擅自跳成新世界或重置关系。"
       : ""
   ]).filter(Boolean);
 
@@ -13788,6 +17153,15 @@ export async function generateWritingTaskCard(
     .filter((item) => item.status !== "closed")
     .slice(0, 3);
   const allCharacters = charactersForChapterContext(store, projectId, targetChapterNumber);
+  const taskCardProjectGenderText = projectGenderAnchorText(project, bible);
+  const taskCardGenderAnchors = genderAnchorsForTaskCard(
+    allCharacters,
+    store,
+    projectId,
+    targetChapterNumber,
+    project,
+    bible
+  );
   const scheduledCharacters = allCharacters.filter((item) =>
     isCharacterScheduledForChapter(item, targetChapterNumber)
   );
@@ -13801,6 +17175,30 @@ export async function generateWritingTaskCard(
         .map((item) => item.name)
     : [];
   const openingChapterHasManualScope = targetChapterNumber === 1 && userInputHasTaskCardScope(input);
+  const continuityProbeTaskCard = {
+    requiredCharacters: uniqueList([
+      ...(input?.chapterGoal ? extractNamedCharactersFromText(input.chapterGoal) : []),
+      ...(input?.continuity ? extractNamedCharactersFromText(input.continuity) : []),
+      ...(input?.mainPlotProgress ? extractNamedCharactersFromText(input.mainPlotProgress) : []),
+      ...(input?.pleasurePoint ? extractNamedCharactersFromText(input.pleasurePoint) : []),
+      ...(input?.endingHook ? extractNamedCharactersFromText(input.endingHook) : [])
+    ])
+  };
+  const taskCardContinuityLocks = buildCharacterContinuityLocks(
+    store,
+    projectId,
+    targetChapterNumber,
+    continuityProbeTaskCard,
+    allCharacters
+  );
+  const continuityFacts = buildCrossChapterContinuityFacts(
+    store,
+    projectId,
+    targetChapterNumber,
+    continuityProbeTaskCard,
+    allCharacters
+  );
+  const continuityRules = buildTaskCardContinuityRules(taskCardContinuityLocks);
   const relevantCharacters = uniqueList([
     ...(targetChapterNumber === 1 && !openingChapterHasManualScope ? [] : scheduledCharacters.map((item) => item.name)),
     ...protagonistCharacters
@@ -13838,11 +17236,11 @@ export async function generateWritingTaskCard(
       layerReturnGuard.active
         ? input?.chapterGoal?.trim() || "结束连续原本生活层回响，把主角带回核心行动层或下一阶段主任务；现实压力只作开头代价和转向触发。"
         : postClosureCooldownGuard.active
-        ? input?.chapterGoal?.trim() || "写结案后的余波：奖励、休整、身份变化或关系松动，只在章末留一处轻钩子。"
+        ? input?.chapterGoal?.trim() || "写阶段结束后的余波：奖励、休整、身份变化、资源兑现或关系松动，只在章末留一处轻钩子。"
         : input?.chapterGoal?.trim() ||
           carryOverText ||
           (relatedInspirationText ? `参考相关灵感：${relatedInspirationText}。` : "") ||
-          `${project.description.trim() ? `参考作品简介的开局方向：${project.description.trim()}。` : ""}围绕“${plotStateContext.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，让主角获得可见收益或新线索。`,
+          `${project.description.trim() ? `参考作品简介的开局方向：${project.description.trim()}。` : ""}围绕“${plotStateContext.mainGoal || storyAnalysis?.mainLoop || "当前主线"}”推进一步，先确定读者情绪目标，再安排对抗、谈判、竞争、公开反馈、关系变化、资源兑现或权限变化，让主角获得可见收益；新信息只能服务这个场面。`,
       chapterCharacterConstraints
     ),
     continuity: withCharacterTaskRequirement(
@@ -13872,17 +17270,18 @@ export async function generateWritingTaskCard(
         : input?.mainPlotProgress?.trim() ||
           carryOverText ||
           (relatedInspirationText ? `把相关灵感转成当前主线里的具体推进：${relatedInspirationText}` : "") ||
-          `${project.description.trim() ? "避免明显偏离作品简介里的主角身份、初始危机和核心卖点。" : ""}按“${storyAnalysis?.mainLoop || plotStateContext.currentStage}”继续推进到下一个冲突点。`,
+          `${project.description.trim() ? "避免明显偏离作品简介里的主角身份、初始危机和核心卖点。" : ""}按“${storyAnalysis?.mainLoop || plotStateContext.currentStage}”继续推进到下一个冲突点，并让本章出现人物态度、行动权限、资源归属、关系站队、对手代价或阶段结论的可见变化。`,
       chapterCharacterConstraints
     ),
     requiredCharacters: relevantCharacters.length > 0 ? relevantCharacters : ["主角", "主要对手"],
-    pleasurePoint:
+    pleasurePoint: withReaderEmotionTarget(
       input?.pleasurePoint?.trim() ||
-      (layerReturnGuard.active
-        ? "回归爽点：现实/原本生活层压力转化为下一次行动的准备、代价或决心；本章必须出现核心行动层的新压力或新选择。"
-        : postClosureCooldownGuard.active
-        ? "小收益：主角获得奖励、认可或称呼/权限上的小变化；来源：上一阶段收束；触发：上级或同伴的态度变化；越级风险：无。"
-        : `使用“${storyAnalysis?.topPleasureTypes[0] || bible.corePleasure}”制造一次明确情绪回报，并写清收益来源、触发条件、是否符合关键机制；本章也可以只是小收益、线索或机制试错，不必强行大突破。`),
+        (layerReturnGuard.active
+          ? "回归爽点：现实/原本生活层压力转化为下一次行动的准备、代价或决心；本章必须出现核心行动层的新压力或新选择。"
+          : postClosureCooldownGuard.active
+          ? "小收益：主角获得奖励、认可或称呼/权限上的小变化；来源：上一阶段收束；触发：上级或同伴的态度变化；越级风险：无。"
+          : `使用“${storyAnalysis?.topPleasureTypes[0] || bible.corePleasure}”制造一次明确情绪回报：先有外部质疑、轻视、阻拦、竞争、诱惑或误判，再让主角用可见行动扭转，最后换来资源、权限、地位、关系、名声、对手代价或关键人物态度变化；本章也可以只是小收益，但不能只写发现信息。`)
+    ),
     foreshadowingTasks:
       postClosureCooldownGuard.active || layerReturnGuard.active
         ? []
@@ -13898,20 +17297,25 @@ export async function generateWritingTaskCard(
             ]).slice(0, 4)
           : carryOverTasks.length > 0
             ? carryOverTasks.map((task) => `承接上一章未完成：${task}`).slice(0, 4)
-            : ["埋设一条可在后续章节回收的线索"],
+          : ["埋设一条可在后续章节回收的信息、关系变化或阶段压力"],
     rulesNotToBreak: uniqueList([
+      "本章必须先确定读者情绪目标：憋屈、紧张、期待、心疼、心动、上头或解气至少一种。",
+      "本章要形成情绪债：外部压制、误判、威胁、羞辱、抢功、关系冷落或规则卡人，不能只写信息推进。",
+      "本章要有还债动作：主角用可见行动扭转局面，并让旁观者、对手、关键人物或局势给出外部反馈。",
+      "禁止只把发现线索、完成验证、获得信息当爽点；必须落到态度、资源、权限、代价、站队或阶段结论。",
       ...splitLines(`${bible.narrativeTaboos}\n${bible.immutableSettings}`),
       project.description.trim()
         ? `核心承诺锚点：本章不能偏离作品简介里的主角身份、初始压力、核心卖点和关键机制；支线必须服务「${project.description.trim()}」。`
         : "",
-      plotStateContext.mainGoal
-        ? `主线回扣要求：本章的新地图、新组织、新危机或新收益，必须能解释为服务当前主线「${plotStateContext.mainGoal}」。`
-        : "",
-      "禁止只顺着上一章钩子无限扩支线；如果开启支线，必须写清它如何回到核心承诺。",
-      "本章所有收益必须回答：收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否导致节奏越级。",
-      targetChapterNumber <= 5
-        ? `当前是第 ${targetChapterNumber} 章，仍属于开局早期；如果作品是 10 万字以上，优先写资格、试用、预期收益、小额增长或机制验证，不要过早连续大阶段突破。`
-        : "",
+	      plotStateContext.mainGoal
+	        ? `主线回扣要求：本章的新地图、新组织、新危机或新收益，必须能解释为服务当前主线「${plotStateContext.mainGoal}」。`
+	        : "",
+	      "禁止只顺着上一章钩子无限扩支线；如果开启支线，必须写清它如何回到核心承诺。",
+	      "本章所有收益必须回答：收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否导致节奏越级。",
+	      ...continuityRules,
+	      targetChapterNumber <= 5
+	        ? `当前是第 ${targetChapterNumber} 章，仍属于开局早期；如果作品是 10 万字以上，优先写资格、试用、预期收益、小额增长或机制验证，不要过早连续大阶段突破。`
+	        : "",
       "禁止机制偷换：不能只保留关键机制名词，却让核心成长实际来自另一套资源、奇遇、副本或外力。",
       longFormPlan
         ? `长篇规划约束：目标约 ${longFormPlan.targetTotalWords} 字 / 预计约 ${longFormPlan.estimatedChapters} 章。本章必须符合当前阶段、成长节奏和收益频率；如冲突，优先降级为小收益、线索、资格或机制试错。`
@@ -13926,29 +17330,32 @@ export async function generateWritingTaskCard(
       layerReturnGuard.active
         ? input?.endingHook?.trim() || "章末落在核心行动层的新压力、下一阶段行动或明确选择上，不继续停留在原本生活层自检。"
         : postClosureCooldownGuard.active
-        ? input?.endingHook?.trim() || "只留下轻量过渡钩子，不开启新调查链。"
+        ? input?.endingHook?.trim() || "只留下轻量过渡钩子，不开启新任务链。"
         : input?.endingHook?.trim() ||
           (carryOverTasks.length > 0 ? `章末处理或升级上一章未完成任务：${carryOverTasks[0]}` : "") ||
-          `章末抛出一个新信息，让当前阶段的“${plotStateContext.currentEnemy || "压力源"}”升级。`,
+          `章末落在行动压力上：让“${plotStateContext.currentEnemy || "压力源"}”通过阻拦、反扑、限时、权力命令、关系站队或奖励/惩罚升级，迫使主角下一章必须选择。`,
       chapterCharacterConstraints
     )
   };
 
   let aiCard: Awaited<ReturnType<typeof generateWritingTaskCardWithAi>> | null = null;
+  let repairedAiCard: Awaited<ReturnType<typeof repairWritingTaskCardWithAi>> | null = null;
+  let taskCardAiContext: Parameters<typeof generateWritingTaskCardWithAi>[0] | null = null;
 
   if (hasConfiguredAiSettings(store, currentUser.id)) {
     try {
-      aiCard = await generateWritingTaskCardWithAi({
+      taskCardAiContext = {
         projectName: project.name,
         projectDescription: project.description,
-        bible,
-        plotState: plotStateContext,
-        longFormPlan,
-        phaseTransitionRules,
-        lastLedger: cleanLastLedger,
-        latestDraft: lastDraft,
-        latestDraftActualEnding: lastDraftActualEnding ? compactStateText(lastDraftActualEnding, 220) : "",
-        characters: allCharacters,
+	        bible,
+	        plotState: plotStateContext,
+	        longFormPlan,
+	        phaseTransitionRules,
+	        lastLedger: cleanLastLedger,
+	        latestDraft: lastDraft,
+	        latestDraftActualEnding: lastDraftActualEnding ? compactStateText(lastDraftActualEnding, 220) : "",
+	        continuityFacts,
+	        characters: allCharacters,
         chapterCharacterConstraints,
         foreshadowings: contextForeshadowings,
         relatedInspirations,
@@ -13958,7 +17365,8 @@ export async function generateWritingTaskCard(
         userInput: input,
         chapterNumber: targetChapterNumber,
         useAnalysisContext
-      });
+      };
+      aiCard = await generateWritingTaskCardWithAi(taskCardAiContext);
     } catch (error) {
       const message = error instanceof Error ? error.message : "生成任务卡 AI 调用失败";
       failAiJob(job, message);
@@ -14005,14 +17413,35 @@ export async function generateWritingTaskCard(
           aiCard.foreshadowingTasks && aiCard.foreshadowingTasks.length > 0
             ? aiCard.foreshadowingTasks
             : fallbackCard.foreshadowingTasks,
-        rulesNotToBreak:
-          uniqueList([
-            ...stageClosureRules,
-            ...(aiCard.rulesNotToBreak && aiCard.rulesNotToBreak.length > 0
-              ? aiCard.rulesNotToBreak
-              : fallbackCard.rulesNotToBreak),
+	        rulesNotToBreak:
+	          cleanTaskCardRulesForStorage([
+	            ...stageClosureRules,
+	            ...continuityRules,
+	            ...(aiCard.rulesNotToBreak && aiCard.rulesNotToBreak.length > 0
+	              ? aiCard.rulesNotToBreak
+	              : fallbackCard.rulesNotToBreak),
+            ...genderRulesForTaskCard(genderAnchorsRelevantToTaskCard(taskCardGenderAnchors, {
+              requiredCharacters: aiCard.requiredCharacters && aiCard.requiredCharacters.length > 0
+                ? aiCard.requiredCharacters
+                : fallbackCard.requiredCharacters,
+              chapterGoal: aiCard.chapterGoal || fallbackCard.chapterGoal,
+              mainPlotProgress: aiCard.mainPlotProgress || fallbackCard.mainPlotProgress,
+              pleasurePoint: aiCard.pleasurePoint || fallbackCard.pleasurePoint,
+              foreshadowingTasks: aiCard.foreshadowingTasks && aiCard.foreshadowingTasks.length > 0
+                ? aiCard.foreshadowingTasks
+                : fallbackCard.foreshadowingTasks,
+              endingHook: aiCard.endingHook || fallbackCard.endingHook
+            })),
             ...protagonistEmbodimentRules
-          ]).slice(0, 12),
+          ], 12, 130, {
+            taskText: [
+              aiCard.chapterGoal || fallbackCard.chapterGoal,
+              aiCard.mainPlotProgress || fallbackCard.mainPlotProgress,
+              aiCard.endingHook || fallbackCard.endingHook
+            ].join("\n"),
+            projectText: taskCardProjectGenderText,
+            genderAnchors: taskCardGenderAnchors
+          }),
         endingHook: withCharacterTaskRequirement(
           aiCard.endingHook || fallbackCard.endingHook,
           chapterCharacterConstraints
@@ -14048,16 +17477,180 @@ export async function generateWritingTaskCard(
     blockedCharacters: deferredRelationshipCharacters
   });
   cooledCard.foreshadowingTasks = cleanTaskCardForeshadowingTasksForStorage(cooledCard.foreshadowingTasks);
+	  let qualityCard = strengthenTaskCardReaderLoop(cooledCard, {
+	    userInput: input,
+	    pressureSource: plotStateContext.currentEnemy || plotStateContext.currentStage || plotStateContext.mainGoal,
+	    allowFieldRepair: !postClosureCooldownGuard.active
+	  });
+	  const qualityEvaluation = evaluateTaskCardReaderLoop(qualityCard);
+	  const continuityEvaluationIssues = [
+	    ...buildTaskCardContinuityLockIssues(qualityCard, taskCardContinuityLocks)
+	  ];
 
-  const card: StoredWritingTaskCard = {
-    id: randomUUID(),
-    projectId,
-    chapterNumber: targetChapterNumber,
-    ...cooledCard,
+	  if (
+	    aiCard &&
+	    taskCardAiContext &&
+	    !postClosureCooldownGuard.active &&
+	    (qualityEvaluation.needsRepair || continuityEvaluationIssues.length > 0) &&
+	    !userInputHasTaskCardScope(input)
+	  ) {
+	    try {
+	      repairedAiCard = await repairWritingTaskCardWithAi({
+	        context: taskCardAiContext,
+	        taskCard: qualityCard,
+	        qualityIssues: uniqueList([
+	          ...qualityEvaluation.qualityIssues,
+	          ...continuityEvaluationIssues
+	        ])
+	      });
+      const repairedRawCard = {
+        ...qualityCard,
+        title: input?.title?.trim()
+          ? qualityCard.title
+          : chooseChapterTitleForStorage({
+              title: repairedAiCard.title,
+              titleAlternatives: repairedAiCard.titleAlternatives,
+              fallbackTitle: qualityCard.title,
+              recentTitles: recentChapterTitles
+            }),
+        chapterGoal: withCharacterTaskRequirement(
+          repairedAiCard.chapterGoal || qualityCard.chapterGoal,
+          chapterCharacterConstraints
+        ),
+        continuity: withCharacterTaskRequirement(
+          repairedAiCard.continuity || qualityCard.continuity,
+          chapterCharacterConstraints
+        ),
+        mainPlotProgress: withCharacterTaskRequirement(
+          repairedAiCard.mainPlotProgress || qualityCard.mainPlotProgress,
+          chapterCharacterConstraints
+        ),
+        requiredCharacters:
+          uniqueList([
+            ...(repairedAiCard.requiredCharacters && repairedAiCard.requiredCharacters.length > 0
+              ? repairedAiCard.requiredCharacters
+              : qualityCard.requiredCharacters),
+            ...relevantCharacters
+          ])
+            .map(baseCharacterName)
+            .filter((name) => isValidTaskCardRequiredCharacter(name) || fallbackCard.requiredCharacters.includes(name))
+            .slice(0, 6),
+        pleasurePoint: repairedAiCard.pleasurePoint || qualityCard.pleasurePoint,
+        foreshadowingTasks:
+          repairedAiCard.foreshadowingTasks && repairedAiCard.foreshadowingTasks.length > 0
+            ? repairedAiCard.foreshadowingTasks
+            : qualityCard.foreshadowingTasks,
+	        rulesNotToBreak:
+	          cleanTaskCardRulesForStorage([
+	            ...stageClosureRules,
+	            ...continuityRules,
+	            ...(repairedAiCard.rulesNotToBreak && repairedAiCard.rulesNotToBreak.length > 0
+	              ? repairedAiCard.rulesNotToBreak
+	              : qualityCard.rulesNotToBreak),
+            ...genderRulesForTaskCard(genderAnchorsRelevantToTaskCard(taskCardGenderAnchors, {
+              requiredCharacters: repairedAiCard.requiredCharacters && repairedAiCard.requiredCharacters.length > 0
+                ? repairedAiCard.requiredCharacters
+                : qualityCard.requiredCharacters,
+              chapterGoal: repairedAiCard.chapterGoal || qualityCard.chapterGoal,
+              mainPlotProgress: repairedAiCard.mainPlotProgress || qualityCard.mainPlotProgress,
+              pleasurePoint: repairedAiCard.pleasurePoint || qualityCard.pleasurePoint,
+              foreshadowingTasks: repairedAiCard.foreshadowingTasks && repairedAiCard.foreshadowingTasks.length > 0
+                ? repairedAiCard.foreshadowingTasks
+                : qualityCard.foreshadowingTasks,
+              endingHook: repairedAiCard.endingHook || qualityCard.endingHook
+            })),
+            ...protagonistEmbodimentRules
+          ], 12, 130, {
+            taskText: [
+              repairedAiCard.chapterGoal || qualityCard.chapterGoal,
+              repairedAiCard.mainPlotProgress || qualityCard.mainPlotProgress,
+              repairedAiCard.endingHook || qualityCard.endingHook
+            ].join("\n"),
+            projectText: taskCardProjectGenderText,
+            genderAnchors: taskCardGenderAnchors
+          }),
+        endingHook: withCharacterTaskRequirement(
+          repairedAiCard.endingHook || qualityCard.endingHook,
+          chapterCharacterConstraints
+        )
+      };
+      const repairedScopedCard = normalizeOpeningTaskCardScope(repairedRawCard, {
+        chapterNumber: targetChapterNumber,
+        projectDescription: project.description,
+        relatedInspirationText,
+        userInput: input
+      });
+      repairedScopedCard.requiredCharacters = normalizeTaskCardRequiredCharactersForScope(repairedScopedCard, {
+        chapterNumber: targetChapterNumber,
+        protagonistNames: protagonistCharacters,
+        fallbackCharacters: fallbackCard.requiredCharacters,
+        blockedCharacters: deferredRelationshipCharacters
+      });
+      const repairedGuardedCard = applyStageClosureGuardToTaskCard(repairedScopedCard, stageClosureGuard, carryOverTasks);
+      repairedGuardedCard.requiredCharacters = normalizeTaskCardRequiredCharactersForScope(repairedGuardedCard, {
+        chapterNumber: targetChapterNumber,
+        protagonistNames: protagonistCharacters,
+        fallbackCharacters: fallbackCard.requiredCharacters,
+        blockedCharacters: deferredRelationshipCharacters
+      });
+      repairedGuardedCard.foreshadowingTasks = cleanTaskCardForeshadowingTasksForStorage(repairedGuardedCard.foreshadowingTasks);
+      qualityCard = strengthenTaskCardReaderLoop(repairedGuardedCard, {
+        userInput: input,
+        pressureSource: plotStateContext.currentEnemy || plotStateContext.currentStage || plotStateContext.mainGoal,
+        allowFieldRepair: true
+      });
+    } catch (error) {
+	      console.warn("任务卡 AI 质检修复失败，使用初次生成结果", error);
+	    }
+	  }
+	  const remainingContinuityIssues = [
+	    ...buildTaskCardContinuityLockIssues(qualityCard, taskCardContinuityLocks)
+	  ];
+
+	  if (remainingContinuityIssues.length > 0) {
+	    const message = `任务卡生成违反前文硬事实，已拦截保存：${remainingContinuityIssues.join("；")}`;
+	    failAiJob(job, message, withAiBillingOutput(store, job, {
+	      usedAi: Boolean(aiCard),
+	      usedFallback: !aiCard,
+	      usedTaskCardRepair: Boolean(repairedAiCard),
+	      failed: true,
+	      chapterNumber: targetChapterNumber,
+	      continuityFacts,
+	      continuityIssues: remainingContinuityIssues
+	    }, combineAiTokenUsages([getAiTokenUsage(aiCard), getAiTokenUsage(repairedAiCard)])));
+	    if (aiCard || repairedAiCard) {
+	      refundAiJobCredits(store, job, "任务卡连续性硬事实拦截返还");
+	    }
+	    await writeStore(store);
+	    throw new Error(message);
+	  }
+
+	  const card: StoredWritingTaskCard = {
+	    id: randomUUID(),
+	    projectId,
+	    chapterNumber: targetChapterNumber,
+	    ...qualityCard,
+	    rulesNotToBreak: cleanTaskCardRulesForStorage([
+	      ...continuityRules,
+	      ...qualityCard.rulesNotToBreak
+	    ], 14, 130, {
+	      taskText: taskCardActionScopeText(qualityCard),
+	      projectText: taskCardProjectGenderText,
+	      genderAnchors: taskCardGenderAnchors
+    }),
     status: "draft",
     createdAt: timestamp,
     updatedAt: timestamp
-  };
+	  };
+	  card.rulesNotToBreak = cleanTaskCardRulesForStorage([
+	    ...continuityRules,
+	    ...card.rulesNotToBreak,
+	    ...genderRulesForTaskCard(genderAnchorsRelevantToTaskCard(taskCardGenderAnchors, card))
+	  ], 14, 130, {
+	    taskText: taskCardActionScopeText(card),
+	    projectText: taskCardProjectGenderText,
+	    genderAnchors: taskCardGenderAnchors
+  });
 
   store.writingTaskCards.push(card);
   project.status = "writing";
@@ -14065,9 +17658,10 @@ export async function generateWritingTaskCard(
   finishAiJob(job, withAiBillingOutput(store, job, {
     usedAi: Boolean(aiCard),
     usedFallback: !aiCard,
+    usedTaskCardRepair: Boolean(repairedAiCard),
     chapterNumber: targetChapterNumber,
     taskCardId: card.id
-  }, getAiTokenUsage(aiCard)));
+  }, combineAiTokenUsages([getAiTokenUsage(aiCard), getAiTokenUsage(repairedAiCard)])));
   await writeStore(store);
   return card;
 }
@@ -14154,6 +17748,16 @@ export async function updateWritingTaskCard(
     throw new Error("任务卡不存在");
   }
 
+  const bible = store.writingBibles.find((item) => item.projectId === projectId) ?? null;
+  const characterGenderAnchors = genderAnchorsForTaskCard(
+    charactersForChapterContext(store, projectId, taskCard.chapterNumber),
+    store,
+    projectId,
+    taskCard.chapterNumber,
+    project,
+    bible
+  );
+  const taskCardProjectGenderText = bible ? projectGenderAnchorText(project, bible) : "";
   const relatedDraftIds = new Set(
     store.chapterDrafts
       .filter((item) => item.taskCardId === taskCard.id && item.projectId === projectId)
@@ -14178,7 +17782,19 @@ export async function updateWritingTaskCard(
   taskCard.requiredCharacters = cleanStateEntries(input.requiredCharacters ?? taskCard.requiredCharacters, 8, 40);
   taskCard.pleasurePoint = compactStateText(input.pleasurePoint ?? taskCard.pleasurePoint, 300);
   taskCard.foreshadowingTasks = cleanTaskCardForeshadowingTasksForStorage(input.foreshadowingTasks ?? taskCard.foreshadowingTasks);
-  taskCard.rulesNotToBreak = cleanStateEntries(input.rulesNotToBreak ?? taskCard.rulesNotToBreak, 12, 130);
+  taskCard.rulesNotToBreak = cleanTaskCardRulesForStorage(
+    [
+      ...(input.rulesNotToBreak ?? taskCard.rulesNotToBreak),
+      ...genderRulesForTaskCard(genderAnchorsRelevantToTaskCard(characterGenderAnchors, taskCard))
+    ],
+    12,
+    130,
+    {
+      taskText: taskCardActionScopeText(taskCard),
+      projectText: taskCardProjectGenderText,
+      genderAnchors: characterGenderAnchors
+    }
+  );
   taskCard.endingHook = compactStateText(input.endingHook ?? taskCard.endingHook, 260);
   taskCard.updatedAt = now();
   project.updatedAt = taskCard.updatedAt;
@@ -14278,11 +17894,18 @@ export async function generateChapterDraft(
   const longFormPlan = normalizeOptionalLongFormPlanForUse(getLatestLongFormPlan(store, projectId));
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
+  const draftTaskCard = prepareTaskCardForDraftContext(taskCard, {
+    store,
+    projectId,
+    project,
+    bible,
+    characters
+  });
   const continuityFacts = buildCrossChapterContinuityFacts(
     store,
     projectId,
     taskCard.chapterNumber,
-    taskCard,
+    draftTaskCard,
     characters
   );
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
@@ -14327,7 +17950,7 @@ export async function generateChapterDraft(
 
   try {
     aiDraft = await generateChapterDraftWithAi({
-      taskCard,
+      taskCard: draftTaskCard,
       projectName: project.name,
       projectDescription: project.description,
       bible,
@@ -14352,17 +17975,17 @@ export async function generateChapterDraft(
   const title = chooseChapterTitleForStorage({
     title: aiDraft.title,
     titleAlternatives: aiDraft.titleAlternatives,
-    fallbackTitle: taskCard.title,
+    fallbackTitle: draftTaskCard.title,
     recentTitles: recentChapterTitles,
     titleContext: [
-      taskCard.chapterGoal,
-      taskCard.mainPlotProgress,
-      taskCard.endingHook,
+      draftTaskCard.chapterGoal,
+      draftTaskCard.mainPlotProgress,
+      draftTaskCard.endingHook,
       aiDraft.title
     ]
   });
   const draftContext: ChapterDraftContext = {
-    taskCard,
+    taskCard: draftTaskCard,
     projectName: project.name,
     projectDescription: project.description,
     bible,
@@ -14463,7 +18086,7 @@ export async function generateChapterDraft(
   const stateUpdate = await createAndApplyLedgerForDraft(store, {
     projectId,
     draft,
-    taskCard,
+    taskCard: draftTaskCard,
     useAi: true
   });
   const tokenUsage = combineAiTokenUsages([getAiTokenUsage(aiDraft), polishUsage, stateUpdate.tokenUsage]);
@@ -14512,11 +18135,18 @@ export async function regenerateChapterDraftContent(
   const longFormPlan = normalizeOptionalLongFormPlanForUse(getLatestLongFormPlan(store, projectId));
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
+  const draftTaskCard = prepareTaskCardForDraftContext(taskCard, {
+    store,
+    projectId,
+    project,
+    bible,
+    characters
+  });
   const continuityFacts = buildCrossChapterContinuityFacts(
     store,
     projectId,
     taskCard.chapterNumber,
-    taskCard,
+    draftTaskCard,
     characters
   );
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
@@ -14568,7 +18198,7 @@ export async function regenerateChapterDraftContent(
 
   try {
     aiDraft = await generateChapterDraftWithAi({
-      taskCard,
+      taskCard: draftTaskCard,
       projectName: project.name,
       projectDescription: project.description,
       bible,
@@ -14590,7 +18220,7 @@ export async function regenerateChapterDraftContent(
   }
 
   const draftContext: ChapterDraftContext = {
-    taskCard,
+    taskCard: draftTaskCard,
     projectName: project.name,
     projectDescription: project.description,
     bible,
@@ -14686,7 +18316,7 @@ export async function regenerateChapterDraftContent(
   const stateUpdate = await createAndApplyLedgerForDraft(store, {
     projectId,
     draft,
-    taskCard,
+    taskCard: draftTaskCard,
     useAi: true
   });
   finishAiJob(job, withAiBillingOutput(store, job, {
@@ -14738,16 +18368,23 @@ export async function prepareChapterDraftStream(
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
+  const draftTaskCard = prepareTaskCardForDraftContext(taskCard, {
+    store,
+    projectId,
+    project,
+    bible,
+    characters
+  });
   const continuityFacts = buildCrossChapterContinuityFacts(
     store,
     projectId,
     taskCard.chapterNumber,
-    taskCard,
+    draftTaskCard,
     characters
   );
   const targetWordCount = normalizeDraftTargetWordCount(options?.targetWordCount);
   const context: ChapterDraftContext = {
-    taskCard,
+    taskCard: draftTaskCard,
     projectName: project.name,
     projectDescription: project.description,
     bible,
@@ -14781,11 +18418,11 @@ export async function prepareChapterDraftStream(
 
   return {
     projectId,
-    taskCard,
+    taskCard: draftTaskCard,
     context,
     jobId: job.id,
     useAi: hasConfiguredAiSettings(store, currentUser.id),
-    fallbackContent: buildFallbackChapterDraftContent(taskCard)
+    fallbackContent: buildFallbackChapterDraftContent(draftTaskCard)
   };
 }
 
@@ -14817,18 +18454,25 @@ export async function prepareRegenerateChapterDraftContentStream(
   const lastLedger = getLatestChapterLedgerBefore(store, projectId, taskCard.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, projectId, taskCard.chapterNumber);
+  const draftTaskCard = prepareTaskCardForDraftContext(taskCard, {
+    store,
+    projectId,
+    project,
+    bible,
+    characters
+  });
   const continuityFacts = buildCrossChapterContinuityFacts(
     store,
     projectId,
     taskCard.chapterNumber,
-    taskCard,
+    draftTaskCard,
     characters
   );
   const targetWordCount = normalizeDraftTargetWordCount(
     options?.targetWordCount ?? countDraftCharacters(draft.content)
   );
   const context: ChapterDraftContext = {
-    taskCard,
+    taskCard: draftTaskCard,
     projectName: project.name,
     projectDescription: project.description,
     bible,
@@ -14865,7 +18509,7 @@ export async function prepareRegenerateChapterDraftContentStream(
   return {
     projectId,
     draftId: draft.id,
-    taskCard,
+    taskCard: draftTaskCard,
     context,
     jobId: job.id,
     useAi: hasConfiguredAiSettings(store, currentUser.id)
@@ -14904,18 +18548,26 @@ export async function saveStreamedChapterDraft(input: {
   const lastLedger = getLatestChapterLedgerBefore(store, input.projectId, taskCard.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, input.projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, input.projectId, taskCard.chapterNumber);
+  const bible = store.writingBibles.find((item) => item.projectId === input.projectId)!;
+  const draftTaskCard = prepareTaskCardForDraftContext(taskCard, {
+    store,
+    projectId: input.projectId,
+    project,
+    bible,
+    characters
+  });
   const continuityFacts = buildCrossChapterContinuityFacts(
     store,
     input.projectId,
     taskCard.chapterNumber,
-    taskCard,
+    draftTaskCard,
     characters
   );
   const draftContext: ChapterDraftContext = {
-    taskCard,
+    taskCard: draftTaskCard,
     projectName: project.name,
     projectDescription: project.description,
-    bible: store.writingBibles.find((item) => item.projectId === input.projectId)!,
+    bible,
     plotState: plotStateForChapterContext(
       store.plotStates.find((item) => item.projectId === input.projectId)!,
       foreshadowings,
@@ -15030,13 +18682,13 @@ export async function saveStreamedChapterDraft(input: {
     taskCardId: taskCard.id,
     chapterNumber: taskCard.chapterNumber,
     title: chooseChapterTitleForStorage({
-      title: taskCard.title,
-      fallbackTitle: taskCard.title,
+      title: draftTaskCard.title,
+      fallbackTitle: draftTaskCard.title,
       recentTitles: getRecentChapterTitles(store, input.projectId, taskCard.chapterNumber),
       titleContext: [
-        taskCard.chapterGoal,
-        taskCard.mainPlotProgress,
-        taskCard.endingHook,
+        draftTaskCard.chapterGoal,
+        draftTaskCard.mainPlotProgress,
+        draftTaskCard.endingHook,
         content.slice(-600)
       ]
     }),
@@ -15053,7 +18705,7 @@ export async function saveStreamedChapterDraft(input: {
   const stateUpdate = await createAndApplyLedgerForDraft(store, {
     projectId: input.projectId,
     draft,
-    taskCard,
+    taskCard: draftTaskCard,
     useAi: useAiStateUpdate
   });
   const finalTokenUsage = combineAiTokenUsages([tokenUsage, stateUpdate.tokenUsage]);
@@ -15145,19 +18797,27 @@ export async function saveStreamedRegeneratedChapterDraftContent(input: {
   const lastLedger = getLatestChapterLedgerBefore(store, input.projectId, taskCard.chapterNumber);
   const foreshadowings = foreshadowingsForChapterContext(store, input.projectId, taskCard.chapterNumber);
   const characters = charactersForChapterContext(store, input.projectId, taskCard.chapterNumber);
+  const bible = store.writingBibles.find((item) => item.projectId === input.projectId)!;
+  const draftTaskCard = prepareTaskCardForDraftContext(taskCard, {
+    store,
+    projectId: input.projectId,
+    project,
+    bible,
+    characters
+  });
   const continuityFacts = buildCrossChapterContinuityFacts(
     store,
     input.projectId,
     taskCard.chapterNumber,
-    taskCard,
+    draftTaskCard,
     characters
   );
   const targetWordCount = Number(getJobInputRecord(job)?.targetWordCount ?? 0) || undefined;
   const draftContext: ChapterDraftContext = {
-    taskCard,
+    taskCard: draftTaskCard,
     projectName: project.name,
     projectDescription: project.description,
-    bible: store.writingBibles.find((item) => item.projectId === input.projectId)!,
+    bible,
     plotState: plotStateForChapterContext(
       store.plotStates.find((item) => item.projectId === input.projectId)!,
       foreshadowings,
@@ -15287,7 +18947,7 @@ export async function saveStreamedRegeneratedChapterDraftContent(input: {
   const stateUpdate = await createAndApplyLedgerForDraft(store, {
     projectId: input.projectId,
     draft,
-    taskCard,
+    taskCard: draftTaskCard,
     useAi: useAiStateUpdate
   });
   const finalTokenUsage = combineAiTokenUsages([tokenUsage, stateUpdate.tokenUsage]);
@@ -15501,7 +19161,7 @@ export async function reviewChapterDraft(
   const reviewCharacters = characters.map((character) =>
     withCharacterGenderConstraint(
       character,
-      inferCharacterGenderFromProjectEvidence(store, projectId, character, draft.chapterNumber, draft.content)
+      resolveCharacterGenderForProject(store, projectId, character, draft.chapterNumber, draft.content, project, bible)
     )
   );
   const foreshadowings = foreshadowingsForChapterContext(store, projectId, draft.chapterNumber);
@@ -15565,10 +19225,48 @@ export async function reviewChapterDraft(
     });
   }
 
-  const dialogueMismatch = findDialogueQuestionAnswerMismatch(
-    draft.content,
-    getPreviousDraftTail(store, projectId, draft.chapterNumber)
-  );
+  const reviewDraftContext: ChapterDraftContext | null = taskCard ? {
+    taskCard,
+    projectName: project.name,
+    projectDescription: project.description,
+    bible,
+    plotState: plotStateContext,
+    longFormPlan,
+    lastLedger,
+    continuityFacts: [],
+    previousDraftTail: getPreviousDraftTail(store, projectId, draft.chapterNumber),
+    recentChapterTitles: getRecentChapterTitles(store, projectId, draft.chapterNumber),
+    characters: reviewCharacters,
+    foreshadowings,
+    targetWordCount: undefined
+  } : null;
+  const characterPresenceIssue = reviewDraftContext
+    ? buildCharacterPresenceContinuityIssue(draft.content, reviewDraftContext)
+    : "";
+  if (characterPresenceIssue) {
+    issues.push({
+      type: "人物会合交代不足",
+      location: "章节开头",
+      severity: "medium",
+      problem: characterPresenceIssue,
+      suggestion: "建议补一两句赶回、会合、带人抵达、交接或时间流逝说明；如果只是称呼、卷宗、回忆里提到这个人物，可以忽略这条。"
+    });
+  }
+
+  const sceneAnchorIssue = reviewDraftContext
+    ? buildSceneAnchorRelocationIssue(draft.content, reviewDraftContext)
+    : "";
+  if (sceneAnchorIssue) {
+    issues.push({
+      type: "场景地点反写",
+      location: "跨章地点锚点",
+      severity: "medium",
+      problem: sceneAnchorIssue,
+      suggestion: "建议二选一：要么改回前文已确认地点；要么补出同名地点、误认、转移或重新确认的桥段，并让人物在正文中意识到这个差异。"
+    });
+  }
+
+  const dialogueMismatch = findDialogueQuestionAnswerMismatch(draft.content);
   if (dialogueMismatch) {
     issues.push({
       type: "对白问答错位",
@@ -15641,12 +19339,14 @@ export async function reviewChapterDraft(
   }
 
   reviewCharacters.forEach((character) => {
-    const gender = inferCharacterGenderFromProjectEvidence(
+    const gender = resolveCharacterGenderForProject(
       store,
       projectId,
       character,
       draft.chapterNumber,
-      draft.content
+      draft.content,
+      project,
+      bible
     );
     const mismatch = gender ? findCharacterPronounMismatch(draft.content, character, gender) : null;
 
@@ -16630,7 +20330,6 @@ export async function enqueueLongFormPlanJob(
     return activeJob;
   }
 
-  store.longFormPlans = (store.longFormPlans ?? []).filter((item) => item.projectId !== projectId);
   store.aiJobs = store.aiJobs.filter((job) => {
     if (job.projectId !== projectId || !isLongFormPlanJobType(job)) {
       return true;
@@ -16717,6 +20416,541 @@ export async function enqueueChapterDraftJob(
     retryOfJobId: options?.retryOfJobId
   });
 
+  project.status = "writing";
+  project.updatedAt = now();
+  await writeStore(store);
+  return job;
+}
+
+type ChapterBatchInput = {
+  chapterCount?: number;
+  startChapterNumber?: number;
+  targetWordCount?: number;
+  reviewDraft?: boolean;
+};
+
+type ChapterBatchChapterResult = {
+  chapterNumber: number;
+  title: string;
+  taskCardId: string;
+  draftId: string;
+  ledgerId?: string;
+  reviewReportId?: string;
+  actualCharacters: number;
+};
+
+type ChapterBatchJobOutput = Record<string, unknown> & {
+  chapters: ChapterBatchChapterResult[];
+  startChapterNumber?: unknown;
+  childJobIds?: unknown;
+};
+
+function normalizeChapterBatchCount(value: unknown) {
+  const parsed = Math.floor(Number(value ?? 3));
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 50) : 3;
+}
+
+function normalizeOptionalChapterNumber(value: unknown) {
+  const parsed = Math.floor(Number(value ?? 0));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function resolveNextWritingChapterNumber(store: AppStore, projectId: string) {
+  return Math.max(
+    0,
+    ...store.writingTaskCards.filter((item) => item.projectId === projectId).map((item) => item.chapterNumber),
+    ...store.chapterDrafts.filter((item) => item.projectId === projectId).map((item) => item.chapterNumber),
+    ...store.chapterLedgers.filter((item) => item.projectId === projectId).map((item) => item.chapterNumber),
+    ...store.reviewReports.filter((item) => item.projectId === projectId).map((item) => item.chapterNumber),
+    ...store.aiJobs
+      .filter((item) => item.projectId === projectId && item.type === "generate_chapter_batch" && isActiveAiJob(item))
+      .flatMap((item) => {
+        const output = getJobObject(item.output);
+        const input = getJobObject(item.input);
+        const start = metricNumber(output.startChapterNumber) || metricNumber(input.startChapterNumber);
+        const count = metricNumber(output.requestedChapters) || metricNumber(input.chapterCount);
+        return start > 0 && count > 0 ? [start + count - 1] : [];
+      })
+  ) + 1;
+}
+
+function resolveNextChapterBatchStartNumber(store: AppStore, projectId: string) {
+  const latestTaskCard = getLatestWritingTaskCard(store, projectId);
+  const latestTaskCardDraft = latestTaskCard
+    ? store.chapterDrafts.find((draft) => draft.projectId === projectId && draft.taskCardId === latestTaskCard.id)
+    : null;
+
+  if (latestTaskCard && !latestTaskCardDraft) {
+    return latestTaskCard.chapterNumber;
+  }
+
+  return resolveNextWritingChapterNumber(store, projectId);
+}
+
+function getOpenTaskCardForChapter(store: AppStore, projectId: string, chapterNumber: number) {
+  return store.writingTaskCards
+    .filter((item) => item.projectId === projectId && item.chapterNumber === chapterNumber)
+    .filter((item) => !store.chapterDrafts.some((draft) => draft.projectId === projectId && draft.taskCardId === item.id))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+    ?? null;
+}
+
+function ensureChapterSlotAvailable(store: AppStore, projectId: string, chapterNumber: number) {
+  const exists =
+    store.chapterDrafts.some((item) => item.projectId === projectId && item.chapterNumber === chapterNumber) ||
+    store.chapterLedgers.some((item) => item.projectId === projectId && item.chapterNumber === chapterNumber) ||
+    store.reviewReports.some((item) => item.projectId === projectId && item.chapterNumber === chapterNumber);
+
+  if (exists) {
+    throw new Error(`第 ${chapterNumber} 章已经存在正文、台账或审稿记录；请先删除这一章及后续内容，再批量生成。`);
+  }
+}
+
+function getChapterBatchOutput(job: StoredAiJob): ChapterBatchJobOutput {
+  const output = getJobObject(job.output);
+  const chapters: ChapterBatchChapterResult[] = Array.isArray(output.chapters)
+    ? output.chapters
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          chapterNumber: Number(item.chapterNumber ?? 0),
+          title: String(item.title ?? ""),
+          taskCardId: String(item.taskCardId ?? ""),
+          draftId: String(item.draftId ?? ""),
+          ledgerId: item.ledgerId ? String(item.ledgerId) : undefined,
+          reviewReportId: item.reviewReportId ? String(item.reviewReportId) : undefined,
+          actualCharacters: Number(item.actualCharacters ?? 0)
+        }))
+        .filter((item) => item.chapterNumber > 0 && item.taskCardId && item.draftId)
+    : [];
+
+  return {
+    ...output,
+    chapters
+  };
+}
+
+async function updateChapterBatchJobOutput(
+  jobId: string,
+  updater: (output: ReturnType<typeof getChapterBatchOutput>) => Record<string, unknown>
+) {
+  const store = await readStore();
+  const job = store.aiJobs.find((item) => item.id === jobId);
+
+  if (!job) {
+    return;
+  }
+
+  job.output = updater(getChapterBatchOutput(job));
+  job.updatedAt = now();
+  await writeStore(store);
+}
+
+function summarizeChapterBatchResult(input: {
+  chapterNumber: number;
+  taskCardId: string;
+  draftId: string;
+  ledgerId?: string;
+  reviewReportId?: string;
+  title: string;
+  actualCharacters: number;
+}): ChapterBatchChapterResult {
+  return {
+    chapterNumber: input.chapterNumber,
+    title: input.title,
+    taskCardId: input.taskCardId,
+    draftId: input.draftId,
+    ledgerId: input.ledgerId,
+    reviewReportId: input.reviewReportId,
+    actualCharacters: input.actualCharacters
+  };
+}
+
+function collectChapterBatchTokenUsage(store: AppStore, jobIds: string[]) {
+  return combineAiTokenUsages(
+    jobIds
+      .map((jobId) => store.aiJobs.find((item) => item.id === jobId))
+      .map((job) => {
+        if (!job) {
+          return undefined;
+        }
+
+        const output = getJobObject(job.output);
+        const usage = getJobObject(output.tokenUsage);
+
+        return Number.isFinite(Number(usage.totalTokens))
+          ? usage as AiTokenUsage
+          : undefined;
+      })
+  );
+}
+
+function getChapterBatchDraftProgress(store: AppStore, projectId: string, jobId: string, chapterNumber: number) {
+  const draftJob = store.aiJobs
+    .filter((item) => item.retryOfJobId === jobId && item.type === "generate_chapter" && item.status === "succeeded")
+    .find((item) => {
+      const output = getJobObject(item.output);
+      return Number(output.chapterNumber ?? 0) === chapterNumber;
+    });
+  const output = getJobObject(draftJob?.output);
+  const draftId = String(output.draftId ?? "");
+  const draft = store.chapterDrafts.find((item) => item.id === draftId && item.projectId === projectId);
+  const taskCard = draft
+    ? store.writingTaskCards.find((item) => item.id === draft.taskCardId && item.projectId === projectId)
+    : undefined;
+  const ledger = draft
+    ? store.chapterLedgers.find((item) => item.draftId === draft.id && item.projectId === projectId)
+    : undefined;
+  const review = draft
+    ? store.reviewReports.find((item) => item.draftId === draft.id && item.projectId === projectId)
+    : undefined;
+
+  return draft && taskCard
+    ? { draft, taskCard, ledger, review }
+    : null;
+}
+
+function recoverChapterBatchResults(
+  store: AppStore,
+  projectId: string,
+  jobId: string,
+  options?: { requireReview?: boolean }
+) {
+  return store.aiJobs
+    .filter((item) => item.retryOfJobId === jobId && item.type === "generate_chapter" && item.status === "succeeded")
+    .map((item) => {
+      const output = getJobObject(item.output);
+      const draftId = String(output.draftId ?? "");
+      const draft = store.chapterDrafts.find((draftItem) => draftItem.id === draftId && draftItem.projectId === projectId);
+
+      if (!draft) {
+        return null;
+      }
+
+      const taskCard = store.writingTaskCards.find(
+        (card) => card.id === draft.taskCardId && card.projectId === projectId
+      );
+      const ledger = store.chapterLedgers.find((ledgerItem) => ledgerItem.draftId === draft.id && ledgerItem.projectId === projectId);
+      const review = store.reviewReports.find((reviewItem) => reviewItem.draftId === draft.id && reviewItem.projectId === projectId);
+
+      if (!taskCard) {
+        return null;
+      }
+
+      if (options?.requireReview && !review) {
+        return null;
+      }
+
+      return summarizeChapterBatchResult({
+        chapterNumber: draft.chapterNumber,
+        title: draft.title,
+        taskCardId: taskCard.id,
+        draftId: draft.id,
+        ledgerId: ledger?.id,
+        reviewReportId: review?.id,
+        actualCharacters: countDraftCharacters(draft.content)
+      });
+    })
+    .filter((item): item is ChapterBatchChapterResult => Boolean(item));
+}
+
+function uniqueChapterBatchResults(items: ChapterBatchChapterResult[]) {
+  const byChapter = new Map<number, ChapterBatchChapterResult>();
+
+  items
+    .slice()
+    .sort((a, b) => a.chapterNumber - b.chapterNumber)
+    .forEach((item) => {
+      byChapter.set(item.chapterNumber, item);
+    });
+
+  return Array.from(byChapter.values()).sort((a, b) => a.chapterNumber - b.chapterNumber);
+}
+
+export async function generateChapterBatch(
+  projectId: string,
+  input?: ChapterBatchInput,
+  options?: { existingJobId?: string; retryOfJobId?: string }
+) {
+  const chapterCount = normalizeChapterBatchCount(input?.chapterCount);
+  const targetWordCount = normalizeDraftTargetWordCount(input?.targetWordCount);
+  const reviewDraft = input?.reviewDraft === true;
+  const initialStore = await readStore();
+  const currentUser = await requireCurrentUser(initialStore);
+  const project = createDomainWriteRepository(initialStore).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(initialStore, project);
+
+  const existingJob = options?.existingJobId
+    ? createDomainWriteRepository(initialStore).requireJobForUser(options.existingJobId, currentUser.id)
+    : null;
+  const requestedStartChapter = normalizeOptionalChapterNumber(input?.startChapterNumber);
+  const existingOutput = existingJob ? getChapterBatchOutput(existingJob) : null;
+  const recoveredChapters = existingJob
+    ? recoverChapterBatchResults(initialStore, projectId, existingJob.id, { requireReview: reviewDraft })
+    : [];
+  const knownCompletedChapters = uniqueChapterBatchResults([
+    ...(existingOutput?.chapters ?? []),
+    ...recoveredChapters
+  ]);
+  const startChapterNumber =
+    requestedStartChapter ??
+    normalizeOptionalChapterNumber(existingOutput?.startChapterNumber) ??
+    resolveNextChapterBatchStartNumber(initialStore, projectId);
+  const completedChapterNumbers = new Set(knownCompletedChapters.map((item) => item.chapterNumber));
+
+  for (let offset = 0; offset < chapterCount; offset += 1) {
+    const chapterNumber = startChapterNumber + offset;
+    const draftProgress = existingJob
+      ? getChapterBatchDraftProgress(initialStore, projectId, existingJob.id, chapterNumber)
+      : null;
+
+    if (!completedChapterNumbers.has(chapterNumber) && !draftProgress) {
+      ensureChapterSlotAvailable(initialStore, projectId, chapterNumber);
+    }
+  }
+
+  const job = existingJob ?? createAiJob(initialStore, {
+    userId: currentUser.id,
+    projectId,
+    type: "generate_chapter_batch",
+    payload: {
+      startChapterNumber,
+      chapterCount,
+      targetWordCount,
+      reviewDraft
+    },
+    model: "",
+    retryOfJobId: options?.retryOfJobId
+  });
+
+  if (!job) {
+    throw new Error("任务不存在");
+  }
+
+  if (!options?.existingJobId) {
+    await writeStore(initialStore);
+    startAiJob(job);
+    job.output = {
+      requestedChapters: chapterCount,
+      completedChapters: 0,
+      startChapterNumber,
+      targetWordCount,
+      reviewDraft,
+      chapters: []
+    };
+    project.status = "writing";
+    project.updatedAt = now();
+    await writeStore(initialStore);
+  }
+
+  const childJobIds: string[] =
+    existingOutput && Array.isArray(existingOutput.childJobIds)
+      ? existingOutput.childJobIds.map((item: unknown) => String(item)).filter(Boolean)
+      : [];
+  const completedChapters: ChapterBatchChapterResult[] = [...knownCompletedChapters];
+
+  await updateChapterBatchJobOutput(job.id, (output) => ({
+    ...output,
+    requestedChapters: chapterCount,
+    completedChapters: completedChapters.length,
+    startChapterNumber,
+    targetWordCount,
+    reviewDraft,
+    currentChapterNumber: startChapterNumber,
+    chapters: completedChapters.length > 0 ? completedChapters : output.chapters
+  }));
+
+  for (let offset = 0; offset < chapterCount; offset += 1) {
+    const chapterNumber = startChapterNumber + offset;
+
+    if (completedChapters.some((item) => item.chapterNumber === chapterNumber)) {
+      continue;
+    }
+
+    {
+      const store = await readStore();
+      const activeJob = findActiveWritingGenerationJob(store, projectId);
+
+      if (activeJob && activeJob.id !== job.id) {
+        throw new Error(`已有写作生成任务正在执行：${formatAiJobType(activeJob.type)}，请等它完成后再批量生成。`);
+      }
+
+      createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+      const draftProgress = existingJob
+        ? getChapterBatchDraftProgress(store, projectId, job.id, chapterNumber)
+        : null;
+
+      if (!draftProgress) {
+        ensureChapterSlotAvailable(store, projectId, chapterNumber);
+      }
+    }
+
+    await updateChapterBatchJobOutput(job.id, (output) => ({
+      ...output,
+      completedChapters: completedChapters.length,
+      currentChapterNumber: chapterNumber,
+      currentStep: "生成任务卡"
+    }));
+
+    const taskCardStore = await readStore();
+    const draftProgress = existingJob
+      ? getChapterBatchDraftProgress(taskCardStore, projectId, job.id, chapterNumber)
+      : null;
+    const existingTaskCard = getOpenTaskCardForChapter(taskCardStore, projectId, chapterNumber);
+    const taskCard = draftProgress?.taskCard ?? existingTaskCard ?? await generateWritingTaskCard(projectId, { chapterNumber }, { retryOfJobId: job.id });
+
+    await updateChapterBatchJobOutput(job.id, (output) => ({
+      ...output,
+      completedChapters: completedChapters.length,
+      currentChapterNumber: chapterNumber,
+      currentStep: "生成正文"
+    }));
+
+    const draft = draftProgress?.draft ?? await generateChapterDraft(projectId, taskCard.id, { targetWordCount, retryOfJobId: job.id });
+    const latestStoreAfterDraft = await readStore();
+    const ledger = latestStoreAfterDraft.chapterLedgers.find(
+      (item) => item.projectId === projectId && item.draftId === draft.id
+    );
+    childJobIds.push(
+      ...latestStoreAfterDraft.aiJobs
+        .filter((item) => item.retryOfJobId === job.id)
+        .map((item) => item.id)
+        .filter((id) => !childJobIds.includes(id))
+    );
+    let reviewReportId: string | undefined;
+
+    if (reviewDraft) {
+      const existingReview = latestStoreAfterDraft.reviewReports.find(
+        (item) => item.projectId === projectId && item.draftId === draft.id
+      );
+
+      await updateChapterBatchJobOutput(job.id, (output) => ({
+        ...output,
+        completedChapters: completedChapters.length,
+        currentChapterNumber: chapterNumber,
+        currentStep: "一致性审稿"
+      }));
+
+      const review = existingReview ?? await reviewChapterDraft(projectId, draft.id, { retryOfJobId: job.id });
+      reviewReportId = review.id;
+      const latestStoreAfterReview = await readStore();
+      childJobIds.push(
+        ...latestStoreAfterReview.aiJobs
+          .filter((item) => item.retryOfJobId === job.id)
+          .map((item) => item.id)
+          .filter((id) => !childJobIds.includes(id))
+      );
+    }
+
+    const chapterResult = summarizeChapterBatchResult({
+      chapterNumber,
+      title: draft.title,
+      taskCardId: taskCard.id,
+      draftId: draft.id,
+      ledgerId: ledger?.id,
+      reviewReportId,
+      actualCharacters: countDraftCharacters(draft.content)
+    });
+    completedChapters.push(chapterResult);
+
+    await updateChapterBatchJobOutput(job.id, (output) => ({
+      ...output,
+      completedChapters: completedChapters.length,
+      currentChapterNumber: chapterNumber,
+      currentStep: "已完成本章",
+      chapters: [...output.chapters, chapterResult]
+    }));
+  }
+
+  const finalStore = await readStore();
+  const finalJob = createDomainWriteRepository(finalStore).requireJobForUser(job.id, currentUser.id);
+  const finalOutput = getChapterBatchOutput(finalJob);
+  const tokenUsage = collectChapterBatchTokenUsage(finalStore, childJobIds);
+  finishAiJob(finalJob, withAiBillingOutput(finalStore, finalJob, {
+    ...finalOutput,
+    usedAi: true,
+    usedFallback: false,
+    requestedChapters: chapterCount,
+    completedChapters: completedChapters.length || finalOutput.chapters.length,
+    startChapterNumber,
+    endChapterNumber: startChapterNumber + chapterCount - 1,
+    targetWordCount,
+    reviewDraft,
+    currentStep: "全部完成",
+    childJobIds
+  }, tokenUsage));
+  const finalProject = finalStore.projects.find((item) => item.id === projectId);
+  if (finalProject) {
+    finalProject.status = "writing";
+    finalProject.updatedAt = now();
+  }
+  await writeStore(finalStore);
+
+  return {
+    startChapterNumber,
+    endChapterNumber: startChapterNumber + chapterCount - 1,
+    requestedChapters: chapterCount,
+    completedChapters: completedChapters.length || finalOutput.chapters.length,
+    chapters: completedChapters.length ? completedChapters : finalOutput.chapters
+  };
+}
+
+export async function enqueueChapterBatchJob(
+  projectId: string,
+  input?: ChapterBatchInput,
+  options?: { retryOfJobId?: string }
+) {
+  const store = await readStore();
+  const currentUser = await requireCurrentUser(store);
+  const project = createDomainWriteRepository(store).requireProjectForUser(projectId, currentUser.id);
+
+  ensureDefaultWritingState(store, project);
+
+  const activeJob = findActiveChapterBatchJob(store, projectId);
+
+  if (activeJob) {
+    return activeJob;
+  }
+
+  const blockingJob = findActiveWritingGenerationJob(store, projectId);
+
+  if (blockingJob) {
+    throw new Error(`已有写作生成任务正在执行：${formatAiJobType(blockingJob.type)}，请等它完成后再批量生成。`);
+  }
+
+  const chapterCount = normalizeChapterBatchCount(input?.chapterCount);
+  const targetWordCount = normalizeDraftTargetWordCount(input?.targetWordCount);
+  const reviewDraft = input?.reviewDraft === true;
+  const startChapterNumber =
+    normalizeOptionalChapterNumber(input?.startChapterNumber) ??
+    resolveNextChapterBatchStartNumber(store, projectId);
+
+  for (let offset = 0; offset < chapterCount; offset += 1) {
+    ensureChapterSlotAvailable(store, projectId, startChapterNumber + offset);
+  }
+
+  const job = createAiJob(store, {
+    userId: currentUser.id,
+    projectId,
+    type: "generate_chapter_batch",
+    payload: {
+      startChapterNumber,
+      chapterCount,
+      targetWordCount,
+      reviewDraft
+    },
+    model: "",
+    retryOfJobId: options?.retryOfJobId
+  });
+
+  job.output = {
+    requestedChapters: chapterCount,
+    completedChapters: 0,
+    startChapterNumber,
+    targetWordCount,
+    reviewDraft,
+    chapters: []
+  };
   project.status = "writing";
   project.updatedAt = now();
   await writeStore(store);
@@ -16971,6 +21205,25 @@ export async function processAiJob(jobId: string) {
       return { job: updatedJob, projectId: job.projectId, result: review };
     }
 
+    if (job.type === "generate_chapter_batch") {
+      if (!job.projectId) {
+        throw new Error("任务缺少项目归属");
+      }
+
+      const payload = getJobInputRecord(job);
+      const result = await generateChapterBatch(job.projectId, {
+        startChapterNumber: Number(payload?.startChapterNumber ?? 0) || undefined,
+        chapterCount: Number(payload?.chapterCount ?? 0) || undefined,
+        targetWordCount: Number(payload?.targetWordCount ?? 0) || undefined,
+        reviewDraft: payload?.reviewDraft === true
+      }, {
+        existingJobId: job.id
+      });
+      const latestStore = await readStore();
+      const updatedJob = latestStore.aiJobs.find((item) => item.id === job.id) ?? job;
+      return { job: updatedJob, projectId: job.projectId, result };
+    }
+
     if (job.type === "generate_chapter") {
       if (!job.projectId) {
         throw new Error("任务缺少项目归属");
@@ -17030,21 +21283,31 @@ export async function processAiJob(jobId: string) {
     throw new Error("当前任务类型暂不支持后台执行");
     });
   } catch (error) {
-    const output = getJobObject(job.output);
+    const latestStore = await readStore();
+    const latestJob = latestStore.aiJobs.find((item) => item.id === job.id) ?? job;
+    const output = getJobObject(latestJob.output);
     const tokenUsage = output.tokenUsage as AiTokenUsage | undefined;
 
     if (tokenUsage) {
-      failAiJob(job, error instanceof Error ? error.message : "任务执行失败", withAiBillingOutput(store, job, {
+      failAiJob(latestJob, error instanceof Error ? error.message : "任务执行失败", withAiBillingOutput(latestStore, latestJob, {
         ...output,
         usedAi: output.usedAi === true,
         usedFallback: output.usedFallback === true,
         failed: true
       }, tokenUsage));
     } else {
-      failAiJob(job, error instanceof Error ? error.message : "任务执行失败");
-      refundAiJobCredits(store, job, "AI 任务执行失败返还");
+      failAiJob(latestJob, error instanceof Error ? error.message : "任务执行失败", {
+        ...output,
+        failed: true
+      });
+      refundAiJobCredits(latestStore, latestJob, "AI 任务执行失败返还");
     }
-    await writeStore(store);
+    failActiveChildAiJobs(
+      latestStore,
+      latestJob.id,
+      `父任务失败，已停止子任务：${error instanceof Error ? error.message : "任务执行失败"}`
+    );
+    await writeStore(latestStore);
     throw error;
   }
 }
@@ -17194,6 +21457,50 @@ export async function retryAiJob(jobId: string) {
           longFormPlanId: String(input?.longFormPlanId ?? "")
         }, { retryOfJobId: job.id })
       };
+
+    case "generate_chapter_batch":
+      if (!job.projectId) {
+        throw new Error("该任务缺少项目归属，无法重试");
+      }
+      {
+        const output = getChapterBatchOutput(job);
+        const recoveredChapters = recoverChapterBatchResults(store, job.projectId, job.id);
+        const completedChapterNumbers = new Set(
+          uniqueChapterBatchResults([...output.chapters, ...recoveredChapters]).map((item) => item.chapterNumber)
+        );
+        const startChapterNumber = Number(input?.startChapterNumber ?? output.startChapterNumber ?? 0) || undefined;
+        const chapterCount = Number(input?.chapterCount ?? output.requestedChapters ?? 0) || undefined;
+        const endChapterNumber =
+          startChapterNumber && chapterCount
+            ? startChapterNumber + chapterCount - 1
+            : undefined;
+        const retryStartChapterNumber =
+          startChapterNumber && endChapterNumber
+            ? Array.from(
+                { length: endChapterNumber - startChapterNumber + 1 },
+                (_, index) => startChapterNumber + index
+              ).find((chapterNumber) => !completedChapterNumbers.has(chapterNumber))
+            : startChapterNumber;
+        const retryChapterCount =
+          retryStartChapterNumber && endChapterNumber
+            ? endChapterNumber - retryStartChapterNumber + 1
+            : chapterCount;
+
+        if (!retryStartChapterNumber || !retryChapterCount) {
+          throw new Error("这个批量任务已经没有未完成章节，无需重试");
+        }
+
+        return {
+          projectId: job.projectId,
+          jobType: job.type,
+          job: await enqueueChapterBatchJob(job.projectId, {
+            startChapterNumber: retryStartChapterNumber,
+            chapterCount: retryChapterCount,
+            targetWordCount: Number(input?.targetWordCount ?? output.targetWordCount ?? 0) || undefined,
+            reviewDraft: input?.reviewDraft === true || output.reviewDraft === true
+          }, { retryOfJobId: job.id })
+        };
+      }
 
     case "generate_chapter":
       if (!job.projectId) {

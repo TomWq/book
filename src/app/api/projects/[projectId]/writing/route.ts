@@ -6,6 +6,7 @@ import {
   deleteWritingChaptersFrom,
   deleteWritingTaskCard,
   editDraftText,
+  enqueueChapterBatchJob,
   enqueueChapterDraftJob,
   enqueueEditSecondDraftJob,
   enqueueRegenerateChapterDraftContentJob,
@@ -13,6 +14,7 @@ import {
   enqueueWritingTaskCardJob,
   enqueueLongFormPlanJob,
   generateChapterDraft,
+  generateChapterBatch,
   generateLongFormPlan,
   generateWritingTaskCard,
   regenerateChapterDraftContent,
@@ -104,6 +106,26 @@ export async function POST(
         targetWordCount
       });
       return Response.json({ draft }, { status: 201 });
+    }
+
+    if (action === "generate_chapter_batch") {
+      const input = {
+        startChapterNumber: Number(body.startChapterNumber ?? 0) || undefined,
+        chapterCount: Number(body.chapterCount ?? 0) || undefined,
+        targetWordCount: Number(body.targetWordCount ?? 0) || undefined,
+        reviewDraft:
+          body.reviewDraft === true ||
+          body.reviewDraft === "true" ||
+          body.reviewDraft === "on"
+      };
+
+      if (body.defer === false) {
+        const result = await generateChapterBatch(projectId, input);
+        return Response.json(result, { status: 201 });
+      }
+
+      const job = await enqueueChapterBatchJob(projectId, input);
+      return Response.json({ job }, { status: 202 });
     }
 
     if (action === "regenerate_draft_content") {

@@ -45,7 +45,7 @@ export function StreamDraftButton({
       return Math.min(3000, Math.max(1200, Math.round(initialCount / 100) * 100));
     }
 
-    return 1500;
+    return 1600;
   });
   const [oneShotState, setOneShotState] = useState<{
     status: "idle" | "running" | "done" | "error";
@@ -119,7 +119,7 @@ export function StreamDraftButton({
     const parsed = Number(targetWordCount);
 
     if (!Number.isFinite(parsed)) {
-      return 2500;
+      return 1600;
     }
 
     return Math.min(3000, Math.max(800, Math.floor(parsed)));
@@ -300,7 +300,7 @@ export function StreamDraftButton({
         <div className="field-label-row">
           <div className="field-label">目标字数</div>
           <div className="target-word-guide">
-            <span className="target-word-recommend">推荐 1500-2000 字</span>
+            <span className="target-word-recommend">推荐 1600-2000 字</span>
             <span className="field-hint">可填 800-3000 字；当前保存参考约 {targetRangeText} 字</span>
           </div>
         </div>

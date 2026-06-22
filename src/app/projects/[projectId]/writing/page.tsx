@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
+import { AiJobRunner } from "@/components/ai-job-runner";
 import { DraftExportActions } from "@/components/draft-export-actions";
 import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { FullBookExportActions } from "@/components/full-book-export-actions";
@@ -287,6 +288,10 @@ function closureDecisionLabel(
   return null;
 }
 
+function readJobObject(value: unknown) {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
 export default async function ProjectWritingPage({
   params
 }: {
@@ -329,6 +334,16 @@ export default async function ProjectWritingPage({
   const activeReview = activeDraft
     ? writingState.reviews.find((review) => review.draftId === activeDraft.id) ?? null
     : null;
+  const activeWritingBatchJob =
+    writingState.writingBatchJobs.find((job) => job.status === "pending" || job.status === "running") ?? null;
+  const activeWritingBatchOutput = activeWritingBatchJob ? readJobObject(activeWritingBatchJob.output) : {};
+  const activeWritingBatchInput = activeWritingBatchJob ? readJobObject(activeWritingBatchJob.input) : {};
+  const activeWritingBatchTotal = Number(
+    activeWritingBatchOutput.requestedChapters ?? activeWritingBatchInput.chapterCount ?? 0
+  );
+  const activeWritingBatchCompleted = Number(activeWritingBatchOutput.completedChapters ?? 0);
+  const activeWritingBatchCurrentChapter = Number(activeWritingBatchOutput.currentChapterNumber ?? 0);
+  const activeWritingBatchStep = String(activeWritingBatchOutput.currentStep ?? "");
   const latestReview = writingState.reviews[0];
   const historicalReview = activeDraft
     ? writingState.reviews.find((review) => review.draftId !== activeDraft.id) ?? null
@@ -559,6 +574,74 @@ export default async function ProjectWritingPage({
 
       <div className="writing-layout writing-layout-full">
         <div className="writing-main">
+          <Panel title="批量连写" description="自动按顺序生成任务卡、正文和章节台账；每完成一章就更新项目状态，再继续下一章。">
+            <ApiForm
+              className="forms writing-form"
+              endpoint={`/api/projects/${projectId}/writing`}
+              body={{ action: "generate_chapter_batch", defer: true }}
+              booleanFields={["reviewDraft"]}
+              pendingTitle="正在提交批量连写任务"
+              pendingDescription="任务会进入后台队列，页面刷新后会自动追踪执行进度。"
+              successMessage="批量连写任务已提交"
+            >
+              <div className="writing-form-summary">
+                <strong>从第 {taskCardChapterNumber} 章开始批量生成</strong>
+                <span>适合先跑 3-5 章看节奏；稳定后可以增加到十几章或几十章。</span>
+              </div>
+              {activeWritingBatchJob ? (
+                <AiJobRunner
+                  jobId={activeWritingBatchJob.id}
+                  title="正在批量连写章节"
+                  runningMessage={
+                    activeWritingBatchCurrentChapter > 0
+                      ? `正在处理第 ${activeWritingBatchCurrentChapter} 章${activeWritingBatchStep ? `：${activeWritingBatchStep}` : ""}。已完成 ${activeWritingBatchCompleted}/${activeWritingBatchTotal || "?"} 章。`
+                      : "批量任务正在后台执行，页面会自动刷新进度。"
+                  }
+                  doneMessage="批量连写已完成，正在刷新创作工作台。"
+                />
+              ) : null}
+              <div className="quote-box compact-note">
+                批量不会把几十章一次性丢给 AI。系统会逐章执行：任务卡 → 正文 → 台账 → 下一章；如果某章已有正文，会先停下，避免覆盖既有内容。
+              </div>
+              <div className="writing-form-grid">
+                <div className="field">
+                  <div className="field-label">起始章节</div>
+                  <input
+                    key={`batch-start-${taskCardChapterNumber}`}
+                    name="startChapterNumber"
+                    type="number"
+                    min="1"
+                    defaultValue={taskCardChapterNumber}
+                  />
+                </div>
+                <div className="field">
+                  <div className="field-label">生成章数</div>
+                  <input name="chapterCount" type="number" min="1" max="50" defaultValue="3" />
+                  <div className="field-hint">最多一次 50 章；建议先小批量确认节奏。</div>
+                </div>
+                <div className="field">
+                  <div className="field-label">每章目标字数</div>
+                  <input name="targetWordCount" type="number" min="800" max="3000" step="100" defaultValue="1600" />
+                </div>
+                <label className="option-row">
+                  <input name="reviewDraft" type="checkbox" />
+                  <span>
+                    <strong>每章生成后自动审稿</strong>
+                    <small>更稳，但会明显增加耗时和 AI 调用次数。</small>
+                  </span>
+                </label>
+              </div>
+              <div className="hero-actions writing-submit-row">
+                <button className="button primary" type="submit" disabled={Boolean(activeWritingBatchJob)}>
+                  {activeWritingBatchJob ? "批量任务进行中" : "开始批量连写"}
+                </button>
+                <Link className="button" href={`/projects/${projectId}/jobs`}>
+                  查看任务中心
+                </Link>
+              </div>
+            </ApiForm>
+          </Panel>
+
           <div id="task-card-form" className="scroll-anchor" />
           <Panel title="生成章节任务卡" description="所有字段都可留空，系统会优先读取当前作品设定；如果本项目有拆书分析，会把拆书结构作为参考。">
             <ApiForm

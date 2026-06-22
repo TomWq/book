@@ -181,6 +181,23 @@ function displayReviewText(value: string) {
     .replace(/\bfirst100Pacing\b/g, "前段阶段节奏");
 }
 
+function displayLongFormGenerationError(value: string) {
+  return value
+    .replace(/This operation was aborted/g, "AI 请求超时或被中止，请重新生成")
+    .replace(/AI 响应缺少 message\.content/g, "AI 生成接口返回空内容，请重新生成")
+    .replace(/AI JSON 修复响应缺少 message\.content/g, "AI 生成修复接口返回空内容，请重新生成")
+    .replace(/AI 输出被长度限制截断，请减少输入内容或提高本次请求的输出长度上限/g, "AI 生成输出被截断，请重新生成；系统会使用分段规划降低截断概率")
+    .replace(/\bdoNotRevealEarly\b/g, "禁止提前揭示")
+    .replace(/\bopenQuestions\b/g, "待确认点")
+    .replace(/\bconfirmedFacts\b/g, "已确定事实")
+    .replace(/\bdoNotChange\b/g, "禁止改写")
+    .replace(/\btagPromises\b/g, "标签承诺")
+    .replace(/\bfirst10Chapters\b/g, "开局任务蓝图")
+    .replace(/\bprogressionRules\b/g, "任务卡硬规则")
+    .replace(/\bpost100Pacing\b/g, "后续阶段节奏")
+    .replace(/\bfirst100Pacing\b/g, "前段阶段节奏");
+}
+
 function reviewAdviceMode(items: string[]) {
   const text = items.join(" ");
   const hasOriginalityAdvice = /知名|IP|同人|原创|角色名|势力名|专有设定|版权|替换/.test(text);
@@ -213,9 +230,9 @@ function reviewAdviceMode(items: string[]) {
 }
 
 function displayJobError(value: string) {
-  return displayReviewText(value)
+  return displayLongFormGenerationError(value)
     .replace(/AI 请求超时或被中止，请稍后重试；如果这是长篇规划，请适当提高 AI 超时时间。/g, "AI 请求超时或被中止，请重新执行。")
-    .replace(/AI JSON 修复未正常结束：length/g, "AI 输出被截断，旧版长 JSON 修复失败；请重新生成，将使用分段结构。");
+    .replace(/AI JSON 修复未正常结束：length/g, "AI 分段输出仍被截断；请重新生成，系统会继续用更小的分段结构。");
 }
 
 function isStaleLongFormJob(job?: { status: string; type: string; updatedAt?: string } | null) {
@@ -233,6 +250,17 @@ function isStaleLongFormJob(job?: { status: string; type: string; updatedAt?: st
 
 function isActiveLongFormJob(job?: { status: string; type: string; updatedAt?: string } | null) {
   return Boolean(job && (job.status === "pending" || (job.status === "running" && !isStaleLongFormJob(job))));
+}
+
+function isJobNewerThanPlan(job?: { createdAt?: string; updatedAt?: string } | null, plan?: { createdAt?: string; updatedAt?: string } | null) {
+  if (!job || !plan) {
+    return false;
+  }
+
+  const jobTime = Date.parse(String(job.createdAt ?? job.updatedAt ?? ""));
+  const planTime = Date.parse(String(plan.updatedAt ?? plan.createdAt ?? ""));
+
+  return Number.isFinite(jobTime) && Number.isFinite(planTime) && jobTime > planTime;
 }
 
 export default async function ProjectStatePage({
@@ -310,6 +338,7 @@ export default async function ProjectStatePage({
     latestGenerateLongFormPlanJob?.status === "failed" ? latestGenerateLongFormPlanJob : null;
   const latestFailedReviewLongFormPlanJob =
     latestReviewLongFormPlanJob?.status === "failed" ? latestReviewLongFormPlanJob : null;
+  const failedGenerateAfterCurrentPlan = isJobNewerThanPlan(latestFailedGenerateLongFormPlanJob, latestLongFormPlan);
   const reviewOutput = objectRecord(latestReviewLongFormPlanJob?.output);
   const reviewResult = objectRecord(reviewOutput.review);
   const reviewIssues = textList(reviewResult.issues);
@@ -444,7 +473,9 @@ export default async function ProjectStatePage({
             <small>按目标字数估算章节数，规划全书卷纲、成长上限、收益频率和阶段节奏。</small>
           </span>
           <span className="state-section-tag">
-            {latestLongFormPlan
+            {failedGenerateAfterCurrentPlan
+              ? "生成失败 · 显示旧规划"
+              : latestLongFormPlan
               ? `${formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 ${latestLongFormPlan.estimatedChapters} 章`
               : hasActiveLongFormPlanJob
                 ? "正在生成"
@@ -472,10 +503,18 @@ export default async function ProjectStatePage({
                   <strong>
                     目标 {formatWanWords(latestLongFormPlan.targetTotalWords)} · 约 {latestLongFormPlan.estimatedChapters} 章
                   </strong>
-                  <span className="pill success">任务卡已接入</span>
+                  <span className={failedGenerateAfterCurrentPlan ? "pill warning" : "pill success"}>
+                    {failedGenerateAfterCurrentPlan ? "显示旧规划" : "任务卡已接入"}
+                  </span>
                 </div>
                 <div className="muted">{latestLongFormPlan.corePromise || latestLongFormPlan.planningBasis}</div>
               </div>
+              {failedGenerateAfterCurrentPlan ? (
+                <div className="quote-box warning-box compact-note">
+                  <strong>刚才那次重新生成没有保存成功。</strong>
+                  <span>当前下面展示的仍是上一次成功保存的长篇规划，不是最新生成结果。失败原因在本区底部提示；修复后重新生成成功才会替换这里的规划。</span>
+                </div>
+              ) : null}
               <div className={reviewHasProblem || reviewIncomplete ? "quote-box warning-box compact-note long-form-review-note" : "quote-box compact-note long-form-review-note"}>
                 <div className="long-form-review-head">
                   <strong>事实一致性审查</strong>
@@ -899,7 +938,7 @@ export default async function ProjectStatePage({
           ) : null}
           {latestFailedGenerateLongFormPlanJob ? (
             <div className="quote-box warning-box compact-note">
-              长篇规划生成失败：{displayJobError(latestFailedGenerateLongFormPlanJob.error || "AI 返回内容异常，请重新生成。")}
+              长篇规划生成失败，当前规划未被覆盖：{displayJobError(latestFailedGenerateLongFormPlanJob.error || "AI 返回内容异常，请重新生成。")}
             </div>
           ) : null}
           {hasOldLongFormPlans ? (

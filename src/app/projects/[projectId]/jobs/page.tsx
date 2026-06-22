@@ -24,6 +24,10 @@ type JobOutputView = {
   tokenUsage?: JobTokenUsage;
   chapterAnalysisCount?: number;
   totalChapters?: number;
+  requestedChapters?: number;
+  completedChapters?: number;
+  startChapterNumber?: number;
+  endChapterNumber?: number;
   chapterNumber?: number;
   taskCardId?: string;
   draftId?: string;
@@ -70,10 +74,14 @@ function readJobInput(job: { input?: unknown }) {
   return job.input && typeof job.input === "object" ? (job.input as Record<string, unknown>) : undefined;
 }
 
-function isLongFormJobStale(job: ProjectJobView) {
+function isResumableJobStale(job: ProjectJobView) {
   if (
     job.status !== "running" ||
-    (job.type !== "generate_long_form_plan" && job.type !== "review_long_form_plan")
+    (
+      job.type !== "generate_long_form_plan" &&
+      job.type !== "review_long_form_plan" &&
+      job.type !== "generate_chapter_batch"
+    )
   ) {
     return false;
   }
@@ -99,6 +107,13 @@ function getJobUnitCount(job: ProjectJobView, output?: JobOutputView) {
     case "edit_second_draft":
     case "generate_outline":
       return 1;
+    case "generate_chapter_batch":
+      return Math.max(
+        1,
+        numberValue(output?.requestedChapters) ||
+          numberValue(output?.completedChapters) ||
+          numberValue(input?.chapterCount)
+      );
     default:
       return 1;
   }
@@ -107,6 +122,8 @@ function getJobUnitCount(job: ProjectJobView, output?: JobOutputView) {
 function getUnitLabel(type: string) {
   switch (type) {
     case "analyze_chapters":
+      return "章";
+    case "generate_chapter_batch":
       return "章";
     case "generate_chapter":
       return "章正文";
@@ -236,6 +253,8 @@ function summarizeJobInput(job: {
         : `章节数：${String(input.chapterCount ?? "未知")}`;
     case "generate_task_card":
       return `章节：第 ${String(input.chapterNumber ?? "未知")} 章`;
+    case "generate_chapter_batch":
+      return `章节：第 ${String(input.startChapterNumber ?? "未知")} 章起，共 ${String(input.chapterCount ?? "未知")} 章`;
     case "generate_chapter":
       return `任务卡：${String(input.taskCardId ?? "未知")}`;
     case "review_chapter":
@@ -264,6 +283,8 @@ function summarizeJobOutput(job: {
       return `章节分析 ${String(output.chapterAnalysisCount ?? "未知")} 项，故事分析已更新`;
     case "generate_task_card":
       return `任务卡 ${String(output.taskCardId ?? "未知")}，章节 ${String(output.chapterNumber ?? "未知")}`;
+    case "generate_chapter_batch":
+      return `批量连写第 ${String(output.startChapterNumber ?? "未知")}-${String(output.endChapterNumber ?? "未知")} 章，已完成 ${String(output.completedChapters ?? "0")} 章`;
     case "generate_chapter":
       return `草稿 ${String(output.draftId ?? "未知")}，章节 ${String(output.chapterNumber ?? "未知")}`;
     case "review_chapter":
@@ -300,7 +321,7 @@ export default async function ProjectJobsPage({
   const failedCount = jobs.filter((job) => job.status === "failed").length;
   const usageStats = buildUsageStats(jobs);
   const autoTrackedJob = jobs.find(
-    (job) => job.status === "pending" || job.status === "running" || isLongFormJobStale(job)
+    (job) => job.status === "pending" || job.status === "running" || isResumableJobStale(job)
   );
   const visiblePageJobs = autoTrackedJob
     ? pageJobs.filter((job) => job.id !== autoTrackedJob.id)
@@ -400,7 +421,7 @@ export default async function ProjectJobsPage({
               const unitCount = getJobUnitCount(job, output);
               const tokenUsage = output?.tokenUsage;
               const avgTokens = unitCount > 0 ? numberValue(tokenUsage?.totalTokens) / unitCount : 0;
-              const staleLongFormJob = isLongFormJobStale(job);
+              const staleResumableJob = isResumableJobStale(job);
 
               return (
                 <div key={job.id} className="list-item">
@@ -450,9 +471,9 @@ export default async function ProjectJobsPage({
                   </div>
                   <div className="muted">{summarizeJobInput(job)}</div>
                   <div className="muted">{summarizeJobOutput(job)}</div>
-                  <div className={staleLongFormJob ? "pill warning form-status" : "muted"}>
-                    {staleLongFormJob
-                      ? "这个长篇规划任务已经超过 90 秒没有更新，可以点上方“执行待处理任务”重新接管。"
+                  <div className={staleResumableJob ? "pill warning form-status" : "muted"}>
+                    {staleResumableJob
+                      ? "这个任务已经超过 90 秒没有更新，可以点上方“执行待处理任务”重新接管。"
                       : job.error ? displayJobError(job.error) : "任务执行信息已记录。"}
                   </div>
                   {canRetry ? (

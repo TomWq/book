@@ -2,6 +2,7 @@ import {
   attachAiTokenUsage,
   combineAiTokenUsages,
   getAiTokenUsage,
+  type AiJsonRequest,
   type AiTokenUsage,
   requestAiJson,
   requestAiTextStream
@@ -21,7 +22,7 @@ import type {
   StoredWritingTaskCard
 } from "@/lib/project-types";
 
-type TaskCardContext = {
+export type TaskCardContext = {
   projectName: string;
   projectDescription?: string;
   bible: StoredWritingBible;
@@ -31,6 +32,7 @@ type TaskCardContext = {
   lastLedger: StoredChapterLedger | null;
   latestDraft: StoredChapterDraft | null;
   latestDraftActualEnding?: string;
+  continuityFacts?: string[];
   characters: StoredCharacterProfile[];
   chapterCharacterConstraints?: string[];
   foreshadowings: StoredForeshadowing[];
@@ -157,14 +159,258 @@ type LongFormPlanContext = {
   characters: StoredCharacterProfile[];
   foreshadowings: StoredForeshadowing[];
   storyAnalysis?: StoredStoryAnalysis | null;
+  existingStoryProgress?: {
+    latestChapterNumber: number;
+    continuationChapterNumber: number;
+    latestDraftEnding?: string;
+    recentLedgers: Array<{
+      chapterNumber: number;
+      title: string;
+      events: string[];
+      payoff: string;
+      cliffhanger: string;
+      stateChanges: string[];
+      carryOverTasks: string[];
+    }>;
+    establishedEvents: string[];
+    establishedPayoffs: string[];
+    establishedStateChanges: string[];
+    currentStatusLines?: string[];
+    openCarryOverTasks: string[];
+  } | null;
 };
 
 function asTextList(value: unknown) {
-  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+  return Array.isArray(value)
+    ? value.map(textFromUnknownListItem).map((item) => item.trim()).filter(Boolean)
+    : typeof value === "string"
+      ? splitStructuredTextList(value)
+      : [];
+}
+
+function splitStructuredTextList(value: string) {
+  return value
+    .split(/\n+|(?:^|[；;])\s*(?=(?:第\s*)?\d+\s*(?:章|[.、:：])|第[零一二两三四五六七八九十百]+\s*章|chapter\s*\d+)/i)
+    .map((item) => item.replace(/^[；;\s]+/, "").trim())
+    .filter(Boolean);
+}
+
+function textFromUnknownListItem(item: unknown): string {
+  if (typeof item === "string") {
+    return item;
+  }
+
+  if (typeof item === "number" || typeof item === "boolean") {
+    return String(item);
+  }
+
+  if (Array.isArray(item)) {
+    return item.map(textFromUnknownListItem).filter(Boolean).join("；");
+  }
+
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const record = item as Record<string, unknown>;
+  const preferredKeys = [
+    "text",
+    "content",
+    "summary",
+    "description",
+    "goal",
+    "chapterGoal",
+    "stageTarget",
+    "rule",
+    "value",
+    "name",
+    "title"
+  ];
+
+  for (const key of preferredKeys) {
+    const value = record[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return Object.entries(record)
+    .filter(([key]) => !/^(id|uuid|createdAt|updatedAt|status|type)$/i.test(key))
+    .map(([key, value]) => {
+      const text = textFromUnknownListItem(value);
+      return text ? `${key}：${text}` : "";
+    })
+    .filter(Boolean)
+    .slice(0, 8)
+    .join("；");
+}
+
+function openingBlueprintChapterNumberFromRecord(record: Record<string, unknown>) {
+  const candidates = [
+    record.chapterNumber,
+    record.chapter,
+    record.chapter_number,
+    record.index,
+    record.number,
+    record.no,
+    record.range
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return Math.floor(candidate);
+    }
+
+    if (typeof candidate === "string") {
+      const match = candidate.match(/\d+/);
+
+      if (match?.[0]) {
+        return Number(match[0]);
+      }
+    }
+  }
+
+  return 0;
+}
+
+function normalizeOpeningBlueprintItem(item: unknown, index: number) {
+  if (typeof item === "string") {
+    const text = item.trim();
+    return /^(?:第\s*)?\d+\s*(?:章|[.、:：])|^第[零一二两三四五六七八九十百]+\s*章|^chapter\s*\d+/i.test(text)
+      ? text
+      : `第${index + 1}章：${text}`;
+  }
+
+  if (item && typeof item === "object" && !Array.isArray(item)) {
+    const record = item as Record<string, unknown>;
+    const chapterNumber = openingBlueprintChapterNumberFromRecord(record) || index + 1;
+    const title = typeof record.title === "string" && record.title.trim() ? `《${record.title.trim()}》` : "";
+    const parts = [
+      record.chapterGoal ?? record.goal ?? record.function ?? record.summary ?? record.mainEvent,
+      record.pressure ?? record.conflict ?? record.obstacle,
+      record.action ?? record.protagonistAction,
+      record.payoff ?? record.reward ?? record.stateChange,
+      record.foreshadowing ?? record.hook ?? record.endingHook,
+      record.relationshipChange ?? record.sideBeat
+    ]
+      .map(textFromUnknownListItem)
+      .map((text) => cleanPromptText(text, 90))
+      .filter(Boolean);
+    const body = parts.length > 0 ? parts.join("；") : textFromUnknownListItem(record);
+
+    return body ? `第${chapterNumber}章：${title}${body}` : "";
+  }
+
+  const text = textFromUnknownListItem(item).trim();
+  return text ? `第${index + 1}章：${text}` : "";
+}
+
+function normalizeOpeningBlueprintResponse(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map(normalizeOpeningBlueprintItem)
+      .map((item) => cleanPromptText(item, 260))
+      .filter(Boolean);
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const directKeys = [
+      "first10Chapters",
+      "first10_chapters",
+      "first_10_chapters",
+      "first10Blueprint",
+      "first10Blueprints",
+      "chapters",
+      "openingBlueprint",
+      "openingBlueprints",
+      "blueprint",
+      "blueprints",
+      "firstTenChapters",
+      "openingChapters",
+      "chapterBlueprints",
+      "前10章蓝图",
+      "前十章蓝图",
+      "开局蓝图",
+      "items",
+      "list"
+    ];
+
+    for (const key of directKeys) {
+      const nested = record[key];
+      const normalized: string[] = normalizeOpeningBlueprintResponse(nested);
+
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    const numericEntries = Object.entries(record)
+      .map(([key, item]) => {
+        const match = key.match(/\d+/);
+        return {
+          chapterNumber: match?.[0] ? Number(match[0]) : openingBlueprintChapterNumberFromRecord(item as Record<string, unknown>),
+          item
+        };
+      })
+      .filter((entry) => Number.isFinite(entry.chapterNumber) && entry.chapterNumber > 0)
+      .sort((a, b) => a.chapterNumber - b.chapterNumber);
+
+    if (numericEntries.length > 0) {
+      return numericEntries
+        .map((entry, index) => normalizeOpeningBlueprintItem(entry.item, entry.chapterNumber - 1 || index))
+        .map((item) => cleanPromptText(item, 260))
+        .filter(Boolean);
+    }
+  }
+
+  if (typeof value === "string") {
+    return splitStructuredTextList(value)
+      .map(normalizeOpeningBlueprintItem)
+      .map((item) => cleanPromptText(item, 260))
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function cleanPromptText(value: string, limit = 260) {
   return value.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function cleanPromptSentenceText(value: string, limit = 260) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  const clipped = normalized.slice(0, limit);
+  const hardBoundary = Math.max(
+    clipped.lastIndexOf("。"),
+    clipped.lastIndexOf("！"),
+    clipped.lastIndexOf("？"),
+    clipped.lastIndexOf(";"),
+    clipped.lastIndexOf("；")
+  );
+
+  if (hardBoundary >= Math.min(60, Math.floor(limit * 0.45))) {
+    return clipped.slice(0, hardBoundary + 1).trim();
+  }
+
+  const softBoundary = Math.max(
+    clipped.lastIndexOf("，"),
+    clipped.lastIndexOf(","),
+    clipped.lastIndexOf("："),
+    clipped.lastIndexOf(":")
+  );
+
+  if (softBoundary >= Math.floor(limit * 0.7)) {
+    return `${clipped.slice(0, softBoundary + 1).trim()}…`;
+  }
+
+  return `${clipped.replace(/[，,。！？；;：:\s]+$/, "").trim()}…`;
 }
 
 function buildProjectFactGuardRules(context: LongFormPlanContext) {
@@ -179,6 +425,7 @@ function buildProjectFactGuardRules(context: LongFormPlanContext) {
     return [
       titleRule,
       "项目简介为空时，必须以创作圣经、主线状态、人物档案和伏笔表作为事实源；confirmedFacts 只能写这些事实源已明确的信息。",
+      "纸条、口供、证词、留言、梦境提示、系统提示、地图、坐标、卷宗或任意线索载体只说明“线索提示/声称/指向”，不得把线索内容自动升级为已发现、已获得、已确认或已完成的事实。",
       "如果所有项目事实源都没有明确某个核心方向，openQuestions 必须列出需要作者确认的方向；不要擅自补出不可逆核心关系、最终归属、亲缘身份、重大真相或终局走向。"
     ];
   }
@@ -189,6 +436,7 @@ function buildProjectFactGuardRules(context: LongFormPlanContext) {
     "项目事实源包括：项目简介、创作圣经、主线状态、人物档案、伏笔表和拆书参考中已迁移到本项目的设定。规划不得只看简介，也不得忽略用户已在状态页维护的设定。",
     "必须先输出结构化“项目事实锁”：confirmedFacts 写所有项目事实源已明确且彼此不冲突的事实；openQuestions 写事实源没有定死或互相有张力的待确认点；doNotChange 写不得改写的事实；doNotRevealEarly 写前期不得提前揭开的核心信息；tagPromises 写题材标签和卖点承诺。",
     "规划不得改写项目事实源里的已发生事实、人物关系、身份状态、核心事件、能力/金手指来源、主线目标、人物当前状态、伏笔限制和读者承诺。",
+    "纸条、口供、证词、留言、梦境提示、系统提示、地图、坐标、卷宗或任意线索载体只说明“线索提示/声称/指向”，不得把线索内容自动升级为已发现、已获得、已确认或已完成的事实。",
     "项目事实源中已经明确且不冲突的事实必须原样承接；存在歧义、张力、缺口、标题暗示或跨字段冲突的地方，必须标成“待确认/需作者确认”，不能擅自裁决。",
     "凡是写入 openQuestions 或 doNotRevealEarly 的事项，后续 volumePlan、first10Chapters、first100Pacing、post100Pacing 和 progressionRules 中不得再用确定语气写成已发生/必然发生；如必须提及，只能写“可能/待确认/保留伏笔/视作者选择”。",
     "不要把项目事实源里的核心事件擅自改写成另一种真相；除非事实源明确说明，否则不能把未写出的反转当成既定事实。",
@@ -443,6 +691,49 @@ function compactTextList(items: unknown, limit = 6, itemLimit = 180) {
     .slice(0, limit);
 }
 
+function compactTaskCardHardRules(items: unknown, limit = 8, itemLimit = 90) {
+  return asTextList(items)
+    .filter((item) => !/^(任务卡质检|本章写作边界|本章写作底线|本章修复重点|读者体验底线)/.test(item.trim()))
+    .map((item) => cleanPromptSentenceText(item, itemLimit))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function uniquePromptList(items: string[]) {
+  return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
+}
+
+function isLowDramaDetailText(value: string) {
+  const text = value.trim();
+
+  if (!text) {
+    return false;
+  }
+
+  const detailNoun =
+    /线索|信息|细节|物件|物品|道具|记录|文件|档案|名单|名册|编号|数字|数值|面板|提示|日志|账本|账页|账单|合同|聊天记录|监控|照片|截图|残页|纸条|符号|标记|图案|痕迹|指纹|掌纹|手印|脚印|血迹|压痕|灰烬|灰层|墨迹|字迹|笔迹|纸纤维|枯叶|木牌|材料|药材|丹药|灵石|装备|钥匙|令牌|地图|坐标|规则|任务|数据|排名|分数|证据|物证|证词|口供/.test(text);
+  const detailAction =
+    /验证|核实|确认|比对|对比|提取|观察|复核|检查|整理|记录|归纳|查明|查清|寻找|找出|发现|标记|登记|扫描|读取|计算|统计|判断|推断|复盘|还原|显现|拓印|分离/.test(text);
+  const dramaticAction =
+    /反击|打脸|冲突|阻拦|逼迫|威胁|羞辱|挑衅|竞争|比试|战斗|对决|救援|追杀|逃亡|谈判|交易|站队|背叛|牺牲|对质|质问|逼问|审问|审讯|抓捕|传唤|定责|定罪|搜查|公开|当场|承认|交代|供认|翻供|反咬|抢夺|销毁|露怯|改口|权限|文书|奖励|晋升|突破|升级|获得|拿到|得到|领取|赢得|失去|消耗|名额|地位|声望|名声|关系|选择|代价|惩罚|结案|回收|兑现|反转|翻盘|曝光|揭穿|碾压|震惊/.test(text);
+
+  return detailNoun && detailAction && !dramaticAction;
+}
+
+function compactDramaticTaskDrivers(items: unknown, limit = 3, itemLimit = 130) {
+  const concrete = asTextList(items)
+    .map((item) => cleanPromptText(item, itemLimit))
+    .filter((item) => item && !isLowDramaDetailText(item));
+  const lowDramaDetails = asTextList(items)
+    .map((item) => cleanPromptText(item, itemLimit))
+    .filter((item) => item && isLowDramaDetailText(item));
+
+  return uniquePromptList([
+    ...concrete,
+    ...(concrete.length === 0 ? lowDramaDetails.slice(0, 1) : [])
+  ]).slice(0, limit);
+}
+
 function isManagedSideThread(value: string) {
   return /^(配角弧线|支线|暗线)：/.test(value.trim()) && !/为重要配角建立|每条支线必须/.test(value);
 }
@@ -526,15 +817,18 @@ function compactTaskCardLedger(ledger: StoredChapterLedger | null) {
     return null;
   }
 
+  const carryOverTasks = compactDramaticTaskDrivers(ledger.carryOverTasks ?? [], 4, 140);
+  const newClues = compactDramaticTaskDrivers(ledger.newClues, 5, 140);
+
   return {
     chapterNumber: ledger.chapterNumber,
     title: cleanPromptText(ledger.title, 80),
     events: compactTextList(ledger.events, 5, 140),
-    newClues: compactTextList(ledger.newClues, 5, 140),
+    newClues,
     payoff: cleanPromptText(ledger.payoff, 140),
     cliffhanger: cleanPromptText(ledger.cliffhanger, 160),
     stateChanges: compactTextList(ledger.stateChanges, 5, 140),
-    carryOverTasks: compactTextList(ledger.carryOverTasks ?? [], 5, 140)
+    carryOverTasks
   };
 }
 
@@ -660,6 +954,16 @@ function longFormChapterBlueprint(plan: StoredLongFormPlan, chapterNumber?: numb
     return exact;
   }
 
+  const firstBlueprintNumber = plan.first10Chapters
+    .map(blueprintChapterNumber)
+    .filter((item): item is number => Boolean(item))
+    .sort((a, b) => a - b)[0];
+
+  if (firstBlueprintNumber) {
+    const offset = chapterNumber - firstBlueprintNumber;
+    return offset >= 0 && offset < plan.first10Chapters.length ? plan.first10Chapters[offset] : "";
+  }
+
   return plan.first10Chapters[chapterNumber - 1] ?? "";
 }
 
@@ -680,7 +984,52 @@ function nearbyLongFormChapterBlueprints(plan: StoredLongFormPlan, chapterNumber
     return nearby;
   }
 
+  const firstBlueprintNumber = numberedEntries[0]?.chapterNumber;
+
+  if (firstBlueprintNumber) {
+    const offset = chapterNumber - firstBlueprintNumber;
+    return offset >= 0
+      ? plan.first10Chapters.slice(Math.max(0, offset - 1), offset + 2)
+      : [];
+  }
+
   return plan.first10Chapters.slice(Math.max(0, chapterNumber - 2), chapterNumber + 1);
+}
+
+const LONG_FORM_READER_ENGINE_POLICY = [
+  "阶段情绪曲线必须清楚：先欠情绪债，再逐章加压，再用可见行动还债，最后留下余波或新压力。",
+  "长篇规划是读者体验引擎，不是事件排期表；任务卡必须把阶段目标转成压制、反击、可见回报和章末压力。",
+  "信息、线索、道具、数值或地图只能作为冲突材料；本章收益要落成人物态度、资源权限、关系站队、对手代价、名声地位、选择权或阶段结论。",
+  "每个阶段都要轮换小爽点、情绪补偿、意外变局和追读问题，避免连续章节只做观察、验证、赶路、查资料或领取奖励。"
+];
+
+function splitLongFormPlanningLines(value: string) {
+  return value
+    .split(/(?=第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章)|[。；;\n]/)
+    .map((item) => cleanPromptText(item, 180))
+    .filter(Boolean);
+}
+
+function isReaderEnginePlanningLine(value: string) {
+  return /读者|追读|期待|钩子|悬念|情绪曲线|情绪债|欠债|加压|还债|憋屈|紧张|心疼|心动|上头|解气|压制|阻力|轻视|质疑|误判|反击|反转|扭转|翻盘|反制|回报|收益|奖励|权限|资源|地位|名声|认可|站队|代价|选择权|公开反馈|情绪补偿|反套路|意外|变局|惊讶/.test(value);
+}
+
+function extractLongFormReaderEngineItems(plan: StoredLongFormPlan, currentStage = "") {
+  const sources = [
+    currentStage,
+    plan.corePromise,
+    ...plan.rewardPacing,
+    ...plan.progressionRules,
+    ...plan.volumePlan,
+    plan.first100Pacing,
+    plan.post100Pacing
+  ];
+  const lines = sources
+    .flatMap((source) => splitLongFormPlanningLines(source))
+    .filter(isReaderEnginePlanningLine)
+    .map((item) => cleanPromptText(item, 150));
+
+  return uniquePromptList(lines).slice(0, 6);
 }
 
 function buildTaskCardLongFormPlanSummary(
@@ -704,15 +1053,17 @@ function buildTaskCardLongFormPlanSummary(
     openingBlueprintPolicy: "开局任务蓝图按任务队列参考；如上一章 carryOverTasks 未完成，优先承接未完成项，蓝图顺位可自然后移。蓝图中写明章节号的条目必须按对应章节读取，不限于前10章。",
     currentChapterPlan: currentBlueprint ? cleanPromptText(currentBlueprint, 220) : "",
     nearbyOpeningPlan: compactTextList(nearbyLongFormChapterBlueprints(plan, chapterNumber), 3, 180),
-    currentStage: cleanPromptText(currentStage, 360),
-    progressionPacing: compactTextList(plan.progressionPacing, 3, 100),
-    rewardPacing: compactTextList(plan.rewardPacing, 3, 100),
+    currentStage: cleanPromptText(currentStage, 520),
+    readerExperiencePolicy: LONG_FORM_READER_ENGINE_POLICY,
+    readerEngine: compactTextList(extractLongFormReaderEngineItems(plan, currentStage), 5, 140),
+    progressionPacing: compactTextList(plan.progressionPacing, 3, 130),
+    rewardPacing: compactTextList(plan.rewardPacing, 4, 130),
     confirmedFacts: compactTextList(plan.confirmedFacts, 4, 100),
     openQuestions: compactTextList(plan.openQuestions, 3, 100),
     doNotChange: compactTextList(plan.doNotChange, 4, 100),
     doNotRevealEarly: compactTextList(plan.doNotRevealEarly, 3, 100),
     tagPromises: compactTextList(plan.tagPromises, 4, 80),
-    progressionRules: compactTextList(plan.progressionRules, 4, 100)
+    progressionRules: compactTextList(plan.progressionRules, 5, 130)
   };
 }
 
@@ -734,10 +1085,12 @@ function buildTaskCardLongFormRules(
 
   return [
     `长篇规划基准：目标约 ${plan.targetTotalWords} 字，预计 ${plan.estimatedChapters} 章；核心承诺：${cleanPromptText(plan.corePromise || plan.planningBasis, 180)}`,
+    ...LONG_FORM_READER_ENGINE_POLICY,
     currentChapterPlan ? `开局任务蓝图中的当前章节约束：${currentChapterPlan}` : "",
     "开局任务蓝图是任务队列和节奏参考，不是强制一章一条；如果上一章 carryOverTasks 未完成，本章优先承接 carryOverTasks，再把蓝图顺位自然后移。蓝图中的心理、身体反应和现实回响只作为节奏提示，除非用户明确要求本章必须写，否则不要写入任务卡硬规则。",
     ...compactTextList(options?.transitionRules ?? [], 4, 130),
     currentStageRule,
+    ...extractLongFormReaderEngineItems(plan, currentStageRule).slice(0, 4).map((item) => `长篇追读引擎参考：${item}`),
     plan.doNotChange.length ? `禁止改写核心事实：${compactTextList(plan.doNotChange, 4, 90).join("；")}` : "",
     plan.doNotRevealEarly.length ? `禁止提前揭示：${compactTextList(plan.doNotRevealEarly, 3, 90).join("；")}` : "",
     plan.progressionPacing.length ? `成长节奏上限：${compactTextList(plan.progressionPacing, 3, 90).join("；")}` : "",
@@ -975,6 +1328,33 @@ function buildLongFormPlanningGuardRules(context: Pick<LongFormPlanContext, "tar
   );
 }
 
+function buildLongFormStoryModeRules(context: LongFormPlanContext) {
+  const source = [
+    context.projectName,
+    context.projectDescription,
+    context.bible.workType,
+    context.bible.corePleasure,
+    context.bible.worldRules,
+    context.bible.immutableSettings,
+    context.bible.narrativeTaboos,
+    context.plotState.mainGoal,
+    context.plotState.nextStageGoal
+  ].join("\n");
+  const hasMultiWorldPromise =
+    /快穿|多穿|多世界|多个小世界|每个小世界|依次穿越|穿越多个|单元世界|副本世界|副本空间|主神空间|世界切换|穿梭[^。；\n]{0,12}世界/.test(source);
+
+  if (!hasMultiWorldPromise) {
+    return [];
+  }
+
+  return [
+    "项目含快穿/多世界/单元世界承诺：长篇规划必须写清世界或单元切换节奏、每个世界的独立主案/主目标、跨世界伏笔和阶段收束方式。",
+    "如果已有章节仍在第一个世界或第一个单元，可以先完成当前案件收束；但不得把“进入第二个世界/新单元”拖到全书终局才首次兑现，必须在前中期给出清晰触发条件和切换节点。",
+    "现实线、番外线或同一地图内的新案件，不能默认替代“新世界/新单元”承诺；除非项目事实源明确，现实线只能作为压力夹层、伏笔回响或代价来源。",
+    "每次世界/单元切换必须保留主角核心机制和读者承诺，同时换压力源、关系结构、主案类型或规则限制，避免只是同一世界无限查案。"
+  ];
+}
+
 function buildRequiredPost100PlanRanges(estimatedChapters: number) {
   if (estimatedChapters <= 100) {
     return ["本书预计不超过100章，post100Pacing 留空；first100Pacing 必须按预计总章数覆盖全书起承转合、阶段压力、阶段爽点、伏笔回收和终局收束。"];
@@ -984,7 +1364,10 @@ function buildRequiredPost100PlanRanges(estimatedChapters: number) {
   for (let start = 101; start <= estimatedChapters; start += 50) {
     const end = Math.min(start + 49, estimatedChapters);
     const finalLabel = end === estimatedChapters ? "（剩余结尾）" : "";
-    ranges.push(`第${start}-${end}章${finalLabel}：必须写满“阶段目标、主要对手/压力、主角成长上限、地图/势力推进、爽点类型与频率、伏笔埋设/回收、重要支线收束、感情/关系变化、阶段结尾钩子、进入下一阶段条件”`);
+    const finalRule = end === estimatedChapters
+      ? "；这是全书终局/剩余结尾，必须收束主线、回收核心伏笔和给出阶段余波，禁止再开启新单元、新阶段、新主案或新入口"
+      : "";
+    ranges.push(`第${start}-${end}章${finalLabel}：必须写满“阶段目标、主要对手/压力、主角成长上限、地图/势力推进、爽点类型与频率、伏笔埋设/回收、重要支线收束、感情/关系变化、阶段结尾钩子、进入下一阶段条件”${finalRule}`);
   }
 
   return ranges;
@@ -1002,7 +1385,7 @@ function normalizeAiLongFormPlanResponse(response: Partial<StoredLongFormPlan>) 
     doNotChange: asTextList(response.doNotChange),
     doNotRevealEarly: asTextList(response.doNotRevealEarly),
     tagPromises: asTextList(response.tagPromises),
-    first10Chapters: asTextList(response.first10Chapters).slice(0, 12),
+    first10Chapters: normalizeOpeningBlueprintResponse(response.first10Chapters).slice(0, 12),
     first100Pacing: String(response.first100Pacing ?? "").trim(),
     post100Pacing: String(response.post100Pacing ?? "").trim(),
     progressionRules: asTextList(response.progressionRules)
@@ -1011,18 +1394,30 @@ function normalizeAiLongFormPlanResponse(response: Partial<StoredLongFormPlan>) 
 
 type AiLongFormPlanPayload = ReturnType<typeof normalizeAiLongFormPlanResponse>;
 
+type LongFormPlanRepairInput = {
+  context: LongFormPlanContext;
+  plan: AiLongFormPlanPayload;
+  issues: string[];
+};
+
 type LongFormPost100StageResponse = {
   stages?: Array<{
     range?: string;
     stageTarget?: string;
+    readerDesire?: string;
+    emotionCurve?: string;
     pressure?: string;
+    pressureLoop?: string;
     growthLimit?: string;
     mapAndForces?: string;
     payoffRhythm?: string;
+    rewardRotation?: string;
+    surpriseBeat?: string;
     foreshadowing?: string;
     sideClosure?: string;
     relationshipChange?: string;
     stageHook?: string;
+    cliffhangerEngine?: string;
     nextCondition?: string;
     body?: string;
   }>;
@@ -1031,25 +1426,112 @@ type LongFormPost100StageResponse = {
 
 type LongFormStageStructuredResponse = {
   first100Stages?: LongFormPost100StageResponse["stages"];
+  stages?: LongFormPost100StageResponse["stages"];
+  items?: LongFormPost100StageResponse["stages"];
+  list?: LongFormPost100StageResponse["stages"];
   first100Pacing?: string;
 };
 
 function buildLongFormPlanPromptContext(context: LongFormPlanContext) {
   return {
     projectName: context.projectName,
-    projectDescription: context.projectDescription,
+    projectDescription: cleanPromptText(context.projectDescription ?? "", 900),
     targetTotalWords: context.targetTotalWords,
     estimatedChapters: context.estimatedChapters,
-    bible: context.bible,
-    plotState: context.plotState,
-    characters: context.characters.slice(0, 8),
-    foreshadowings: context.foreshadowings.slice(0, 10),
+    bible: {
+      workType: cleanPromptText(context.bible.workType, 120),
+      targetReader: cleanPromptText(context.bible.targetReader, 120),
+      corePleasure: cleanPromptText(context.bible.corePleasure, 420),
+      protagonistDesire: cleanPromptText(context.bible.protagonistDesire, 260),
+      worldRules: cleanPromptText(context.bible.worldRules, 360),
+      goldenFingerRules: cleanPromptText(context.bible.goldenFingerRules, 360),
+      powerSystem: cleanPromptText(context.bible.powerSystem, 260),
+      narrativeTaboos: cleanPromptText(context.bible.narrativeTaboos, 300),
+      immutableSettings: cleanPromptText(context.bible.immutableSettings, 520),
+      styleGuide: cleanPromptText(context.bible.styleGuide, 220)
+    },
+    plotState: {
+      currentVolume: cleanPromptText(context.plotState.currentVolume, 120),
+      currentMap: cleanPromptText(context.plotState.currentMap, 120),
+      mainGoal: cleanPromptText(context.plotState.mainGoal, 220),
+      shortTermGoal: cleanPromptText(context.plotState.shortTermGoal, 220),
+      currentStage: cleanPromptText(context.plotState.currentStage, 260),
+      currentEnemy: cleanPromptText(context.plotState.currentEnemy, 160),
+      unresolvedQuestions: compactTextList(context.plotState.unresolvedQuestions, 6, 120),
+      openThreads: compactTextList(context.plotState.openThreads, 6, 120),
+      nextMilestones: compactTextList(context.plotState.nextMilestones, 5, 120),
+      nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 180),
+      powerSystemState: cleanPromptText(context.plotState.powerSystemState, 180),
+      mapAndForces: cleanPromptText(context.plotState.mapAndForces, 220),
+      resourceState: cleanPromptText(context.plotState.resourceState, 180),
+      relationshipChanges: compactTextList(context.plotState.relationshipChanges, 5, 120)
+    },
+    existingStoryProgress: context.existingStoryProgress
+      ? {
+          ...context.existingStoryProgress,
+          latestDraftEnding: cleanPromptText(context.existingStoryProgress.latestDraftEnding ?? "", 260),
+          recentLedgers: context.existingStoryProgress.recentLedgers.slice(-5).map((ledger) => ({
+            chapterNumber: ledger.chapterNumber,
+            title: cleanPromptText(ledger.title, 80),
+            events: compactTextList(ledger.events, 3, 100),
+            payoff: cleanPromptText(ledger.payoff, 120),
+            cliffhanger: cleanPromptText(ledger.cliffhanger, 140),
+            stateChanges: compactTextList(ledger.stateChanges, 3, 100),
+            carryOverTasks: compactTextList(ledger.carryOverTasks, 3, 100)
+          })),
+          establishedEvents: compactTextList(context.existingStoryProgress.establishedEvents, 10, 120),
+          establishedPayoffs: compactTextList(context.existingStoryProgress.establishedPayoffs, 8, 110),
+          establishedStateChanges: compactTextList(context.existingStoryProgress.establishedStateChanges, 8, 110),
+          currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 10, 130),
+          openCarryOverTasks: compactTextList(context.existingStoryProgress.openCarryOverTasks, 5, 110)
+        }
+      : null,
+    characters: context.characters.slice(0, 6).map((character) => ({
+      name: character.name,
+      identity: cleanPromptText(character.identity, 100),
+      currentGoal: cleanPromptText(character.currentGoal, 120),
+      relationshipToProtagonist: cleanPromptText(character.relationshipToProtagonist, 100),
+      attitude: cleanPromptText(character.attitude, 80),
+      currentState: cleanPromptText(character.currentState, 120)
+    })),
+    foreshadowings: context.foreshadowings.slice(0, 8).map((item) => ({
+      name: cleanPromptText(item.name, 90),
+      status: item.status,
+      plantedChapter: cleanPromptText(item.plantedChapter, 60),
+      expectedRevealChapter: cleanPromptText(item.expectedRevealChapter, 80),
+      hiddenInformation: cleanPromptText(item.hiddenInformation, 140),
+      revealMethod: cleanPromptText(item.revealMethod, 120)
+    })),
     storyReference: buildStoryReference(context.storyAnalysis)
   };
 }
 
 function normalizePost100StageText(value: unknown) {
   return cleanPromptText(String(value ?? ""), 520);
+}
+
+function removeNestedStageChapterReferences(value: string, allowedRange?: string) {
+  const allowed = allowedRange ? allowedRange.match(/第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章/)?.[0] : "";
+
+  return value
+    .replace(/第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章/g, (match) => {
+      if (allowed && match.replace(/\s+/g, "") === allowed.replace(/\s+/g, "")) {
+        return match;
+      }
+
+      return "本阶段";
+    })
+    .replace(/第\s*\d+\s*章(?:左右|前后)?/g, "本阶段某一节点")
+    .replace(/前\s*\d+\s*章/g, "前段")
+    .replace(/中\s*\d+\s*章/g, "中段")
+    .replace(/后\s*\d+\s*章/g, "后段")
+    .replace(/最后\s*\d+\s*章/g, "阶段末")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeStageFieldText(value: unknown, allowedRange?: string) {
+  return removeNestedStageChapterReferences(normalizePost100StageText(value), allowedRange);
 }
 
 function keywordTokensFromText(value: string) {
@@ -1104,25 +1586,31 @@ function buildPacingTextFromStages(response: LongFormPost100StageResponse, requi
     .map((stage, index) => {
       const requestedRange = requiredRanges[index]?.match(/第\d+-\d+章/)?.[0] ?? "";
       const aiRange = normalizePost100StageText(stage.range);
-      const range = requestedRange || (/\d+\s*-\s*\d+/.test(aiRange) ? aiRange : "") || `第${index + 1}阶段`;
+      const range = (/\d+\s*-\s*\d+/.test(aiRange) ? aiRange : "") || requestedRange || `第${index + 1}阶段`;
       const parts = [
         ["阶段目标", stage.stageTarget],
+        ["读者追问", stage.readerDesire],
+        ["情绪曲线", stage.emotionCurve],
         ["主要压力/对手", stage.pressure],
+        ["压制反击循环", stage.pressureLoop],
         ["成长上限", stage.growthLimit],
         ["地图/势力推进", stage.mapAndForces],
         ["爽点节奏", stage.payoffRhythm],
+        ["收益轮换", stage.rewardRotation],
+        ["反套路变局", stage.surpriseBeat],
         ["伏笔", stage.foreshadowing],
         ["支线收束", stage.sideClosure],
         ["关系变化", stage.relationshipChange],
         ["阶段钩子", stage.stageHook],
+        ["追读钩子引擎", stage.cliffhangerEngine],
         ["进入下一阶段条件", stage.nextCondition]
       ]
         .map(([label, value]) => {
-          const text = normalizePost100StageText(value);
+          const text = normalizeStageFieldText(value, range);
           return text ? `${label}：${text}` : "";
         })
         .filter(Boolean);
-      const body = normalizePost100StageText(stage.body);
+      const body = normalizeStageFieldText(stage.body, range);
       const detail = parts.length > 0 ? parts.join("；") : body;
 
       return detail ? `${range}：${detail}` : "";
@@ -1131,37 +1619,1480 @@ function buildPacingTextFromStages(response: LongFormPost100StageResponse, requi
     .join("\n");
 }
 
-function missingRequiredRanges(response: LongFormPost100StageResponse, requiredRanges: string[]) {
-  const stages = Array.isArray(response.stages) ? response.stages : [];
-
-  return requiredRanges.slice(stages.length);
-}
-
-function buildFirst100PacingFromResponse(response: LongFormStageStructuredResponse, estimatedChapters: number) {
-  const stages = Array.isArray(response.first100Stages) ? response.first100Stages : [];
-
-  if (stages.length === 0) {
-    return String(response.first100Pacing ?? "").trim();
-  }
-
+function buildRequiredFirst100PlanRanges(estimatedChapters: number) {
   const frontStageEnd = Math.min(100, estimatedChapters);
-  const requiredRanges = [];
-  const windowSize = frontStageEnd <= 40 ? 10 : 20;
+  const windowSize = 50;
+  const ranges = [];
 
   for (let start = 1; start <= frontStageEnd; start += windowSize) {
     const end = Math.min(start + windowSize - 1, frontStageEnd);
-    requiredRanges.push(`第${start}-${end}章`);
+    ranges.push(`第${start}-${end}章：必须写满阶段目标、读者追问、主要压力、压制反击循环、成长上限、地图/势力推进、爽点节奏、收益轮换、反套路变局、伏笔、支线收束、关系变化、阶段钩子、追读钩子引擎、进入下一阶段条件`);
   }
 
-  return buildPacingTextFromStages({ stages }, requiredRanges);
+  return ranges;
+}
+
+function structuredStagesFromFirst100Response(response: LongFormStageStructuredResponse) {
+  if (Array.isArray(response.first100Stages)) {
+    return response.first100Stages;
+  }
+
+  if (Array.isArray(response.stages)) {
+    return response.stages;
+  }
+
+  if (Array.isArray(response.items)) {
+    return response.items;
+  }
+
+  if (Array.isArray(response.list)) {
+    return response.list;
+  }
+
+  return [];
+}
+
+function buildFirst100PacingFromResponse(
+  response: LongFormStageStructuredResponse,
+  estimatedChapters: number,
+  plan: AiLongFormPlanPayload
+) {
+  const requiredRanges = buildRequiredFirst100PlanRanges(estimatedChapters);
+  const stages = structuredStagesFromFirst100Response(response);
+
+  if (stages.length > 0) {
+    return buildPacingTextFromStages(
+      { stages: normalizeLongFormStagesForRanges(stages, requiredRanges) },
+      requiredRanges
+    );
+  }
+
+  return String(response.first100Pacing ?? "").trim();
+}
+
+function compactLongFormPlanForRepair(plan: AiLongFormPlanPayload) {
+  return {
+    planningBasis: cleanPromptText(plan.planningBasis, 320),
+    corePromise: cleanPromptText(plan.corePromise, 420),
+    volumePlan: compactTextList(plan.volumePlan, 8, 240),
+    progressionPacing: compactTextList(plan.progressionPacing, 8, 180),
+    rewardPacing: compactTextList(plan.rewardPacing, 8, 180),
+    confirmedFacts: compactTextList(plan.confirmedFacts, 10, 150),
+    openQuestions: compactTextList(plan.openQuestions, 10, 150),
+    doNotChange: compactTextList(plan.doNotChange, 10, 150),
+    doNotRevealEarly: compactTextList(plan.doNotRevealEarly, 10, 150),
+    tagPromises: compactTextList(plan.tagPromises, 8, 120),
+    first10Chapters: compactTextList(plan.first10Chapters, 10, 180),
+    first100Pacing: cleanPromptText(plan.first100Pacing, 1800),
+    post100Pacing: cleanPromptText(plan.post100Pacing, 2400),
+    progressionRules: compactTextList(plan.progressionRules, 10, 170)
+  };
+}
+
+function compactLongFormPlanForStagePrompt(plan: AiLongFormPlanPayload) {
+  return {
+    planningBasis: cleanPromptText(plan.planningBasis, 260),
+    corePromise: cleanPromptText(plan.corePromise, 360),
+    volumePlan: compactTextList(plan.volumePlan, 6, 180),
+    progressionPacing: compactTextList(plan.progressionPacing, 8, 150),
+    rewardPacing: compactTextList(plan.rewardPacing, 8, 160),
+    confirmedFacts: compactTextList(plan.confirmedFacts, 10, 120),
+    openQuestions: compactTextList(plan.openQuestions, 10, 120),
+    doNotChange: compactTextList(plan.doNotChange, 10, 120),
+    doNotRevealEarly: compactTextList(plan.doNotRevealEarly, 10, 120),
+    tagPromises: compactTextList(plan.tagPromises, 8, 100),
+    first10Chapters: compactTextList(plan.first10Chapters, 10, 140),
+    progressionRules: compactTextList(plan.progressionRules, 10, 140)
+  };
+}
+
+function compactLongFormContextForDistantStage(context: ReturnType<typeof buildLongFormPlanPromptContext>) {
+  return {
+    projectName: context.projectName,
+    projectDescription: cleanPromptText(context.projectDescription, 240),
+    targetTotalWords: context.targetTotalWords,
+    estimatedChapters: context.estimatedChapters,
+    bible: {
+      workType: cleanPromptText(context.bible.workType, 80),
+      targetReader: cleanPromptText(context.bible.targetReader, 80),
+      corePleasure: cleanPromptText(context.bible.corePleasure, 180),
+      protagonistDesire: cleanPromptText(context.bible.protagonistDesire, 140),
+      immutableSettings: cleanPromptText(context.bible.immutableSettings, 180)
+    },
+    plotState: {
+      mainGoal: cleanPromptText(context.plotState.mainGoal, 140),
+      currentStage: cleanPromptText(context.plotState.currentStage, 120),
+      nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 120)
+    },
+    existingStoryProgress: context.existingStoryProgress
+      ? {
+          latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+          continuationChapterNumber: context.existingStoryProgress.continuationChapterNumber,
+          openCarryOverTasks: compactTextList(context.existingStoryProgress.openCarryOverTasks, 3, 90)
+        }
+      : null,
+    characters: context.characters.slice(0, 4),
+    foreshadowings: context.foreshadowings.slice(0, 4)
+  };
+}
+
+function chunkList<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
+function lastLongFormStageSnippet(value: string) {
+  const lines = value.split(/\n+/).map((line) => cleanPromptText(line, 260)).filter(Boolean);
+  return lines.at(-1) ?? cleanPromptText(value, 260);
+}
+
+function requiredRangeLabel(value: string) {
+  return value.match(/第\d+-\d+章/)?.[0] ?? cleanPromptText(value, 40);
+}
+
+function longFormStageRangeStart(value?: string) {
+  const match = String(value ?? "").match(/第\s*(\d+)\s*-\s*(?:第\s*)?\d+\s*章/);
+  const start = Number(match?.[1]);
+
+  return Number.isFinite(start) ? start : null;
+}
+
+function longFormStageRangeEnd(value?: string) {
+  const match = String(value ?? "").match(/第\s*\d+\s*-\s*(?:第\s*)?(\d+)\s*章/);
+  const end = Number(match?.[1]);
+
+  return Number.isFinite(end) ? end : null;
+}
+
+function longFormChapterRangesFromText(value: string) {
+  const normalized = value.replace(/[—–－~～至到]/g, "-");
+  const pattern = /第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g;
+
+  return Array.from(normalized.matchAll(pattern))
+    .map((match) => ({
+      start: Number(match[1]),
+      end: Number(match[2])
+    }))
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end));
+}
+
+function longFormTextCoversRequiredRanges(value: string, requiredRanges: string[]) {
+  const ranges = longFormChapterRangesFromText(value);
+
+  if (requiredRanges.length === 0) {
+    return true;
+  }
+
+  return requiredRanges.every((requiredRange) => {
+    const requiredStart = longFormStageRangeStart(requiredRange);
+
+    if (requiredStart === null) {
+      return true;
+    }
+
+    return ranges.some((range) =>
+      range.start === requiredStart || (range.start <= requiredStart && range.end >= requiredStart)
+    );
+  });
+}
+
+type LongFormStageItem = NonNullable<LongFormPost100StageResponse["stages"]>[number];
+
+const longFormStageRequiredFieldSpecs = [
+  { key: "stageTarget", label: "阶段目标" },
+  { key: "readerDesire", label: "读者追问" },
+  { key: "emotionCurve", label: "情绪曲线" },
+  { key: "pressure", label: "主要压力/对手" },
+  { key: "pressureLoop", label: "压制反击循环" },
+  { key: "growthLimit", label: "成长上限" },
+  { key: "mapAndForces", label: "地图/势力推进" },
+  { key: "payoffRhythm", label: "爽点节奏" },
+  { key: "rewardRotation", label: "收益轮换" },
+  { key: "surpriseBeat", label: "反套路变局" },
+  { key: "foreshadowing", label: "伏笔" },
+  { key: "sideClosure", label: "支线收束" },
+  { key: "relationshipChange", label: "关系变化" },
+  { key: "stageHook", label: "阶段钩子" },
+  { key: "cliffhangerEngine", label: "追读钩子引擎" },
+  { key: "nextCondition", label: "进入下一阶段条件" }
+] as const satisfies ReadonlyArray<{ key: keyof LongFormStageItem; label: string }>;
+
+const longFormStageRequiredFieldLabels = longFormStageRequiredFieldSpecs.map((field) => field.label);
+const longFormStageRequiredFieldNames = longFormStageRequiredFieldSpecs.map((field) => field.key).join(", ");
+
+function missingLongFormStageFieldLabels(stage?: LongFormStageItem | null) {
+  return longFormStageRequiredFieldSpecs
+    .filter(({ key }) => String(stage?.[key] ?? "").replace(/\s+/g, "").length < 4)
+    .map((field) => field.label);
+}
+
+const longFormStageRequiredTextFieldGroups = longFormStageRequiredFieldSpecs.map((field) =>
+  field.label === "主要压力/对手" ? ["主要压力/对手", "主要压力"] : [field.label]
+);
+
+function longFormStageTextChunksForGuard(value: string) {
+  const normalized = value.replace(/[—–－~～至到]/g, "-").trim();
+  const pattern = /第\s*(\d+)\s*-\s*(?:第\s*)?(\d+)\s*章/g;
+  const matches = Array.from(normalized.matchAll(pattern));
+
+  return matches.map((match, index) => {
+    const startIndex = match.index ?? 0;
+    const nextIndex = matches[index + 1]?.index ?? normalized.length;
+
+    return normalized.slice(startIndex, nextIndex).trim();
+  }).filter(Boolean);
+}
+
+function extractLongFormStageTextFieldForGuard(chunkText: string, labels: string[]) {
+  const body = chunkText
+    .replace(/^第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章(?:（[^）]*）)?[：:]?/, "")
+    .trim();
+  const fields = body.split(/[。；;\n]/).map((item) => item.trim()).filter(Boolean);
+
+  for (const field of fields) {
+    const match = field.match(/^([^：:]{2,18})[：:](.+)$/);
+    const fieldLabel = match?.[1]?.trim();
+
+    if (fieldLabel && labels.includes(fieldLabel)) {
+      return match?.[2]?.trim() ?? "";
+    }
+  }
+
+  return "";
+}
+
+function longFormTextHasRequiredStageFields(value: string) {
+  const chunks = longFormStageTextChunksForGuard(value);
+
+  if (chunks.length === 0) {
+    return false;
+  }
+
+  return chunks.every((chunk) =>
+    longFormStageRequiredTextFieldGroups.every((group) =>
+      extractLongFormStageTextFieldForGuard(chunk, group).replace(/\s+/g, "").length >= 4
+    )
+  );
+}
+
+function longFormTextHasValidAdjacentProgression(value: string) {
+  const chunks = longFormStageTextChunksForGuard(value);
+
+  for (let index = 1; index < chunks.length; index += 1) {
+    const previousStage = {
+      stageTarget: extractLongFormStageTextFieldForGuard(chunks[index - 1], ["阶段目标"]),
+      stageHook: extractLongFormStageTextFieldForGuard(chunks[index - 1], ["阶段钩子"]),
+      nextCondition: extractLongFormStageTextFieldForGuard(chunks[index - 1], ["进入下一阶段条件"])
+    };
+    const currentStage = {
+      stageTarget: extractLongFormStageTextFieldForGuard(chunks[index], ["阶段目标"]),
+      stageHook: extractLongFormStageTextFieldForGuard(chunks[index], ["阶段钩子"]),
+      nextCondition: extractLongFormStageTextFieldForGuard(chunks[index], ["进入下一阶段条件"])
+    };
+
+    if (longFormAdjacentStageIssue(previousStage, currentStage)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function normalizeLongFormStagesForRanges(
+  stages: LongFormPost100StageResponse["stages"],
+  requiredRanges: string[]
+) {
+  const aiStages = Array.isArray(stages) ? stages : [];
+  const usedIndexes = new Set<number>();
+
+  return aiStages.flatMap((stage, index) => {
+    const aiRangeStart = longFormStageRangeStart(stage.range);
+    let requiredIndex = aiRangeStart === null
+      ? -1
+      : requiredRanges.findIndex((range) => longFormStageRangeStart(range) === aiRangeStart);
+
+    if (requiredIndex < 0 || usedIndexes.has(requiredIndex)) {
+      requiredIndex = !usedIndexes.has(index)
+        ? index
+        : requiredRanges.findIndex((_, candidateIndex) => !usedIndexes.has(candidateIndex));
+    }
+
+    if (requiredIndex < 0 || usedIndexes.has(requiredIndex)) {
+      return [];
+    }
+
+    usedIndexes.add(requiredIndex);
+    const requiredRange = requiredRanges[requiredIndex] ?? String(stage.range ?? "");
+    const normalized = {
+      ...stage,
+      range: requiredRangeLabel(requiredRange),
+      stageTarget: normalizeStageFieldText(stage.stageTarget, requiredRangeLabel(requiredRange)),
+      readerDesire: normalizeStageFieldText(stage.readerDesire, requiredRangeLabel(requiredRange)),
+      emotionCurve: normalizeStageFieldText(stage.emotionCurve, requiredRangeLabel(requiredRange)),
+      pressure: normalizeStageFieldText(stage.pressure, requiredRangeLabel(requiredRange)),
+      pressureLoop: normalizeStageFieldText(stage.pressureLoop, requiredRangeLabel(requiredRange)),
+      growthLimit: normalizeStageFieldText(stage.growthLimit, requiredRangeLabel(requiredRange)),
+      mapAndForces: normalizeStageFieldText(stage.mapAndForces, requiredRangeLabel(requiredRange)),
+      payoffRhythm: normalizeStageFieldText(stage.payoffRhythm, requiredRangeLabel(requiredRange)),
+      rewardRotation: normalizeStageFieldText(stage.rewardRotation, requiredRangeLabel(requiredRange)),
+      surpriseBeat: normalizeStageFieldText(stage.surpriseBeat, requiredRangeLabel(requiredRange)),
+      foreshadowing: normalizeStageFieldText(stage.foreshadowing, requiredRangeLabel(requiredRange)),
+      sideClosure: normalizeStageFieldText(stage.sideClosure, requiredRangeLabel(requiredRange)),
+      relationshipChange: normalizeStageFieldText(stage.relationshipChange, requiredRangeLabel(requiredRange)),
+      stageHook: normalizeStageFieldText(stage.stageHook, requiredRangeLabel(requiredRange)),
+      cliffhangerEngine: normalizeStageFieldText(stage.cliffhangerEngine, requiredRangeLabel(requiredRange)),
+      nextCondition: normalizeStageFieldText(stage.nextCondition, requiredRangeLabel(requiredRange))
+    };
+
+    return [normalized];
+  });
+}
+
+function sortLongFormStagesByRequiredRanges<T extends { range?: string }>(
+  stages: T[],
+  requiredRanges: string[]
+) {
+  const order = new Map(
+    requiredRanges.map((range, index) => [longFormStageRangeStart(range), index])
+  );
+
+  return [...(Array.isArray(stages) ? stages : [])].sort((left, right) => {
+    const leftOrder = order.get(longFormStageRangeStart(left.range)) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = order.get(longFormStageRangeStart(right.range)) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder;
+  });
+}
+
+function missingLongFormRequiredRanges(
+  requiredRanges: string[],
+  stages: LongFormPost100StageResponse["stages"]
+) {
+  const coveredStarts = new Set(
+    (Array.isArray(stages) ? stages : [])
+      .map((stage) => longFormStageRangeStart(stage.range))
+      .filter((start): start is number => start !== null)
+  );
+
+  return requiredRanges.filter((range) => {
+    const start = longFormStageRangeStart(range);
+    return start !== null && !coveredStarts.has(start);
+  });
+}
+
+function compactLongFormStageForPrompt(stage?: LongFormStageItem | null) {
+  if (!stage) {
+    return null;
+  }
+
+  return {
+    range: cleanPromptText(String(stage.range ?? ""), 40),
+    stageTarget: cleanPromptText(String(stage.stageTarget ?? ""), 100),
+    readerDesire: cleanPromptText(String(stage.readerDesire ?? ""), 90),
+    emotionCurve: cleanPromptText(String(stage.emotionCurve ?? ""), 100),
+    pressure: cleanPromptText(String(stage.pressure ?? ""), 90),
+    pressureLoop: cleanPromptText(String(stage.pressureLoop ?? ""), 100),
+    mapAndForces: cleanPromptText(String(stage.mapAndForces ?? ""), 90),
+    stageHook: cleanPromptText(String(stage.stageHook ?? ""), 90),
+    nextCondition: cleanPromptText(String(stage.nextCondition ?? ""), 90)
+  };
+}
+
+function normalizeLongFormStageProgressionText(value: unknown) {
+  return String(value ?? "")
+    .replace(/第\s*\d+\s*-\s*(?:第\s*)?\d+\s*章/g, "")
+    .replace(/第\s*\d+\s*章(?:左右|前后)?/g, "")
+    .replace(/\d+/g, "")
+    .replace(/[，,。；;：:、（）()【】《》“”"'\s]/g, "")
+    .replace(/(?:本阶段|阶段|目标|主角|女主|男主|继续|逐步|完成|推进|进入|开启|触发|准备|处理|解决)/g, "")
+    .trim();
+}
+
+function longFormTextBigramSet(value: string) {
+  const normalized = normalizeLongFormStageProgressionText(value);
+  const grams = new Set<string>();
+
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    grams.add(normalized.slice(index, index + 2));
+  }
+
+  return grams;
+}
+
+function longFormStageProgressionSimilarity(left: unknown, right: unknown) {
+  const leftSet = longFormTextBigramSet(String(left ?? ""));
+  const rightSet = longFormTextBigramSet(String(right ?? ""));
+  const baseSize = Math.min(leftSet.size, rightSet.size);
+
+  if (baseSize < 6) {
+    return 0;
+  }
+
+  let overlap = 0;
+  leftSet.forEach((gram) => {
+    if (rightSet.has(gram)) {
+      overlap += 1;
+    }
+  });
+
+  return overlap / baseSize;
+}
+
+function longFormStageOpensNewUnit(stage: LongFormStageItem) {
+  return /进入|开启|转入|切换|入口|下一(?:阶段|卷|单元|主案|地图)|新(?:阶段|卷|单元|主案|地图)|触发/.test(
+    `${stage.stageHook ?? ""} ${stage.nextCondition ?? ""}`
+  );
+}
+
+function longFormStageStartsWithClosure(stage: LongFormStageItem) {
+  return /^(收束|结案|完结|扳倒|彻底|最终|定罪|伏法|平定|覆灭|一网打尽|洗冤)/.test(
+    String(stage.stageTarget ?? "").trim()
+  );
+}
+
+function longFormStageIsTerminal(stage: LongFormStageItem) {
+  const text = [
+    stage.range,
+    stage.stageTarget,
+    stage.stageHook,
+    stage.nextCondition
+  ].join(" ");
+
+  return /剩余结尾|终局|终章|全书|完结|结局|无下一阶段|主线已闭合|主线收束/.test(text);
+}
+
+function longFormAdjacentStageIssue(previousStage: LongFormStageItem, currentStage: LongFormStageItem) {
+  if (
+    previousStage.stageTarget &&
+    currentStage.stageTarget &&
+    longFormStageProgressionSimilarity(previousStage.stageTarget, currentStage.stageTarget) >= 0.78
+  ) {
+    return "当前阶段目标与上一阶段过于接近，必须改成递进关系，不得复写同一主案、对手组合和收束动作。";
+  }
+
+  if (
+    !longFormStageIsTerminal(currentStage) &&
+    longFormStageOpensNewUnit(previousStage) &&
+    longFormStageStartsWithClosure(currentStage)
+  ) {
+    return "上一阶段已经开启下一单元，本阶段不能直接写收束、结案或扳倒，必须先建立新压力、新规则或新目标。";
+  }
+
+  return "";
+}
+
+async function requestLongFormPlanJson<T>(stepName: string, request: AiJsonRequest) {
+  try {
+    return await requestAiJson<T>(request);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "AI JSON 请求失败";
+    throw new Error(`${stepName}失败：${message}`);
+  }
+}
+
+function longFormFinalStageClosureIssue(stage?: LongFormStageItem | null) {
+  if (!stage) {
+    return "";
+  }
+
+  const finalText = longFormStageRequiredFieldSpecs
+    .map(({ key }) => String(stage[key] ?? ""))
+    .join(" ");
+  const transitionText = [
+    stage.stageTarget,
+    stage.stageHook,
+    stage.nextCondition
+  ].join(" ");
+  const opensNewMainUnit =
+    /进入|开启|转入|切换|入口|下一(?:阶段|卷|单元|主案|地图|世界)|新(?:阶段|卷|单元|主案|地图|世界)|触发/.test(transitionText) &&
+    !/开放式结局|续作|番外|余波/.test(transitionText);
+  const hasClosure =
+    /全书|终局|完结|结局|收束|闭环|回收|落定|最终抉择|阶段余波|主线[^。；\n]{0,16}(?:完成|收束|闭环)|核心[^。；\n]{0,16}(?:回收|落定)/.test(finalText);
+
+  if (opensNewMainUnit || !hasClosure) {
+    return "终局阶段必须收束全书主线、回收核心伏笔并给出余波，不能继续开启新阶段、新主案或新入口。";
+  }
+
+  return "";
+}
+
+function longFormFinalStageTextClosureIssue(value: string) {
+  const chunks = longFormStageTextChunksForGuard(value);
+  const finalStageText = chunks.at(-1) ?? "";
+
+  if (!finalStageText) {
+    return "缺少终局阶段。";
+  }
+
+  const finalTarget = extractLongFormStageTextFieldForGuard(finalStageText, ["阶段目标"]);
+  const finalHook = extractLongFormStageTextFieldForGuard(finalStageText, ["阶段钩子"]);
+  const finalNext = extractLongFormStageTextFieldForGuard(finalStageText, ["进入下一阶段条件"]);
+  const finalText = `${finalStageText}`;
+  const transitionText = `${finalTarget} ${finalHook} ${finalNext}`;
+  const opensNewMainUnit =
+    /进入|开启|转入|切换|入口|下一(?:阶段|卷|单元|主案|地图|世界)|新(?:阶段|卷|单元|主案|地图|世界)|触发/.test(transitionText) &&
+    !/开放式结局|续作|番外|余波/.test(transitionText);
+  const hasClosure =
+    /全书|终局|完结|结局|收束|闭环|回收|落定|最终抉择|阶段余波|主线[^。；\n]{0,16}(?:完成|收束|闭环)|核心[^。；\n]{0,16}(?:回收|落定)/.test(finalText);
+
+  if (opensNewMainUnit || !hasClosure) {
+    return "终局阶段必须收束全书主线、回收核心伏笔并给出余波，不能继续开启新阶段、新主案或新入口。";
+  }
+
+  return "";
+}
+
+async function repairLongFormStageWithAi(input: {
+  stepName: string;
+  promptContext: ReturnType<typeof buildLongFormPlanPromptContext>;
+  plan: AiLongFormPlanPayload;
+  requiredRange: string;
+  rejectedStage?: LongFormStageItem | null;
+  previousStage?: LongFormStageItem | null;
+  nextStage?: LongFormStageItem | null;
+  missingFields?: string[];
+  issue?: string;
+  antiPrematureSpecificsRules: string[];
+  storyModeRules: string[];
+  finalStage?: boolean;
+  maxFieldChars?: number;
+}) {
+  const response = await requestLongFormPlanJson<LongFormPost100StageResponse>(input.stepName, {
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是长篇网文阶段规划修复师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只重写一个指定阶段，不能改写其他阶段。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            context: compactLongFormContextForDistantStage(input.promptContext),
+            planCore: compactLongFormPlanForStagePrompt(input.plan),
+            requiredRange: input.requiredRange,
+            previousStage: compactLongFormStageForPrompt(input.previousStage),
+            rejectedStage: compactLongFormStageForPrompt(input.rejectedStage),
+            nextStage: compactLongFormStageForPrompt(input.nextStage),
+            missingFields: input.missingFields ?? [],
+            issue: input.issue ?? "",
+            rules: [
+              "只重写 requiredRange 对应的1个阶段；range 必须原样使用 requiredRange 的章节范围。",
+              `必须填写全部字段：${longFormStageRequiredFieldLabels.join("、")}。`,
+              input.missingFields && input.missingFields.length > 0
+                ? `当前缺失字段必须补齐：${input.missingFields.join("、")}。`
+                : "",
+              input.issue ? `当前不合格原因：${input.issue}` : "",
+              "必须保留本书题材、项目事实、历史锁和整体卷纲方向；只能修复本阶段字段完整性、情绪曲线、收益轮换或阶段衔接。",
+              "不得复制 previousStage 或 rejectedStage 的完整阶段目标、主案、对手组合、收束动作和阶段钩子。",
+              "除 range 字段外，其他字段禁止出现具体章节号、细分章段或“第X章/第X-Y章/第X章左右”；只能用前段、中段、后段、阶段末描述大阶段节奏。",
+              "不能只写任务流程；必须有读者追问、情绪曲线、压制反击、收益轮换、反套路变局、支线收束、关系变化和追读钩子。",
+              "凡是 openQuestions、doNotRevealEarly 或待确认事项，只能写成压力、伏笔、可能方向或待作者确认，不能写成确定结果。",
+              input.finalStage
+                ? "这是全书终局/剩余结尾阶段：必须收束全书主线、回收核心伏笔、给出阶段余波；stageHook 只能写余波/情绪回响/开放式结局或番外可能；nextCondition 必须写“无下一阶段，全书主线已闭合，只保留余波或番外空间”；禁止开启新阶段、新主案、新入口或新长期承诺。"
+                : "",
+              ...input.antiPrematureSpecificsRules,
+              ...input.storyModeRules,
+              `每个字段不超过${input.maxFieldChars ?? 50}字，不要在字段中换行。`
+            ].filter(Boolean),
+            outputSchema: {
+              stages: `array，恰好1项；字段：range, ${longFormStageRequiredFieldNames}`
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.14,
+    maxTokens: 1800,
+    timeoutMs: 120000
+  });
+  const repairedStage = normalizeLongFormStagesForRanges(response.stages, [input.requiredRange])[0] ?? null;
+
+  return {
+    stage: repairedStage,
+    usage: getAiTokenUsage(response)
+  };
 }
 
 export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
   const planningGuardRules = buildLongFormPlanningGuardRules(context);
+  const storyModeRules = buildLongFormStoryModeRules(context);
   const projectFactGuardRules = buildProjectFactGuardRules(context);
+  const antiPrematureSpecificsRules = [
+    "除非项目事实源明确出现，不得凭空创造具体组织名、门派名、朝代源头、神魔实体、末世预言、政府秘密机构、AI核心、DNA/血脉答案、未来自己/平行世界/意识体等终局解释。",
+    "远期组织、门派、山庄、系统、遗迹、机构、反派代号和终局据点若非事实源已有，不要临场起专名；先写功能占位，等正文或作者确认后再命名。",
+    "不得把“符号/梦境/穿越/现实异常/核心机制/幕后力量”写成“为、代表、对应、标识、标记、暗号、编号、接口、bug、坐标”等确定定义；只能写成疑似线索、阶段误判、表层用途或待确认方向。",
+    "不得把穿越、梦境、现实异常、符号或幕后力量写成“实验、筛选、选中、操控、利用主角”等确定机制；除非事实源已明确，否则只能写待确认机制伏笔。",
+    "远期阶段可以使用功能占位：未知上层势力、疑似幕后势力、符号相关势力、现实异常、待确认机制、终局压力；不要把这些占位命名成确定答案。",
+    "符号、梦境、穿越、现实异常、幕后力量和终局解释只能逐层制造压力与伏笔；不得在卷纲、阶段目标、伏笔或收益中提前写成完整答案。"
+  ];
   const post100RequiredRanges = buildRequiredPost100PlanRanges(context.estimatedChapters);
+  const first100RequiredRanges = buildRequiredFirst100PlanRanges(context.estimatedChapters);
   const frontStageEnd = Math.min(100, context.estimatedChapters);
+  const openingBlueprintStartChapter = context.existingStoryProgress?.continuationChapterNumber ?? 1;
+  const openingBlueprintEndChapter = openingBlueprintStartChapter + 9;
   const promptContext = buildLongFormPlanPromptContext(context);
+  const factLockResponse = await requestLongFormPlanJson<
+    Partial<
+      Pick<
+        StoredLongFormPlan,
+        | "planningBasis"
+        | "confirmedFacts"
+        | "openQuestions"
+        | "doNotChange"
+        | "doNotRevealEarly"
+        | "tagPromises"
+      >
+    >
+  >("长篇规划事实锁", {
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是长篇网文项目事实锁规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只负责从项目事实源中提炼事实锁、待确认点、禁止改写和禁止提前揭示边界；不得生成卷纲、前10章、前100章或后100章阶段。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            ...promptContext,
+            planningRules: [
+              "如果 existingStoryProgress 不为空，说明本项目已经生成过正文或章节台账；这些内容是历史锁，不是可重写素材。",
+              "existingStoryProgress.currentStatusLines 与最近章节台账代表当前状态，优先级高于较早章节里的阶段性结论；如果早期台账写过完成，但最近章节又出现继续追查、未收束、未兑现、逃脱、待确认等状态，confirmedFacts/doNotChange 只能写最近状态。",
+              "planningBasis 也必须遵守最近状态优先：不得写成“某阶段已收束/某人已认罪/已结案，但最近又潜逃/追捕”这类互相冲突的摘要；只能写“较早阶段曾有阶段性结论，最新状态仍需追查/追捕/收束”。",
+              "已有章节的事件、回报、人物关系、伏笔状态、最新正文结尾和未完成任务必须作为既成事实承接；不得重新安排、否定、跳过、改名、改变因果或把已完成事件写成未发生。",
+              "重新生成长篇规划时，只能优化 continuationChapterNumber 及之后的阶段节奏；之前章节只能摘要承认和回扣，不能反向改写。",
+              ...projectFactGuardRules,
+              "confirmedFacts/doNotChange 只能写正文、章节台账、创作圣经、人物档案、伏笔表明确确认的事实；任务卡计划、后续推测、未完成钩子里的死亡/身份/阵营/背叛/成婚/牺牲/终局，只能放入 openQuestions 或 doNotRevealEarly。",
+              "必须区分“线索载体已出现”和“线索内容已兑现”：如果纸条、口供、证词、留言、梦境提示、系统提示、地图、坐标或卷宗只写着某物/某人/某地/某结果，confirmedFacts 只能写“线索提示/声称/指向”，不能写成已找到、已获得、已确认、已击败、已晋升或已完成。",
+              "如果最近正文或章节台账显示某个阶段目标、对手处置、关键关系、奖励权限或资源收益仍未解决、未收束、未确认、未兑现，就不得写成“已完成/已解决/已确认/已获得/已晋升/已收束”等完成事实；只能写成当前压力、待确认项或后续目标。",
+              "不得把“所有角色/全部人物/主要角色/全员状态/全员性别/全员结局/全员阵营”等整体判断写入 confirmedFacts/doNotChange；只能逐个写已由人物档案或章节台账明确确认的角色事实。",
+              "为了保证 JSON 稳定，不要输出 Markdown、代码块、换行表格或超长单句；但不能为了变短而省略有效规划。每个阶段仍必须写清目标、压力、回报、收束、成长边界。",
+              "planningBasis 只说明规划依据、已有章节承接和篇幅判断，不要提前写出阶段答案。",
+              "不要把待确认角色结局、最终情感归属、真实动机、血脉身份、幕后真相、政权终局、死亡/成婚/复合/原谅/牺牲/下线/登基/继位等不可逆事项写死。",
+              "核心真相、特殊机制来源、幕后组织、终局解释、主角是否被选中、现实与异世界/副本/系统等多层关系，都属于未确认底牌；除非项目事实源已明确，否则只能写成疑似方向、压力、伏笔或待确认，不能写成“其实是/原来是/本质是/确定为/来自/目的是”。",
+              ...storyModeRules,
+              "本次只输出 planningBasis、confirmedFacts、openQuestions、doNotChange、doNotRevealEarly、tagPromises；不要输出 corePromise、volumePlan、progressionPacing、rewardPacing、progressionRules、first10Chapters、first100Pacing、post100Pacing。"
+            ],
+            outputSchema: {
+              planningBasis: "string，220字以内，说明事实源、已有章节承接、目标篇幅和分段依据",
+              confirmedFacts: "string[]，每项120字以内，最多10项；只写项目事实源明确且不冲突的事实",
+              openQuestions: "string[]，每项120字以内，最多8项；写未定、互相有张力或需要作者确认的方向",
+              doNotChange: "string[]，每项120字以内，最多10项；写后续规划和正文不得改写的核心事实",
+              doNotRevealEarly: "string[]，每项120字以内，最多8项；写前期不能提前揭开的底牌或终局信息",
+              tagPromises: "string[]，每项100字以内，最多8项；写题材标签、情绪卖点、读者期待必须兑现的承诺"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.22,
+    maxTokens: 2400,
+    timeoutMs: 180000
+  });
+
+  const factLockPlan = normalizeAiLongFormPlanResponse(factLockResponse);
+  const readerEngineResponse = await requestLongFormPlanJson<
+    Partial<Pick<StoredLongFormPlan, "corePromise" | "rewardPacing" | "progressionRules">>
+  >("长篇规划读者引擎", {
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是长篇网文读者追读引擎规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只负责建立核心承诺、收益轮换和后续任务卡硬规则，防止章节按流程推进、缺少爽点和追读欲。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            context: promptContext,
+            factLock: compactLongFormPlanForStagePrompt(factLockPlan),
+	            rules: [
+	              "核心承诺必须贴合本书题材、主角处境、世界规则、人物关系和已有章节；不能写成通用套话。",
+	              "读者引擎必须包含：读者追问、情绪曲线、压制反击循环、可见外部回报、反套路变局、追读钩子。",
+	              "必须写清长期情绪曲线：哪些阶段负责憋屈/紧张/心疼/心动/期待，哪些节点还债解气，哪些节点让收益带来新代价或余波。",
+              "不能把爽点长期等同于拿线索、查资料、换地点、解碎片；收益必须轮换资源、权限、地位/名声、关系站队、对手代价、公开反馈、选择权或阶段结论。",
+              "任何题材都可以释放爽点，但必须按作品机制表达：被轻视后反击、误判推翻、能力局部曝光、资源/权限获取、危机反转、众人震惊、情绪补偿、地位提升、复仇推进、信息差反杀、关系站队变化。",
+              "progressionRules 必须能被后续任务卡直接执行，必须包含避免流程化、信息化、按部就班的读者体验约束。",
+              "连续2章信息获取后，下一章必须转入对抗、公开反馈、关系变化、资源兑现、责任归属、选择代价或阶段结论之一；不能无限延长查证流程。",
+              "不要输出“每案不得超过N章/必须N章内结案”这类硬章数规则；已有正文进度可能已超过理想节奏，只能写成尽快收束、补足情绪兑现、进入下一地图/单元的柔性节奏建议。",
+              "凡是 factLock.openQuestions 或 factLock.doNotRevealEarly 中的事项，只能写成压力、伏笔、可能方向或待作者确认，不能写成确定答案。",
+              ...antiPrematureSpecificsRules,
+              ...storyModeRules,
+              ...planningGuardRules,
+              "本次只输出 corePromise、rewardPacing、progressionRules；不要输出事实锁、卷纲、前10章、前100章或后100章阶段。"
+            ],
+	            outputSchema: {
+	              corePromise: "string，360字以内，说明核心承诺、长期爽点循环、读者追问、情绪曲线、情绪补偿、追读钩子引擎和终局承诺边界",
+	              rewardPacing: "string[]，每项170字以内，最多8项；必须写清小/中/大收益频率、情绪债、还债节点、收益轮换、外部反馈、出现条件、兑现方式和限制",
+	              progressionRules: "string[]，每项150字以内，最多10项；必须是后续任务卡可执行的硬规则，包含避免流程化和连续查证的约束"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.22,
+    maxTokens: 2600,
+    timeoutMs: 180000
+  });
+
+  const readerEnginePlan = normalizeAiLongFormPlanResponse(readerEngineResponse);
+  const corePlanForStructure = normalizeAiLongFormPlanResponse({
+    ...factLockResponse,
+    ...readerEngineResponse
+  });
+  const structureResponse = await requestLongFormPlanJson<
+    Partial<Pick<StoredLongFormPlan, "volumePlan" | "progressionPacing">>
+  >("长篇规划卷纲阶梯", {
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是长篇网文卷纲与成长阶梯规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只负责生成全书卷纲和成长边界，不生成前10章、前100章或后100章详细阶段。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            context: promptContext,
+            corePlan: compactLongFormPlanForStagePrompt(corePlanForStructure),
+            rules: [
+              `系统已按目标总字数估算本书约 ${context.estimatedChapters} 章；卷纲必须按这个预计章数分段，不要假定一定会写到100章。`,
+              "如果 existingStoryProgress 不为空，已有章节是历史锁；卷纲必须承认既有事件和最新结尾，只能优化 continuationChapterNumber 及之后，不能改写、重演或否定前文。",
+              "如果原 first10Chapters 或前段阶段已经被实际正文推进到更后面，新的规划必须允许蓝图顺延；不得为了对齐原始章号而强行让后续任务卡重演前文。",
+              "volumePlan、first100Stages、post100Stages 三者后续必须互相一致：同一章节区间不能同时属于两个不同单元、不同卷或不同主案。",
+              "卷纲必须体现长期阶梯分配：第一卷只建立核心循环和前段成长，后续卷逐步消耗中段、高段、终局档位；除非用户明确要求快节奏，不要第一卷吃完多个核心档位。",
+	              "每卷必须写阶段范围、目标、读者追问、情绪曲线、主要压力、压制反击循环、成长上限、可见回报、反套路变局、伏笔/支线、关系变化和收束。",
+	              "每卷情绪曲线必须写清：前段欠什么情绪债，中段如何加压，后段如何还债，阶段尾声留下什么余波或新期待。",
+              "不能把卷纲写成“完成任务A -> 获得线索B -> 前往地点C”的流程清单；每卷必须体现人物对抗、规则限制、误判反转、关系站队、资源/权限变化、情绪补偿或公开反馈中的至少三类。",
+              "必须建立支线/配角弧线预算：每个主要阶段至少规划1-2条服务主线的配角弧线或暗线，不能成为无关番外。",
+              "如果作品存在任何成长阶梯，progressionPacing 必须写清当前阶段允许提升什么、不允许越过什么、什么情况允许例外。",
+              "凡是 openQuestions、doNotRevealEarly 或待确认事项，只能写成压力、伏笔、可能方向或待作者确认，不能写成确定结果。",
+              ...antiPrematureSpecificsRules,
+              ...storyModeRules,
+              "不要照搬拆书来源作品的人物、地点、专有设定、具体桥段；拆书只能作为商业节奏参考。",
+              "前10章蓝图、前100阶段和第101章后阶段会由后续 AI 请求单独生成；本次不要输出 first10Chapters、first100Pacing、first100Stages 或 post100Pacing。"
+            ],
+            outputSchema: {
+	              volumePlan: "string[]，每项220字以内，最多8项；每项包含阶段范围、目标、读者追问、情绪曲线、压力、压制反击循环、成长上限、回报、反套路变局、伏笔/支线、关系变化、收束",
+              progressionPacing: "string[]，每项170字以内，最多10项；写清成长边界、卡点、代价、阶段门槛和不能提前兑现的档位"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.22,
+    maxTokens: 3000,
+    timeoutMs: 180000
+  });
+
+  const initialPlan = normalizeAiLongFormPlanResponse({
+    planningBasis: factLockPlan.planningBasis,
+    confirmedFacts: factLockPlan.confirmedFacts,
+    openQuestions: factLockPlan.openQuestions,
+    doNotChange: factLockPlan.doNotChange,
+    doNotRevealEarly: factLockPlan.doNotRevealEarly,
+    tagPromises: factLockPlan.tagPromises,
+    corePromise: readerEnginePlan.corePromise,
+    rewardPacing: readerEnginePlan.rewardPacing,
+    progressionRules: readerEnginePlan.progressionRules,
+    volumePlan: structureResponse.volumePlan,
+    progressionPacing: structureResponse.progressionPacing
+  });
+  const openingBlueprintResponse = await requestLongFormPlanJson<Pick<StoredLongFormPlan, "first10Chapters">>(
+    "长篇规划续写10章蓝图",
+    {
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是长篇网文章节蓝图规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只负责生成连续10章写作蓝图，必须具体、可执行、有读者追读欲。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              ...promptContext,
+              planCore: compactLongFormPlanForStagePrompt(initialPlan),
+              targetChapterRange: `第${openingBlueprintStartChapter}-${openingBlueprintEndChapter}章`,
+	              rules: [
+	                `first10Chapters 字段必须恰好输出10项，并且每项开头必须依次是“第${openingBlueprintStartChapter}章：”到“第${openingBlueprintEndChapter}章：”。`,
+                context.existingStoryProgress
+                  ? `已有第1-${context.existingStoryProgress.latestChapterNumber}章是历史锁；蓝图必须从第${openingBlueprintStartChapter}章续写，承接最新结尾和 carryOverTasks，不能要求任务卡重演前文、重回开局或改写已发生事件。`
+                  : "当前没有已写正文；蓝图按新书第1-10章开局处理，主要负责建立主角处境、关键机制、第一轮小收益、第一阶段压力和读者期待。",
+                "连续10章蓝图要服务当前阶段：承接上章压力、推进主线、释放小/中收益、安排反套路变局和章末行动压力；不要连续大突破，不要过早开大型副本替代核心承诺。",
+	                "每章都要写出小闭环：读者情绪目标 -> 压制/阻力 -> 主角可见行动 -> 小回报/状态变化 -> 下一步压力。",
+	                "连续10章必须形成情绪曲线：至少有2章欠债加压、2章小还债、1章阶段中回报或公开反馈，不能每章都平均推进。",
+                "至少2章包含配角或暗线节拍：配角提供阻力、帮忙、隐瞒、误导、付出代价、获得小高光或暴露秘密；必须说明如何服务主线。",
+                "不能把每章写成查资料/拿线索/去地点；每章至少落到人物态度、资源权限、关系站队、对手代价、公开反馈、选择权或阶段结论之一。",
+                "不要提前定性核心真相、特殊机制来源、幕后组织、终局解释或最终情感归属；只能埋伏笔、制造压力或保留疑似方向。",
+                ...antiPrematureSpecificsRules,
+                ...storyModeRules,
+                "每项180字以内，不要换行，不要输出字段解释。"
+              ],
+	              outputSchema: {
+	                first10Chapters:
+	                  `string[]，恰好10项；每项以第${openingBlueprintStartChapter}章至第${openingBlueprintEndChapter}章开头；每项写功能、读者情绪目标、压制/阻力、主角行动、小收益/状态变化、伏笔、关系变化、章末行动压力`
+              }
+            },
+            null,
+            2
+          )
+        }
+      ],
+      temperature: 0.22,
+      maxTokens: 3200,
+      timeoutMs: 180000
+    }
+  );
+  initialPlan.first10Chapters = normalizeOpeningBlueprintResponse(openingBlueprintResponse).slice(0, 12);
+
+  const first100Stages: NonNullable<LongFormPost100StageResponse["stages"]> = [];
+  const first100Usages: Array<AiTokenUsage | undefined> = [];
+
+  for (const requiredRange of first100RequiredRanges) {
+    const previousStage = first100Stages.length > 0
+      ? lastLongFormStageSnippet(buildPacingTextFromStages({ stages: first100Stages }, first100RequiredRanges))
+      : "";
+    const first100StageResponse = await requestLongFormPlanJson<LongFormStageStructuredResponse>(
+      "长篇规划前100阶段",
+      {
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是长篇网文前段阶段规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只写一个前段阶段，必须短而完整。"
+          },
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                ...promptContext,
+                planCore: compactLongFormPlanForStagePrompt(initialPlan),
+                previousStage,
+                requiredRange,
+                rules: [
+                  `本次只写 requiredRange 对应的1个阶段；frontStageEnd=${frontStageEnd}。不要输出其他阶段。`,
+                  "range 必须原样使用 requiredRange 的章节范围。",
+                  "如果 existingStoryProgress 不为空，已有章节是历史锁；阶段规划必须承认既有事件和最新结尾，只能优化 continuationChapterNumber 及之后，不能改写、重演或否定前文。",
+                  context.existingStoryProgress
+                    ? `已有正文已写到第${context.existingStoryProgress.latestChapterNumber}章，续写点是第${context.existingStoryProgress.continuationChapterNumber}章；覆盖已写章节的阶段只能摘要历史已发生/当前遗留压力，不能把已写章节重新规划成未来任务。`
+                    : "",
+                  "阶段必须与 volumePlan 的卷/主案范围一致；后续卷名、后续主案或后续单元不得提前塞进本阶段，除非 volumePlan 明确本阶段已经开始。",
+                  previousStage
+                    ? "如果 previousStage 的阶段末已经开启下一阶段/新单元/新地图，本阶段开头必须先建立新压力、新规则、新目标或新关系结构，不能直接写收束、结案、扳倒或终局。"
+                    : "",
+                  "必须填写 stageTarget、readerDesire、emotionCurve、pressure、pressureLoop、growthLimit、mapAndForces、payoffRhythm、rewardRotation、surpriseBeat、foreshadowing、sideClosure、relationshipChange、stageHook、cliffhangerEngine、nextCondition。",
+                  "除 range 字段外，其他字段禁止出现具体章节号、细分章段或“第X章/第X-Y章/第X章左右”；只能用前段、中段、后段、阶段末描述大阶段节奏。",
+                  "具体连续章节安排只属于 first10Chapters 或后续任务卡；first100Stages 只写大阶段，不写微型章节排期。",
+                  "emotionCurve 写清情绪债、加压方式、还债节点和余波；不能只写制造情绪。",
+                  "不能只写任务流程；必须有读者追问、压制反击、收益轮换、反套路变局和章末压力。",
+                  "rewardRotation 必须轮换外部回报：资源、权限、地位、关系站队、对手代价、公开反馈、选择权或阶段结论；不能长期只写信息、线索、碎片、地图或道具。",
+                  "凡是 openQuestions、doNotRevealEarly 或待确认事项，只能写成压力、伏笔、可能方向或待作者确认，不能写成确定结果。",
+                  ...antiPrematureSpecificsRules,
+                  ...storyModeRules,
+                  "每个字段35-70字，不要在字段中换行。"
+                ],
+                outputSchema: {
+                  first100Stages:
+                    "array，恰好1项；字段：range, stageTarget, readerDesire, emotionCurve, pressure, pressureLoop, growthLimit, mapAndForces, payoffRhythm, rewardRotation, surpriseBeat, foreshadowing, sideClosure, relationshipChange, stageHook, cliffhangerEngine, nextCondition"
+                }
+              },
+              null,
+              2
+            )
+          }
+        ],
+        temperature: 0.18,
+        maxTokens: 2200,
+        timeoutMs: 120000
+      }
+    );
+    first100Usages.push(getAiTokenUsage(first100StageResponse));
+    first100Stages.push(
+      ...normalizeLongFormStagesForRanges(
+        structuredStagesFromFirst100Response(first100StageResponse),
+        [requiredRange]
+      )
+    );
+  }
+
+  let missingFirst100Ranges = missingLongFormRequiredRanges(first100RequiredRanges, first100Stages);
+
+  if (missingFirst100Ranges.length > 0) {
+    const previousStage = lastLongFormStageSnippet(buildPacingTextFromStages({ stages: first100Stages }, first100RequiredRanges));
+    let supplementResponse: LongFormStageStructuredResponse | null = null;
+
+    try {
+      supplementResponse = await requestLongFormPlanJson<LongFormStageStructuredResponse>("长篇规划前100缺段补齐", {
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是长篇网文前段阶段补写师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只补齐缺失的前100阶段，字段必须完整。"
+          },
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                ...promptContext,
+                planCore: compactLongFormPlanForStagePrompt(initialPlan),
+                previousStage,
+                requiredRanges: missingFirst100Ranges,
+                rules: [
+                  "只补 requiredRanges 中列出的阶段，不要重写已有阶段。",
+                  "first100Stages 数组必须与 requiredRanges 一一对应。",
+                  "range 必须原样使用 requiredRanges 对应的章节范围。",
+                  "如果 existingStoryProgress 不为空，已有章节是历史锁；覆盖已写章节的阶段只能摘要历史已发生/当前遗留压力，不能把已写章节重新规划成未来任务。",
+                  "阶段必须与 volumePlan 的卷/主案范围一致；后续卷名、后续主案或后续单元不得提前塞进本阶段，除非 volumePlan 明确本阶段已经开始。",
+                  `必须填写全部字段：${longFormStageRequiredFieldLabels.join("、")}。`,
+                  "除 range 字段外，其他字段禁止出现具体章节号、细分章段或“第X章/第X-Y章/第X章左右”；只能用前段、中段、后段、阶段末描述大阶段节奏。",
+                  "不能只写任务流程；必须有读者追问、情绪曲线、压制反击、收益轮换、反套路变局、支线收束、关系变化和追读钩子。",
+                  "凡是 openQuestions、doNotRevealEarly 或待确认事项，只能写成压力、伏笔、可能方向或待作者确认，不能写成确定结果。",
+                  ...antiPrematureSpecificsRules,
+                  ...storyModeRules,
+                  "每个字段35-70字，不要在字段中换行。"
+                ],
+                outputSchema: {
+                  first100Stages:
+                    `array；每个 requiredRanges 对应1项；字段：range, ${longFormStageRequiredFieldNames}`
+                }
+              },
+              null,
+              2
+            )
+          }
+        ],
+        temperature: 0.16,
+        maxTokens: Math.min(2600, Math.max(1200, missingFirst100Ranges.length * 900)),
+        timeoutMs: 120000
+      });
+      first100Usages.push(getAiTokenUsage(supplementResponse));
+    } catch (error) {
+      console.warn("长篇规划前100缺段补齐 AI 生成失败，等待最终缺段校验", error);
+    }
+
+    first100Stages.push(
+      ...normalizeLongFormStagesForRanges(
+        structuredStagesFromFirst100Response(supplementResponse ?? {}),
+        missingFirst100Ranges
+      )
+    );
+    missingFirst100Ranges = missingLongFormRequiredRanges(first100RequiredRanges, first100Stages);
+  }
+
+  if (missingFirst100Ranges.length > 0) {
+    throw new Error(
+      `长篇规划前100阶段失败：AI 未返回完整阶段范围，缺少 ${missingFirst100Ranges.map(requiredRangeLabel).join("、")}，请重新生成。`
+    );
+  }
+
+  const orderedFirst100Stages = sortLongFormStagesByRequiredRanges(first100Stages, first100RequiredRanges);
+  let first100FieldRepairCount = 0;
+
+  for (let index = 0; index < orderedFirst100Stages.length && first100FieldRepairCount < 6; index += 1) {
+    let currentStage = orderedFirst100Stages[index];
+    let missingFields = missingLongFormStageFieldLabels(currentStage);
+
+    if (missingFields.length === 0) {
+      continue;
+    }
+
+    const currentRange = currentStage.range || requiredRangeLabel(first100RequiredRanges[index] ?? "");
+
+    for (
+      let attempt = 0;
+      missingFields.length > 0 && attempt < 2 && first100FieldRepairCount < 6;
+      attempt += 1
+    ) {
+      try {
+        const repairResult = await repairLongFormStageWithAi({
+          stepName: "长篇规划前100阶段字段补齐",
+          promptContext,
+          plan: initialPlan,
+          requiredRange: currentRange,
+          rejectedStage: currentStage,
+          previousStage: orderedFirst100Stages[index - 1],
+          nextStage: orderedFirst100Stages[index + 1],
+          missingFields,
+          antiPrematureSpecificsRules,
+          storyModeRules,
+          maxFieldChars: 70
+        });
+
+        first100Usages.push(repairResult.usage);
+
+        if (repairResult.stage) {
+          currentStage = repairResult.stage;
+          orderedFirst100Stages[index] = repairResult.stage;
+          missingFields = missingLongFormStageFieldLabels(repairResult.stage);
+        }
+      } catch (error) {
+        console.warn("长篇规划前100阶段字段补齐 AI 生成失败，保留原阶段等待最终校验", error);
+      }
+
+      first100FieldRepairCount += 1;
+    }
+  }
+
+  const unrepairedFirst100Stage = orderedFirst100Stages
+    .map((stage) => ({ stage, missingFields: missingLongFormStageFieldLabels(stage) }))
+    .find((item) => item.missingFields.length > 0);
+
+  if (unrepairedFirst100Stage) {
+    throw new Error(
+      `长篇规划前100阶段字段补齐失败：${unrepairedFirst100Stage.stage.range || "某阶段"}仍缺少${unrepairedFirst100Stage.missingFields.join("、")}，请重新生成。`
+    );
+  }
+
+  let first100ProgressionRepairCount = 0;
+
+  for (let index = 1; index < orderedFirst100Stages.length && first100ProgressionRepairCount < 4; index += 1) {
+    const previousStage = orderedFirst100Stages[index - 1];
+    let currentStage = orderedFirst100Stages[index];
+    let issue = longFormAdjacentStageIssue(previousStage, currentStage);
+
+    if (!issue) {
+      continue;
+    }
+
+    const currentRange = currentStage.range || requiredRangeLabel(first100RequiredRanges[index] ?? "");
+
+    for (
+      let attempt = 0;
+      issue && attempt < 2 && first100ProgressionRepairCount < 4;
+      attempt += 1
+    ) {
+      try {
+        const repairResult = await repairLongFormStageWithAi({
+          stepName: "长篇规划前100阶段递进修复",
+          promptContext,
+          plan: initialPlan,
+          requiredRange: currentRange,
+          rejectedStage: currentStage,
+          previousStage,
+          nextStage: orderedFirst100Stages[index + 1],
+          missingFields: missingLongFormStageFieldLabels(currentStage),
+          issue,
+          antiPrematureSpecificsRules,
+          storyModeRules,
+          maxFieldChars: 70
+        });
+
+        first100Usages.push(repairResult.usage);
+
+        if (
+          repairResult.stage &&
+          missingLongFormStageFieldLabels(repairResult.stage).length === 0 &&
+          !longFormAdjacentStageIssue(previousStage, repairResult.stage)
+        ) {
+          orderedFirst100Stages[index] = repairResult.stage;
+          currentStage = repairResult.stage;
+          issue = "";
+          first100ProgressionRepairCount += 1;
+        }
+      } catch (error) {
+        console.warn("长篇规划前100阶段递进修复 AI 生成失败，保留原阶段等待最终校验", error);
+        break;
+      }
+    }
+  }
+
+  initialPlan.first100Pacing = buildPacingTextFromStages(
+    { stages: orderedFirst100Stages },
+    first100RequiredRanges
+  );
+  let post100Pacing = "";
+  let post100Usage: AiTokenUsage | undefined;
+
+  if (context.estimatedChapters > 100) {
+    const allPost100Stages: NonNullable<LongFormPost100StageResponse["stages"]> = [];
+    const post100Usages: Array<AiTokenUsage | undefined> = [];
+
+    for (const rangeBatch of chunkList(post100RequiredRanges, 1)) {
+      const previousStage = allPost100Stages.length > 0
+        ? lastLongFormStageSnippet(buildPacingTextFromStages({ stages: allPost100Stages }, post100RequiredRanges))
+        : lastLongFormStageSnippet(initialPlan.first100Pacing);
+      let post100Response: LongFormPost100StageResponse | null = null;
+
+      try {
+        post100Response = await requestLongFormPlanJson<LongFormPost100StageResponse>("长篇规划后100阶段", {
+          messages: [
+            {
+              role: "system",
+              content:
+                "你是长篇网文远期阶段规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只写一个远期阶段，必须短而完整。"
+            },
+            {
+              role: "user",
+              content: JSON.stringify(
+                {
+                  context: compactLongFormContextForDistantStage(promptContext),
+                  planCore: compactLongFormPlanForStagePrompt(initialPlan),
+                  previousStage,
+                  requiredRange: rangeBatch[0],
+                  rules: [
+                    "只写 requiredRange 对应的1个阶段，不要额外扩写。",
+	                    `必须填写全部字段：${longFormStageRequiredFieldLabels.join("、")}。`,
+                    "stageTarget 必须相对 previousStage 递进：更换主压力、阶段任务、地图/势力层级、情绪债或回报类型；禁止复用上一阶段的完整阶段目标、主案、对手组合和收束动作。",
+                    "如果 previousStage 已经写了进入下一阶段、新单元、新地图或切换入口，本阶段开头必须建立新阶段的压制和目标，不能直接写收束、结案、扳倒或终局。",
+                    "除 range 字段外，其他字段禁止出现具体章节号、细分章段或“第X章/第X-Y章/第X章左右”；只能用前段、中段、后段、阶段末描述大阶段节奏。",
+                    "具体连续章节安排只属于 first10Chapters 或后续任务卡；远期阶段只写大阶段，不写微型章节排期。",
+	                    "emotionCurve 写清本阶段先让读者憋屈/紧张/期待/心疼/心动中的哪一种，再如何加压、何处还债、阶段末留下什么新期待。",
+                    "不得把待确认事项写成确定结局；核心真相、机制来源、幕后组织、终局解释只保留为伏笔或压力。",
+                    ...antiPrematureSpecificsRules,
+                    ...storyModeRules,
+                    "不能只写任务流程；必须有读者追问、压制反击、收益轮换、反套路变局和章末压力。",
+                    "每个字段不超过45字。"
+                  ],
+	                  outputSchema: {
+	                    stages:
+	                    `array，恰好1项；字段：range, ${longFormStageRequiredFieldNames}`
+                  }
+                },
+                null,
+                2
+              )
+            }
+          ],
+          temperature: 0.18,
+          maxTokens: 1800,
+          timeoutMs: 120000
+        });
+        post100Usages.push(getAiTokenUsage(post100Response));
+      } catch (error) {
+        console.warn("长篇规划后100阶段 AI 生成失败，等待校验或AI修复处理", error);
+      }
+
+      const stages = normalizeLongFormStagesForRanges(post100Response?.stages, rangeBatch);
+      allPost100Stages.push(...stages);
+    }
+
+    let missingRanges = missingLongFormRequiredRanges(post100RequiredRanges, allPost100Stages);
+
+    if (missingRanges.length > 0) {
+      const previousStage = lastLongFormStageSnippet(buildPacingTextFromStages({ stages: allPost100Stages }, post100RequiredRanges));
+      let supplementResponse: LongFormPost100StageResponse | null = null;
+
+      try {
+        supplementResponse = await requestLongFormPlanJson<LongFormPost100StageResponse>("长篇规划后100缺段补齐", {
+          messages: [
+            {
+              role: "system",
+              content:
+                "你是长篇网文阶段规划补写师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只补齐缺失阶段，字段必须短。"
+            },
+            {
+              role: "user",
+              content: JSON.stringify(
+                {
+                  context: compactLongFormContextForDistantStage(promptContext),
+                  planCore: compactLongFormPlanForStagePrompt(initialPlan),
+                  previousStage,
+                  requiredRanges: missingRanges,
+                  rules: [
+                    "只补 requiredRanges 中列出的阶段，不要重写已有阶段。",
+                    "stages 数组必须与 requiredRanges 一一对应。",
+                    "补写阶段必须相对 previousStage 和相邻阶段递进，禁止复制相邻阶段的阶段目标、主案、对手组合和收束动作。",
+                    "除 range 字段外，其他字段禁止出现具体章节号、细分章段或“第X章/第X-Y章/第X章左右”；只能用前段、中段、后段、阶段末描述大阶段节奏。",
+                    `必须填写全部字段：${longFormStageRequiredFieldLabels.join("、")}。`,
+                    "每个字段不超过40字；不得提前定性核心真相；必须保留读者追问、情绪曲线、压制反击、收益轮换、支线收束、关系变化和章末压力。"
+                    , ...antiPrematureSpecificsRules,
+                    ...storyModeRules
+                  ],
+	                  outputSchema: {
+	                    stages:
+	                    `array；每个 requiredRanges 对应1项；字段：range, ${longFormStageRequiredFieldNames}`
+                  }
+                },
+                null,
+                2
+              )
+            }
+          ],
+          temperature: 0.16,
+          maxTokens: Math.min(2600, Math.max(1200, missingRanges.length * 500)),
+          timeoutMs: 120000
+        });
+        post100Usages.push(getAiTokenUsage(supplementResponse));
+      } catch (error) {
+        console.warn("长篇规划后100缺段补齐 AI 生成失败，等待校验或AI修复处理", error);
+      }
+
+      const stages = normalizeLongFormStagesForRanges(supplementResponse?.stages, missingRanges);
+      allPost100Stages.push(...stages);
+      missingRanges = missingLongFormRequiredRanges(post100RequiredRanges, allPost100Stages);
+
+      for (const missingRange of missingRanges) {
+        try {
+          const previousStage = lastLongFormStageSnippet(
+            buildPacingTextFromStages({ stages: allPost100Stages }, post100RequiredRanges)
+          );
+          const repairResult = await repairLongFormStageWithAi({
+            stepName: "长篇规划后100单段缺段补齐",
+            promptContext,
+            plan: initialPlan,
+            requiredRange: requiredRangeLabel(missingRange),
+            previousStage: previousStage
+              ? {
+                  range: "",
+                  stageTarget: previousStage,
+                  readerDesire: "",
+                  emotionCurve: "",
+                  pressure: "",
+                  pressureLoop: "",
+                  growthLimit: "",
+                  mapAndForces: "",
+                  payoffRhythm: "",
+                  rewardRotation: "",
+                  surpriseBeat: "",
+                  foreshadowing: "",
+                  sideClosure: "",
+                  relationshipChange: "",
+                  stageHook: "",
+                  cliffhangerEngine: "",
+                  nextCondition: ""
+                }
+              : null,
+            issue: "后100阶段缺少这个章节范围，请只补齐该阶段，不能本地兜底编剧情。",
+            antiPrematureSpecificsRules,
+            storyModeRules,
+            finalStage: longFormStageRangeEnd(missingRange) === context.estimatedChapters,
+            maxFieldChars: 50
+          });
+
+          post100Usages.push(repairResult.usage);
+
+          if (repairResult.stage) {
+            allPost100Stages.push(repairResult.stage);
+          }
+        } catch (error) {
+          console.warn("长篇规划后100单段缺段补齐 AI 生成失败，等待最终缺段校验", error);
+        }
+      }
+
+      missingRanges = missingLongFormRequiredRanges(post100RequiredRanges, allPost100Stages);
+
+      if (missingRanges.length > 0) {
+        throw new Error(
+          `长篇规划后100阶段失败：AI 未返回完整阶段范围，缺少 ${missingRanges.map(requiredRangeLabel).join("、")}，请重新生成。`
+        );
+      }
+    }
+
+    allPost100Stages.sort((left, right) => {
+      const leftStart = longFormStageRangeStart(left.range) ?? Number.MAX_SAFE_INTEGER;
+      const rightStart = longFormStageRangeStart(right.range) ?? Number.MAX_SAFE_INTEGER;
+      return leftStart - rightStart;
+    });
+
+    let post100FieldRepairCount = 0;
+
+    for (let index = 0; index < allPost100Stages.length && post100FieldRepairCount < 8; index += 1) {
+      let currentStage = allPost100Stages[index];
+      let missingFields = missingLongFormStageFieldLabels(currentStage);
+
+      if (missingFields.length === 0) {
+        continue;
+      }
+
+      const currentRange = currentStage.range || requiredRangeLabel(post100RequiredRanges[index] ?? "");
+
+      for (
+        let attempt = 0;
+        missingFields.length > 0 && attempt < 2 && post100FieldRepairCount < 8;
+        attempt += 1
+      ) {
+        try {
+          const repairResult = await repairLongFormStageWithAi({
+            stepName: "长篇规划后100阶段字段补齐",
+            promptContext,
+            plan: initialPlan,
+            requiredRange: currentRange,
+            rejectedStage: currentStage,
+            previousStage: allPost100Stages[index - 1],
+            nextStage: allPost100Stages[index + 1],
+            missingFields,
+            antiPrematureSpecificsRules,
+            storyModeRules,
+            maxFieldChars: 50
+          });
+
+          post100Usages.push(repairResult.usage);
+
+          if (repairResult.stage) {
+            currentStage = repairResult.stage;
+            allPost100Stages[index] = repairResult.stage;
+            missingFields = missingLongFormStageFieldLabels(repairResult.stage);
+          }
+        } catch (error) {
+          console.warn("长篇规划后100阶段字段补齐 AI 生成失败，保留原阶段等待最终校验", error);
+        }
+
+        post100FieldRepairCount += 1;
+      }
+    }
+
+    const unrepairedPost100Stage = allPost100Stages
+      .map((stage) => ({ stage, missingFields: missingLongFormStageFieldLabels(stage) }))
+      .find((item) => item.missingFields.length > 0);
+
+    if (unrepairedPost100Stage) {
+      throw new Error(
+        `长篇规划后100阶段字段补齐失败：${unrepairedPost100Stage.stage.range || "某阶段"}仍缺少${unrepairedPost100Stage.missingFields.join("、")}，请重新生成。`
+      );
+    }
+
+    let progressionRepairCount = 0;
+
+    for (let index = 1; index < allPost100Stages.length && progressionRepairCount < 4; index += 1) {
+      const previousStage = allPost100Stages[index - 1];
+      const currentStage = allPost100Stages[index];
+      const issue = longFormAdjacentStageIssue(previousStage, currentStage);
+
+      if (!issue) {
+        continue;
+      }
+
+      const currentRange = currentStage.range || post100RequiredRanges[index] || "";
+      let repairResponse: LongFormPost100StageResponse | null = null;
+
+      try {
+        repairResponse = await requestLongFormPlanJson<LongFormPost100StageResponse>("长篇规划后100阶段递进修复", {
+          messages: [
+            {
+              role: "system",
+              content:
+                "你是长篇网文远期阶段递进修复师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只重写一个指定阶段，不能改写其他阶段。"
+            },
+            {
+              role: "user",
+              content: JSON.stringify(
+                {
+                  context: compactLongFormContextForDistantStage(promptContext),
+                  planCore: compactLongFormPlanForStagePrompt(initialPlan),
+                  requiredRange: currentRange,
+                  previousStage: compactLongFormStageForPrompt(previousStage),
+                  rejectedStage: compactLongFormStageForPrompt(currentStage),
+                  nextStage: compactLongFormStageForPrompt(allPost100Stages[index + 1]),
+                  issue,
+                  rules: [
+                    "只重写 requiredRange 对应的1个阶段；range 必须原样使用 requiredRange。",
+                    "必须保留本书题材、项目事实和整体卷纲方向，但 stageTarget 必须相对 previousStage 递进。",
+                    "不得复制 previousStage 或 rejectedStage 的完整阶段目标、主案、对手组合、收束动作和阶段钩子。",
+                    "如果 previousStage 已经开启新阶段/新单元/新地图，本阶段必须先建立新压力、新规则、新目标或新关系结构，不能直接写收束、结案、扳倒或终局。",
+                    "除 range 字段外，其他字段禁止出现具体章节号、细分章段或“第X章/第X-Y章/第X章左右”；只能用前段、中段、后段、阶段末描述大阶段节奏。",
+                    `必须填写全部字段：${longFormStageRequiredFieldLabels.join("、")}。`,
+                    "每个字段不超过45字；不得提前定性核心真相；必须保留读者追问、情绪曲线、压制反击、收益轮换和章末压力。",
+                    ...antiPrematureSpecificsRules,
+                    ...storyModeRules
+                  ],
+                  outputSchema: {
+                    stages:
+                      `array，恰好1项；字段：range, ${longFormStageRequiredFieldNames}`
+                  }
+                },
+                null,
+                2
+              )
+            }
+          ],
+          temperature: 0.16,
+          maxTokens: 1800,
+          timeoutMs: 120000
+        });
+        post100Usages.push(getAiTokenUsage(repairResponse));
+      } catch (error) {
+        console.warn("长篇规划后100阶段递进修复 AI 生成失败，保留原阶段等待最终校验", error);
+      }
+
+      const repairedStages = normalizeLongFormStagesForRanges(repairResponse?.stages, [currentRange]);
+      const repairedStage = repairedStages[0];
+
+      if (
+        repairedStage &&
+        missingLongFormStageFieldLabels(repairedStage).length === 0 &&
+        !longFormAdjacentStageIssue(previousStage, repairedStage)
+      ) {
+        allPost100Stages[index] = repairedStage;
+        progressionRepairCount += 1;
+      }
+    }
+
+    const finalStageIndex = allPost100Stages.length - 1;
+    let finalStage = allPost100Stages[finalStageIndex];
+    let finalStageIssue = longFormFinalStageClosureIssue(finalStage);
+
+    for (let attempt = 0; finalStage && finalStageIssue && attempt < 3; attempt += 1) {
+      const currentRange = finalStage.range || requiredRangeLabel(post100RequiredRanges[finalStageIndex] ?? "");
+
+      try {
+        const repairResult = await repairLongFormStageWithAi({
+          stepName: "长篇规划终局阶段收束修复",
+          promptContext,
+          plan: initialPlan,
+          requiredRange: currentRange,
+          rejectedStage: finalStage,
+          previousStage: allPost100Stages[finalStageIndex - 1],
+          missingFields: missingLongFormStageFieldLabels(finalStage),
+          issue: `${finalStageIssue} 请把阶段钩子写成余波、开放式情绪回响或番外空间；进入下一阶段条件写成“全书主线收束完成，进入结局余波/番外可能”，不得写开启新单元、新主案、新入口。`,
+          antiPrematureSpecificsRules,
+          storyModeRules,
+          finalStage: true,
+          maxFieldChars: 50
+        });
+
+        post100Usages.push(repairResult.usage);
+
+        if (repairResult.stage && missingLongFormStageFieldLabels(repairResult.stage).length === 0) {
+          allPost100Stages[finalStageIndex] = repairResult.stage;
+          finalStage = repairResult.stage;
+          finalStageIssue = longFormFinalStageClosureIssue(repairResult.stage);
+        }
+      } catch (error) {
+        console.warn("长篇规划终局阶段收束修复 AI 生成失败，保留原阶段等待最终校验", error);
+        break;
+      }
+    }
+
+    if (finalStage && finalStageIssue) {
+      throw new Error(`长篇规划终局阶段收束修复失败：${finalStage.range || "终局阶段"}仍未收束全书主线，请重新生成。`);
+    }
+
+    post100Usage = combineAiTokenUsages(post100Usages);
+    post100Pacing = buildPacingTextFromStages({ stages: allPost100Stages }, post100RequiredRanges);
+  }
+
+  const combinedPlan = {
+    ...initialPlan,
+    post100Pacing
+  };
+  const usage = combineAiTokenUsages([
+    getAiTokenUsage(factLockResponse),
+    getAiTokenUsage(readerEngineResponse),
+    getAiTokenUsage(structureResponse),
+    getAiTokenUsage(openingBlueprintResponse),
+    combineAiTokenUsages(first100Usages),
+    post100Usage
+  ]);
+
+  return attachAiTokenUsage(combinedPlan, usage ?? getAiTokenUsage(factLockResponse));
+}
+
+export async function repairLongFormPlanWithAi(input: LongFormPlanRepairInput) {
+  const storyModeRules = buildLongFormStoryModeRules(input.context);
   const response = await requestAiJson<
     Partial<
       Pick<
@@ -1177,66 +3108,82 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
         | "doNotRevealEarly"
         | "tagPromises"
         | "first10Chapters"
+        | "first100Pacing"
+        | "post100Pacing"
         | "progressionRules"
       >
-    > &
-      LongFormStageStructuredResponse
+    >
   >({
     messages: [
       {
         role: "system",
         content:
-          "你是长篇网文总纲规划师。请严格输出 JSON。你的任务是在正文正式连续生成前，为新书制定“长篇规划 / 长期成长节奏规划”，防止 AI 越写越偏、升级过快、地图乱开、支线吞主线。规划必须通用，不能针对某个题材硬编码；如果作品存在能力、资源、地位、关系、权限、地图、势力或认知成长体系，必须按预计篇幅预算小台阶和大阶段。"
+          "你是长篇规划纠偏编辑。请严格输出 JSON。你的任务不是重做新书，而是在保留已有历史锁、项目事实、读者引擎和整体篇幅的前提下，修复一版长篇规划中的硬伤：核心真相提前写死、阶段范围错位、收益节奏流程化。不能新增题材模板，不能改写已发生章节。"
       },
       {
         role: "user",
         content: JSON.stringify(
           {
-            ...promptContext,
-            planningRules: [
-              "先提炼本书的核心承诺：主角靠什么获得成长、读者期待反复看到什么、主线最终要兑现什么。",
-              ...projectFactGuardRules,
-              "如果 projectDescription 或 bible 中列出了等级、阈值、奖励、职位、地图、势力、关系、权限、目标清单，必须先判断它是长期规则表、阶段目标表还是当前章节任务；默认按长期规则表处理，不能直接变成第一卷进度。",
-              "如果作品存在任何成长阶梯，必须把“当前阶段允许提升什么、不允许越过什么、什么情况允许例外”写进 progressionPacing。",
-              "volumePlan 必须体现“长期阶梯分配”：第一卷只建立核心循环和前段成长，后续卷逐步消耗中段、高段、终局档位；除非用户明确要求快节奏，不要第一卷吃完多个核心档位。",
-              "为了保证 JSON 稳定，不要输出 Markdown、代码块、换行表格或超长单句；但不能为了变短而省略有效规划。每个阶段仍必须写清目标、压力、回报、收束、成长边界。",
-              "质量优先：阶段规划必须贴合本书设定、主角成长、地图/势力/关系/伏笔，不要写成通用套话；如果信息多，用短句和分号拆开，不要压缩成空泛概括。",
-              "全书阶段节奏不能写成一句话梗概。每个阶段必须至少包含：阶段目标、主要压力/对手、主角成长上限、地图/势力推进、爽点类型、伏笔埋设或回收、支线收束、关系变化、阶段结尾钩子。",
-              "必须建立“支线/配角弧线预算”：每个主要阶段至少规划1-3条服务主线的配角弧线或暗线，例如配角亏欠、误判、秘密、立场摇摆、小目标、资源代价、过去旧事。支线必须能回扣核心承诺，不能成为与主线无关的番外。",
-              "first10Chapters 不要求每章都有支线，但至少要在2-3章中安排配角或暗线节拍：配角提供阻力、帮忙、隐瞒、误导、付出代价、获得小高光或暴露秘密。大女主作品也要让配角有自己的目标和选择，但主角仍是因果主轴。",
-              "每个阶段必须写具体到本书人物、势力、资源、秘密、情绪关系和主线承诺；不能只写“扩大势力、揭露真相、终局决战”这类空泛词。",
-              "按目标总字数和预计章节数规划：每卷/阶段要有开始目标、阶段压力、阶段回报、阶段收束，不要只列地图名。",
-              "first10Chapters 必须恰好输出10项，并且每项开头必须是“第1章：”到“第10章：”，不能漏第1章，不能从第2章开始，也不能把多章合并成一项。",
-              "前 10 章主要负责建立主角处境、关键机制、第一轮小收益、第一阶段压力和读者期待；不要连续大突破，不要过早开大型副本替代核心承诺。",
-              ...planningGuardRules,
-              `系统已按目标总字数估算本书约 ${context.estimatedChapters} 章；规划必须按这个预计章数分段，不要假定一定会写到100章。`,
-              `first100Stages 实际含义是“第1-${frontStageEnd}章阶段节奏”：如果预计不超过100章，它必须覆盖全书起承转合和终局收束；如果预计超过100章，它只覆盖前100章。`,
-              "first100Stages 必须拆成数组项，不要把第1-100章阶段节奏写成一个超长字符串。",
-              "凡是 openQuestions、doNotRevealEarly 或输出中的“待确认/未定”事项，在 first100Stages、volumePlan、progressionPacing、rewardPacing 和 progressionRules 中不得写成确定结果；只能写成压力、伏笔、可选方向或待作者确认。",
-              "不要把待确认角色结局、最终情感归属、真实动机、血脉身份、幕后真相、政权终局、死亡/成婚/复合/原谅/牺牲/下线/登基/继位等不可逆事项写死。",
-              "如果阶段节奏需要使用待确认事项，只能用“制造压力”“关系试探”“出现迹象”“保留伏笔”“可能走向之一”这类表达，不得直接写“死亡、精神失常、原谅、确定复合、确定归属”。",
-              context.estimatedChapters > 100
-                ? "第101章后的阶段节奏会由第二次 AI 请求单独生成；本次不要输出 post100Pacing。"
-                : "预计不超过100章时，post100Pacing 必须留空；不要虚构第101章后的阶段。",
-              "rewardPacing 必须写清小收益、中收益、大收益的大致频率；收益可以是能力、境界、金钱、资源、地位、情报、关系或权限。",
-              "progressionRules 必须写成后续任务卡能直接执行的硬约束，例如：第几章前只允许小台阶，第几章左右才允许大阶段，越级必须有成本和后果。",
-              "不要照搬拆书来源作品的人物、地点、专有设定、具体桥段；拆书只能作为商业节奏参考。"
+            projectName: input.context.projectName,
+            projectDescription: cleanPromptText(input.context.projectDescription ?? "", 900),
+            targetTotalWords: input.context.targetTotalWords,
+            estimatedChapters: input.context.estimatedChapters,
+            existingStoryProgress: input.context.existingStoryProgress
+              ? {
+                  latestChapterNumber: input.context.existingStoryProgress.latestChapterNumber,
+                  continuationChapterNumber: input.context.existingStoryProgress.continuationChapterNumber,
+                  latestDraftEnding: cleanPromptText(input.context.existingStoryProgress.latestDraftEnding ?? "", 180),
+                  recentLedgers: input.context.existingStoryProgress.recentLedgers.slice(-3),
+                  currentStatusLines: compactTextList(input.context.existingStoryProgress.currentStatusLines ?? [], 8, 120),
+                  openCarryOverTasks: compactTextList(input.context.existingStoryProgress.openCarryOverTasks, 4, 100)
+                }
+              : null,
+            bible: {
+              corePleasure: cleanPromptText(input.context.bible.corePleasure, 400),
+              goldenFingerRules: cleanPromptText(input.context.bible.goldenFingerRules, 360),
+              immutableSettings: cleanPromptText(input.context.bible.immutableSettings, 500),
+              narrativeTaboos: cleanPromptText(input.context.bible.narrativeTaboos, 360)
+            },
+            issues: input.issues.slice(0, 6),
+            expectedFirst100Ranges: buildRequiredFirst100PlanRanges(input.context.estimatedChapters).map(requiredRangeLabel),
+            expectedPost100Ranges: buildRequiredPost100PlanRanges(input.context.estimatedChapters).map(requiredRangeLabel),
+            currentPlan: compactLongFormPlanForRepair(input.plan),
+            repairRules: [
+              "只返回需要修改的字段；没有修改的字段可以省略。",
+              "已有章节、existingStoryProgress、doNotChange 和 confirmedFacts 是历史锁，不能改写、否定、跳过或重排。",
+              "修复事实锁时优先遵守 currentStatusLines 和最近章节台账；早期阶段性完成结论如果与最新状态冲突，只能作为历史轨迹，不得继续写入 confirmedFacts/doNotChange。",
+              "修复 planningBasis 时也要最近状态优先：如果早期写过结案/认罪，但最近章节显示潜逃、追捕、未收束或待确认，planningBasis 只能写最新开放状态，不得并列写成当前已收束。",
+              "核心真相、特殊机制来源、幕后组织、终局解释、主角是否被选中、现实与异世界/副本/系统等多层关系，除非 confirmedFacts 或 doNotChange 已明确，否则只能写成伏笔、疑似方向、压力或待确认；禁止写成其实是、原来是、本质是、确定为、来自、目的是。",
+              "如当前规划已经把核心真相、机制来源、终局解释或幕后身份写成具体答案，必须改为开放表述：可能方向、疑似机制、未确认线索、待后期揭示；除非项目事实源明确要求，不得新增任何具体答案。",
+              "volumePlan、first100Pacing、post100Pacing 的章节范围必须连续且不倒退；不能前一阶段写进入新单元/新卷/新主案，后一阶段又倒退回旧单元/旧卷/旧主案。",
+              "first100Pacing、post100Pacing 只能保留顶层阶段范围；阶段正文里禁止继续写具体章节号、细分章段或“第X章/第X-Y章/第X章左右”，这类细排只能放在 first10Chapters 或任务卡。",
+              "相邻阶段必须递进，禁止两个连续阶段复写同一阶段目标、主案、对手组合或收束动作；如果上一阶段已开启下一单元，下一阶段必须先建立新压力，不能直接写收束。",
+              "最后一个后100阶段是全书终局/剩余结尾，只能收束全书主线、回收核心伏笔、给出余波或开放式结局；不能再开启新单元、新主案、新阶段或新入口。",
+              "修阶段错位时，优先拉长当前单元/当前卷，或把后续单元顺延，不要压缩已写章节和正在进行的当前行动线。",
+              "修复续写项目时，existingStoryProgress.latestChapterNumber 之前的章节只能作为历史摘要，不能改写为未来任务；continuationChapterNumber 之后才是可优化的新规划。",
+              "first100Pacing、post100Pacing 必须与 volumePlan 的卷/主案范围一致；不得把后续卷名、后续主案或后续单元提前写进前100阶段。",
+	              "保留读者引擎字段语义：读者追问、情绪曲线、压制反击循环、收益轮换、反套路变局、追读钩子引擎。",
+              "如果阶段规划只写事件排期或收益频率，必须补成情绪曲线：欠什么情绪债、怎样加压、何处还债、还债后留下什么余波或新期待。",
+	              "rewardPacing 必须包含收益轮换或外部反馈，不能长期只有信息、线索、物证、碎片或道具。",
+              "如果 issues 提到连续10章蓝图缺章，必须返回完整 first10Chapters 字段，恰好10项，并从 existingStoryProgress.continuationChapterNumber 开始连续编号。",
+              "如果 issues 提到前100阶段缺段、模板化重复、阶段目标重复、阶段衔接不成立、阶段字段缺失或缺少读者追读引擎，必须重写完整 first100Pacing，并严格覆盖 expectedFirst100Ranges 里的每一个范围；如果不能完整覆盖，就不要返回 first100Pacing 字段。",
+              "如果 issues 提到第101章后缺段、模板化重复、阶段目标重复、阶段衔接不成立、阶段字段缺失、终局阶段不收束或阶段覆盖不足，必须重写完整 post100Pacing，并严格覆盖 expectedPost100Ranges 里的每一个范围；如果不能完整覆盖，就不要返回 post100Pacing 字段。",
+              "不要用“承接核心承诺、读者等待前期压力如何反转、旧压力升级、阶段结论后进入下一阶段”等通用模板复制到多个阶段；每个阶段必须有不同的目标、压力源、情绪债、还债点、支线收束和阶段钩子。",
+              ...storyModeRules,
+              "输出不得 Markdown，不得解释。"
             ],
             outputSchema: {
-              planningBasis: "string，240字以内，说明规划依据、篇幅判断和阶段划分理由",
-              corePromise: "string，360字以内，说明核心承诺、长期爽点循环、情绪补偿和终局承诺边界",
-              confirmedFacts: "string[]，每项180字以内，最多16项；只写项目事实源已经明确且彼此不冲突的事实，不要加入推测",
-              openQuestions: "string[]，每项180字以内，最多14项；写项目事实源没有定死或互相有张力、需要作者后续确认的方向",
-              doNotChange: "string[]，每项180字以内，最多16项；写后续规划和正文不得改写的核心事实",
-              doNotRevealEarly: "string[]，每项180字以内，最多14项；写前10章或前期不能提前揭示的核心真相、底牌或终局信息",
-              tagPromises: "string[]，每项160字以内，最多12项；写题材标签、情绪卖点、读者期待必须兑现的承诺",
-              volumePlan: "string[]，每项440字以内，最多12项；每项包含阶段范围、目标、压力、成长上限、回报、伏笔、关系变化、收束",
-              progressionPacing: "string[]，每项360字以内，最多16项；写清成长边界、卡点、代价和不能提前兑现的档位",
-              rewardPacing: "string[]，每项360字以内，最多16项；写清小/中/大收益频率、类型、出现条件、兑现方式和不能滥发的限制",
-              first10Chapters: "string[]，必须恰好10项；每项240字以内；每项以第1章至第10章开头，逐章写功能、压力、收益、伏笔、关系变化或钩子；至少2项要包含配角/暗线节拍且说明如何服务主线",
-              first100Stages:
-                "array；按第1-20章、第21-40章这类阶段写到前段结束；预计很短时可按每10章；每项字段：range, stageTarget, pressure, growthLimit, mapAndForces, payoffRhythm, foreshadowing, sideClosure, relationshipChange, stageHook, nextCondition；sideClosure 必须写本阶段要推进或收束的配角/暗线；每个字段70-160字以内",
-              progressionRules: "string[]，每项280字以内，最多18项；必须能被后续任务卡直接执行"
+              corePromise: "string，可选",
+              volumePlan: "string[]，可选",
+              rewardPacing: "string[]，可选",
+              confirmedFacts: "string[]，可选",
+              openQuestions: "string[]，可选",
+              doNotChange: "string[]，可选",
+              doNotRevealEarly: "string[]，可选",
+              first10Chapters: "string[]，可选；如需修复连续10章蓝图，必须完整返回10项",
+              first100Pacing: "string，可选",
+              post100Pacing: "string，可选",
+              progressionRules: "string[]，可选"
             }
           },
           null,
@@ -1244,130 +3191,67 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
         )
       }
     ],
-    temperature: 0.22,
-    maxTokens: 7600,
-    timeoutMs: 300000
+    temperature: 0.12,
+    maxTokens: 5200,
+    timeoutMs: 180000
   });
+  const guardedResponse: Partial<StoredLongFormPlan> = { ...response };
+  const expectedFirst100Ranges = buildRequiredFirst100PlanRanges(input.context.estimatedChapters);
 
-  const initialPlan = normalizeAiLongFormPlanResponse(response);
-  initialPlan.first100Pacing = buildFirst100PacingFromResponse(response, context.estimatedChapters);
-  let post100Pacing = "";
-  let post100Usage: AiTokenUsage | undefined;
-
-  if (context.estimatedChapters > 100) {
-    const post100Response = await requestAiJson<LongFormPost100StageResponse>({
-      messages: [
-        {
-          role: "system",
-          content:
-            "你是长篇网文后续阶段规划师。只输出合法 JSON 对象，不要 Markdown，不要解释。你的任务是为第101章后按每50章阶段生成可执行的长篇节奏规划。必须把每个阶段拆成 JSON 数组项，不要把所有内容塞进一个长字符串。"
-        },
-        {
-          role: "user",
-          content: JSON.stringify(
-            {
-              ...promptContext,
-              corePromise: initialPlan.corePromise,
-              confirmedFacts: initialPlan.confirmedFacts,
-              openQuestions: initialPlan.openQuestions,
-              doNotChange: initialPlan.doNotChange,
-              doNotRevealEarly: initialPlan.doNotRevealEarly,
-              tagPromises: initialPlan.tagPromises,
-              first100Pacing: initialPlan.first100Pacing,
-              volumePlan: initialPlan.volumePlan,
-              progressionPacing: initialPlan.progressionPacing,
-              rewardPacing: initialPlan.rewardPacing,
-              requiredRanges: post100RequiredRanges,
-              rules: [
-                `必须从第101章开始，按每50章一个阶段写到预计终章第${context.estimatedChapters}章。`,
-                "stages 数组必须与 requiredRanges 一一对应，不能漏段、合并段或跳段。",
-                "每段 range 必须使用“第101-150章”这种格式，最后一段按实际剩余章节写，例如“第401-445章”。",
-                "每段必须填写 stageTarget、pressure、growthLimit、mapAndForces、payoffRhythm、foreshadowing、sideClosure、relationshipChange、stageHook、nextCondition。",
-                "必须承接第1-100章规划和项目事实锁；不得把 openQuestions 或 doNotRevealEarly 写成确定真相。",
-                "凡是 openQuestions、doNotRevealEarly 或前文标注“未定/待确认”的事项，后续阶段只能写成伏笔、压力、可选方向或待作者确认，不能写成确定结局。",
-                "禁止擅自写死角色死亡、精神失常、最终CP、原谅/复合、成婚、牺牲、下线、登基、继位、真实血脉、幕后真相、政权最终形式等不可逆结果，除非项目事实源已明确。",
-                "内容要具体到本书人物、势力、资源、秘密和主线承诺，不要写通用套话。",
-                "为了保证 JSON 稳定，每个字段写中文短句，使用分号表达多点，不要在字段中换行，不要输出引号包裹的对白。"
-              ],
-              outputSchema: {
-                stages:
-                  "array；每个 requiredRanges 对应1项；每项字段：range, stageTarget, pressure, growthLimit, mapAndForces, payoffRhythm, foreshadowing, sideClosure, relationshipChange, stageHook, nextCondition；每个字段90-180字以内"
-              }
-            },
-            null,
-            2
-          )
-        }
-      ],
-      temperature: 0.22,
-      maxTokens: 5600,
-      timeoutMs: 300000
-    });
-
-    const missingRanges = missingRequiredRanges(post100Response, post100RequiredRanges);
-
-    if (missingRanges.length > 0) {
-      const supplementResponse = await requestAiJson<LongFormPost100StageResponse>({
-        messages: [
-          {
-            role: "system",
-            content:
-              "你是长篇网文阶段规划补写师。只输出合法 JSON 对象，不要 Markdown，不要解释。你只负责补齐缺失的章节阶段，每个阶段拆成 JSON 数组项。"
-          },
-          {
-            role: "user",
-            content: JSON.stringify(
-              {
-                ...promptContext,
-                corePromise: initialPlan.corePromise,
-                confirmedFacts: initialPlan.confirmedFacts,
-                openQuestions: initialPlan.openQuestions,
-                doNotChange: initialPlan.doNotChange,
-                doNotRevealEarly: initialPlan.doNotRevealEarly,
-                tagPromises: initialPlan.tagPromises,
-                existingPost100Pacing: buildPacingTextFromStages(post100Response, post100RequiredRanges),
-                missingRequiredRanges: missingRanges,
-                rules: [
-                  "只补 missingRequiredRanges 中列出的阶段，不要重写已有阶段。",
-                  "stages 数组必须与 missingRequiredRanges 一一对应。",
-                  "每段必须填写 stageTarget、pressure、growthLimit、mapAndForces、payoffRhythm、foreshadowing、sideClosure、relationshipChange、stageHook、nextCondition。",
-                  "不得把 openQuestions、doNotRevealEarly 或待确认事项写成确定结局。"
-                ],
-                outputSchema: {
-                  stages:
-                    "array；每个 missingRequiredRanges 对应1项；每项字段：range, stageTarget, pressure, growthLimit, mapAndForces, payoffRhythm, foreshadowing, sideClosure, relationshipChange, stageHook, nextCondition"
-                }
-              },
-              null,
-              2
-            )
-          }
-        ],
-        temperature: 0.2,
-        maxTokens: Math.max(1800, missingRanges.length * 900),
-        timeoutMs: 180000
-      });
-      const mergedStages = [
-        ...(Array.isArray(post100Response.stages) ? post100Response.stages : []),
-        ...(Array.isArray(supplementResponse.stages) ? supplementResponse.stages : [])
-      ];
-
-      post100Response.stages = mergedStages;
-      post100Usage = combineAiTokenUsages([getAiTokenUsage(post100Response), getAiTokenUsage(supplementResponse)]);
-    } else {
-      post100Usage = getAiTokenUsage(post100Response);
-    }
-
-    post100Pacing = buildPacingTextFromStages(post100Response, post100RequiredRanges);
+  if (
+    typeof guardedResponse.first100Pacing === "string" &&
+    guardedResponse.first100Pacing.trim() &&
+    !longFormTextCoversRequiredRanges(guardedResponse.first100Pacing, expectedFirst100Ranges) &&
+    longFormTextCoversRequiredRanges(input.plan.first100Pacing, expectedFirst100Ranges)
+  ) {
+    delete guardedResponse.first100Pacing;
+  } else if (
+    typeof guardedResponse.first100Pacing === "string" &&
+    guardedResponse.first100Pacing.trim() &&
+    (
+      !longFormTextHasRequiredStageFields(guardedResponse.first100Pacing) ||
+      !longFormTextHasValidAdjacentProgression(guardedResponse.first100Pacing)
+    ) &&
+    longFormTextCoversRequiredRanges(input.plan.first100Pacing, expectedFirst100Ranges) &&
+    longFormTextHasRequiredStageFields(input.plan.first100Pacing) &&
+    longFormTextHasValidAdjacentProgression(input.plan.first100Pacing)
+  ) {
+    delete guardedResponse.first100Pacing;
   }
 
-  const combinedPlan = {
-    ...initialPlan,
-    post100Pacing
-  };
-  const usage = combineAiTokenUsages([getAiTokenUsage(response), post100Usage]);
+  if (input.context.estimatedChapters > 100) {
+    const expectedPost100Ranges = buildRequiredPost100PlanRanges(input.context.estimatedChapters);
 
-  return attachAiTokenUsage(combinedPlan, usage ?? getAiTokenUsage(response));
+    if (
+      typeof guardedResponse.post100Pacing === "string" &&
+      guardedResponse.post100Pacing.trim() &&
+      !longFormTextCoversRequiredRanges(guardedResponse.post100Pacing, expectedPost100Ranges) &&
+      longFormTextCoversRequiredRanges(input.plan.post100Pacing, expectedPost100Ranges)
+    ) {
+      delete guardedResponse.post100Pacing;
+    } else if (
+      typeof guardedResponse.post100Pacing === "string" &&
+      guardedResponse.post100Pacing.trim() &&
+      (
+        !longFormTextHasRequiredStageFields(guardedResponse.post100Pacing) ||
+        !longFormTextHasValidAdjacentProgression(guardedResponse.post100Pacing) ||
+        Boolean(longFormFinalStageTextClosureIssue(guardedResponse.post100Pacing))
+      ) &&
+      longFormTextCoversRequiredRanges(input.plan.post100Pacing, expectedPost100Ranges) &&
+      longFormTextHasRequiredStageFields(input.plan.post100Pacing) &&
+      longFormTextHasValidAdjacentProgression(input.plan.post100Pacing) &&
+      !longFormFinalStageTextClosureIssue(input.plan.post100Pacing)
+    ) {
+      delete guardedResponse.post100Pacing;
+    }
+  }
+
+  const repaired = normalizeAiLongFormPlanResponse({
+    ...input.plan,
+    ...guardedResponse
+  });
+
+  return attachAiTokenUsage(repaired, getAiTokenUsage(response));
 }
 
 type LongFormPlanReviewSlice = {
@@ -1497,6 +3381,13 @@ async function safeReviewLongFormPlanSlice(input: {
 }
 
 export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanContext, plan: AiLongFormPlanPayload) {
+  const characterFacts = context.characters.slice(0, 8).map((character) => ({
+    name: character.name,
+    identity: cleanPromptText(character.identity, 120),
+    currentState: cleanPromptText(character.currentState, 120),
+    relationshipToProtagonist: cleanPromptText(character.relationshipToProtagonist, 100),
+    attitude: cleanPromptText(character.attitude, 80)
+  }));
   const factReview = await safeReviewLongFormPlanSlice({
     title: "事实锁审查",
     facts: {
@@ -1512,7 +3403,23 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
       plotState: {
         mainGoal: cleanPromptText(context.plotState.mainGoal, 180),
         nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 180)
-      }
+      },
+      characters: characterFacts,
+            existingStoryProgress: context.existingStoryProgress
+              ? {
+                  latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+                  establishedEvents: compactTextList(context.existingStoryProgress.establishedEvents, 14, 140),
+                  establishedStateChanges: compactTextList(context.existingStoryProgress.establishedStateChanges, 10, 140),
+                  currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 10, 140),
+                  recentLedgers: context.existingStoryProgress.recentLedgers.slice(-5).map((ledger) => ({
+              chapterNumber: ledger.chapterNumber,
+              title: cleanPromptText(ledger.title, 80),
+              events: compactTextList(ledger.events, 4, 120),
+              stateChanges: compactTextList(ledger.stateChanges, 4, 120),
+              cliffhanger: cleanPromptText(ledger.cliffhanger, 120)
+            }))
+          }
+        : null
     },
     planPart: {
       corePromise: cleanPromptText(plan.corePromise, 260),
@@ -1522,6 +3429,10 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     },
     rules: [
       "检查 confirmedFacts/doNotChange/corePromise 是否改写项目简介或稳定设定。",
+      "如果 currentStatusLines 或最近台账显示当前仍在追查、未收束、逃脱、待确认、未兑现，则较早台账里的阶段性完成结论不能作为当前事实锁。",
+      "检查 confirmedFacts/doNotChange 是否把仍未解决、未收束、未确认、未兑现的阶段目标写成已完成事实。",
+      "检查 confirmedFacts/doNotChange 是否把纸条、口供、证词、留言、梦境提示、系统提示、地图、坐标或卷宗里的线索内容升级成已发现、已获得、已确认或已完成事实；若只有线索载体出现，必须 pass=false。",
+      "检查 confirmedFacts/doNotChange 是否出现所有角色、全员状态、全员性别、全员结局、全员阵营等整体断言；这类结论必须逐个有事实源，否则 pass=false。",
       "没有明显改写就 pass=true。",
       "只列最严重问题，不做故事推演。"
     ]
@@ -1540,7 +3451,23 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
       plotState: {
         mainGoal: cleanPromptText(context.plotState.mainGoal, 160),
         nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 160)
-      }
+      },
+      characters: characterFacts,
+      existingStoryProgress: context.existingStoryProgress
+        ? {
+            latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+            establishedEvents: compactTextList(context.existingStoryProgress.establishedEvents, 14, 140),
+            establishedStateChanges: compactTextList(context.existingStoryProgress.establishedStateChanges, 10, 140),
+            currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 10, 140),
+            recentLedgers: context.existingStoryProgress.recentLedgers.slice(-5).map((ledger) => ({
+              chapterNumber: ledger.chapterNumber,
+              title: cleanPromptText(ledger.title, 80),
+              events: compactTextList(ledger.events, 4, 120),
+              stateChanges: compactTextList(ledger.stateChanges, 4, 120),
+              cliffhanger: cleanPromptText(ledger.cliffhanger, 120)
+            }))
+          }
+        : null
     },
     planPart: {
       confirmedFacts: plan.confirmedFacts.slice(0, 12),
@@ -1551,7 +3478,7 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     rules: [
       "书名只能作为读者期待和包装方向，不能单独作为已确定事实来源。",
       "检查 confirmedFacts/doNotChange 是否把只存在于书名中的动作、目标、敌人、结局或人物关系写成既定事实。",
-      "如果同一信息在简介、创作圣经或主线状态中也明确出现，可视为通过；否则 pass=false，并建议移入标签承诺或待确认点。"
+      "如果同一信息在简介、创作圣经、主线状态或 existingStoryProgress 的既有章节台账中明确出现，可视为通过；否则 pass=false，并建议移入标签承诺或待确认点。"
     ]
   });
 
@@ -1614,6 +3541,37 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     ]
   });
 
+  const readerEngineReview = await safeReviewLongFormPlanSlice({
+    title: "读者追读引擎审查",
+    facts: {
+      targetReader: cleanPromptText(context.bible.targetReader, 160),
+      corePleasure: cleanPromptText(context.bible.corePleasure, 260),
+      tagPromises: plan.tagPromises.slice(0, 8),
+      existingStoryProgress: context.existingStoryProgress
+        ? {
+            latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+            recentPayoffs: compactTextList(context.existingStoryProgress.establishedPayoffs, 8, 120),
+            currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 8, 120)
+          }
+        : null
+    },
+    planPart: {
+      corePromise: cleanPromptText(plan.corePromise, 300),
+      rewardPacing: plan.rewardPacing.slice(0, 8),
+      progressionRules: plan.progressionRules.slice(0, 8),
+      first10Chapters: plan.first10Chapters.slice(0, 10),
+      first100Pacing: cleanPromptText(plan.first100Pacing, 1600),
+      post100Pacing: cleanPromptText(plan.post100Pacing, 1600)
+    },
+    rules: [
+      "检查规划是否像事件排期表，只写任务、线索、地点、阶段目标，却没有情绪曲线。",
+      "每个主要阶段应能看出：欠什么情绪债、怎样加压、何处还债、还债后留下什么余波或新期待。",
+      "检查前10章是否每章都有读者情绪目标和小闭环；如果连续多章只是查证、赶路、发现信息，pass=false。",
+      "检查收益节奏是否只有信息/线索/道具，没有资源、权限、关系站队、对手代价、公开反馈、阶段结论或选择权。",
+      "如果只是个别词语不完整但整体能驱动任务卡，pass=true；只指出会影响追读欲的核心问题。"
+    ]
+  });
+
   const originalityReview = await safeReviewLongFormPlanSlice({
     title: "原创合规审查",
     facts: {
@@ -1632,11 +3590,12 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
     rules: [
       "检查规划是否直接使用或强化了知名作品的角色名、势力名、专有设定、标志性组织或同人化表达。",
       "项目简介里出现的外部作品指向也应提示原创化风险：可以作为用户输入事实保留，但后续商业创作建议替换为原创名称和原创势力。",
+      "快穿、多世界、现实线、梦境线、穿越、程序员、刑侦、女强、无CP等通用题材标签或职业设定不是原创合规风险；只有明显借用具体知名IP、专名、角色或标志性设定时才判为风险。",
       "如果存在明显 IP/同人/版权风险，pass=false，并给出原创化建议。"
     ]
   });
 
-  const reviews = [factReview, titleInferenceReview, commitmentReview, irreversibleReview, openingReview, originalityReview];
+  const reviews = [factReview, titleInferenceReview, commitmentReview, irreversibleReview, openingReview, readerEngineReview, originalityReview];
   const hasIncompleteStep = reviews.some((review) => review.incomplete);
   const hasReviewIssue = reviews.some(
     (review) => review.issues.length > 0 || review.unresolvedCommitmentIssues.length > 0 || review.passed === false
@@ -1653,6 +3612,7 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
       { name: "待确认点审查", passed: commitmentReview.passed, incomplete: commitmentReview.incomplete === true },
       { name: "不可逆设定审查", passed: irreversibleReview.passed, incomplete: irreversibleReview.incomplete === true },
       { name: "前10章审查", passed: openingReview.passed, incomplete: openingReview.incomplete === true },
+      { name: "读者追读引擎审查", passed: readerEngineReview.passed, incomplete: readerEngineReview.incomplete === true },
       { name: "原创合规审查", passed: originalityReview.passed, incomplete: originalityReview.incomplete === true }
     ],
     reviewError: hasIncompleteStep && !hasReviewIssue
@@ -1663,7 +3623,7 @@ export async function reviewLongFormPlanConsistencyWithAi(context: LongFormPlanC
 
 function normalizeDraftTargetWordCount(value?: number) {
   if (!Number.isFinite(value)) {
-    return 2500;
+    return 1600;
   }
 
   return Math.min(3000, Math.max(800, Math.floor(Number(value))));
@@ -2329,9 +4289,10 @@ export async function compressChapterDraftToTarget(
               compressionRules: [
                 "保留主要场景和关键对话，删掉重复解释、重复心理活动、同义铺垫和多余环境描写。",
                 ...draftContext.closureRules,
+                ...draftContext.readerExperienceRules,
                 "如果原文已经写出任务卡章末钩子，不要删除；如果原文本来没有写到钩子，不要为了补钩子新增大段剧情。",
                 draftContext.closureMode
-                  ? "收束章压缩时优先保留定责、判定、返回或状态更新；案后钩子只保留最后一两句，不得为了保留钩子牺牲阶段落点。"
+                  ? "收束章压缩时优先保留责任归属、结果判定、资源/关系兑现、返回或状态更新；阶段后钩子只保留最后一两句，不得为了保留钩子牺牲阶段落点。"
                   : "",
                 "压缩后仍然必须是完整小说正文，不能变成梗概。",
                 "必须保留本章起因、推进、转折、爽点释放和章末落点，不能把正文压到剧情写了一半就结束。",
@@ -2405,9 +4366,20 @@ function inferCharacterPronoun(character: StoredCharacterProfile) {
       .replace(/[；;，,。\s]*性别[:：](?:女性|男性)[；;，,\s]*叙述代词固定用[“"]?[她他]\/[她他]的[”"]?[；;，,\s]*禁止写成[“"]?[她他]\/[她他]的[”"]?/g, "")
       .replace(/[；;，,。\s]*叙述代词(?:必须|固定)用[“"]?[她他]\/[她他]的[”"]?[；;，,\s]*禁止写成[“"]?[她他]\/[她他]的[”"]?/g, "")
       .trim();
+
+  const cleanedIdentity = stripAutoGenderConstraints(character.identity);
+
+  if (/性别[:：]?\s*女性|女性角色|女性主角|女主|女主人公|叙述代词(?:必须|固定)用[“"]?她\/她的|用[“"]?她\/她的/.test(cleanedIdentity)) {
+    return "female" as const;
+  }
+
+  if (/性别[:：]?\s*男性|男性角色|男性主角|男主|男主人公|叙述代词(?:必须|固定)用[“"]?他\/他的|用[“"]?他\/他的/.test(cleanedIdentity)) {
+    return "male" as const;
+  }
+
   const text = [
     character.name,
-    stripAutoGenderConstraints(character.identity),
+    cleanedIdentity,
     character.relationshipToProtagonist,
     character.currentGoal,
     character.longTermGoal,
@@ -2426,15 +4398,15 @@ function inferCharacterPronoun(character: StoredCharacterProfile) {
 
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const femaleScore =
-    (text.match(/性别[:：]?\s*女性|女性角色|女业主|女修士|女修|女主|她\/她的|用“她/g) ?? []).length * 2 +
+    (text.match(/性别[:：]?\s*女性|女性角色|女性主角|女主|女主人公|她\/她的|用“她/g) ?? []).length * 2 +
     (text.match(new RegExp(`${escaped}.{0,16}(?:她|她的)`, "g")) ?? []).length +
-    (text.match(new RegExp(`(?:女子|女人|妇人|少女|姑娘|中年女人|中年女子|女捕头|女捕快).{0,30}${escaped}`, "g")) ?? []).length * 3 +
-    (text.match(new RegExp(`${escaped}.{0,30}(?:女子|女人|妇人|少女|姑娘|中年女人|中年女子|女捕头|女捕快)`, "g")) ?? []).length * 3;
+    (text.match(new RegExp(`(?:女子|女人|妇人|少女|姑娘|女孩|女性|女士|中年女人|中年女子).{0,30}${escaped}`, "g")) ?? []).length * 3 +
+    (text.match(new RegExp(`${escaped}.{0,30}(?:女子|女人|妇人|少女|姑娘|女孩|女性|女士|中年女人|中年女子)`, "g")) ?? []).length * 3;
   const maleScore =
-    (text.match(/性别[:：]?\s*男性|男性角色|男业主|男修士|男修|男主|男保安|他\/他的|用“他/g) ?? []).length * 2 +
+    (text.match(/性别[:：]?\s*男性|男性角色|男性主角|男主|男主人公|他\/他的|用“他/g) ?? []).length * 2 +
     (text.match(new RegExp(`${escaped}.{0,16}(?:他|他的)`, "g")) ?? []).length +
-    (text.match(new RegExp(`(?:男子|男人|汉子|老者|青年男子|中年男人|中年男子|男捕头|男捕快).{0,30}${escaped}`, "g")) ?? []).length * 3 +
-    (text.match(new RegExp(`${escaped}.{0,30}(?:男子|男人|汉子|老者|青年男子|中年男人|中年男子|男捕头|男捕快)`, "g")) ?? []).length * 3;
+    (text.match(new RegExp(`(?:男子|男人|汉子|少年|男性|先生|老者|青年男子|中年男人|中年男子).{0,30}${escaped}`, "g")) ?? []).length * 3 +
+    (text.match(new RegExp(`${escaped}.{0,30}(?:男子|男人|汉子|少年|男性|先生|老者|青年男子|中年男人|中年男子)`, "g")) ?? []).length * 3;
 
   if (femaleScore >= maleScore + 2) {
     return "female" as const;
@@ -2447,10 +4419,70 @@ function inferCharacterPronoun(character: StoredCharacterProfile) {
   return null;
 }
 
-function buildCharacterPronounRules(characters: StoredCharacterProfile[]) {
+function hasFemaleGenderMarker(value: string) {
+  return (
+    /性别[:：]?\s*(?:为|是)?\s*(?:女|女性)|(?:女性|女)角色|女性主角|女性配角|女主人公|女主|女配|主角[^。；\n]{0,12}(?:女|女性)|叙述代词(?:必须|固定)?用[“"‘']?她[”"’']?(?:\/|、|和|及|与)?[“"‘']?她的[”"’']?|用[“"‘']?她[”"’']?(?:\/|、|和|及|与)?[“"‘']?她的[”"’']?/.test(value)
+  );
+}
+
+function hasMaleGenderMarker(value: string) {
+  return (
+    /性别[:：]?\s*(?:为|是)?\s*(?:男|男性)|(?:男性|男)角色|男性主角|男性配角|男主人公|(?:^|[，。；;\s：:])男主|男配|主角[^。；\n]{0,12}(?:男|男性)|叙述代词(?:必须|固定)?用[“"‘']?他[”"’']?(?:\/|、|和|及|与)?[“"‘']?他的[”"’']?|用[“"‘']?他[”"’']?(?:\/|、|和|及|与)?[“"‘']?他的[”"’']?/.test(value)
+  );
+}
+
+function explicitGenderFromProjectText(value: string) {
+  const female = hasFemaleGenderMarker(value) || /女性主角|女主人公|女主|女强/.test(value);
+  const male = hasMaleGenderMarker(value) || /男性主角|男主人公|(?:^|[，。；;\s：:])男主/.test(value);
+
+  if (female && !male) {
+    return "female" as const;
+  }
+
+  if (male && !female) {
+    return "male" as const;
+  }
+
+  return null;
+}
+
+function explicitProjectPronounGenderForCharacter(character: StoredCharacterProfile, context: ChapterDraftContext) {
+  const name = baseCharacterName(character.name);
+
+  if (!name) {
+    return null;
+  }
+
+  const projectText = [
+    context.projectName ?? "",
+    context.projectDescription ?? "",
+    context.bible.protagonistDesire,
+    context.bible.immutableSettings,
+    context.bible.corePleasure,
+    context.bible.narrativeTaboos,
+    context.bible.styleGuide
+  ].join("\n");
+  const projectGender = explicitGenderFromProjectText(projectText);
+  const characterOwnText = [character.relationshipToProtagonist, character.identity].join("\n");
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const namedAsProtagonist =
+    new RegExp(`${escapedName}[^。；\\n]{0,16}(?:本人|主角|女主|男主|主人公)`).test(projectText) ||
+    new RegExp(`(?:本人|主角|女主|男主|主人公)[^。；\\n]{0,16}${escapedName}`).test(projectText);
+  const isProtagonist = /本人|主角|女主|男主|主人公/.test(characterOwnText) || namedAsProtagonist;
+
+  if (!isProtagonist) {
+    return null;
+  }
+
+  return projectGender;
+}
+
+function buildCharacterPronounRules(characters: StoredCharacterProfile[], context?: ChapterDraftContext) {
   return characters
     .map((character) => {
-      const gender = inferCharacterPronoun(character);
+      const gender = context
+        ? explicitProjectPronounGenderForCharacter(character, context) ?? inferCharacterPronoun(character)
+        : inferCharacterPronoun(character);
       const name = baseCharacterName(character.name);
 
       if (!gender || !name) {
@@ -2547,9 +4579,11 @@ function buildAddressFormRules(context: {
   ];
 }
 
-function fixCharacterPronouns(content: string, characters: StoredCharacterProfile[]) {
+function fixCharacterPronouns(content: string, characters: StoredCharacterProfile[], context?: ChapterDraftContext) {
   return characters.reduce((text, character) => {
-    const gender = inferCharacterPronoun(character);
+    const gender = context
+      ? explicitProjectPronounGenderForCharacter(character, context) ?? inferCharacterPronoun(character)
+      : inferCharacterPronoun(character);
     const name = baseCharacterName(character.name);
 
     if (!gender || !name) {
@@ -2571,7 +4605,7 @@ function fixCharacterPronouns(content: string, characters: StoredCharacterProfil
 }
 
 function buildNarrativeDictionRules(context: ChapterDraftContext) {
-  const pronounRules = buildCharacterPronounRules(context.characters);
+  const pronounRules = buildCharacterPronounRules(context.characters, context);
   const familyNameRules = buildFamilyNameConsistencyRules(context.characters);
   const addressFormRules = buildAddressFormRules(context);
   const premiseAnchorRules = buildPremiseAnchorRules({
@@ -2703,7 +4737,7 @@ function sanitizeDraftLedgerForClosure(ledger: StoredChapterLedger | null) {
     ...ledger,
     newClues: compactTextList(ledger.newClues.filter(keepClosureEvidence), 4, 120),
     cliffhanger: isDraftAftermathHookText(ledger.cliffhanger)
-      ? "上一章留下阶段后异常或未解压力，本章只可在结尾轻触，不得展开追查。"
+      ? "上一章留下阶段后异常或未解压力，本章只可在结尾轻触，不得展开深挖。"
       : cleanPromptText(ledger.cliffhanger, 120),
     stateChanges: compactTextList(ledger.stateChanges.filter(keepClosureEvidence), 4, 120),
     carryOverTasks: compactTextList(ledger.carryOverTasks ?? [], 3, 100)
@@ -2734,9 +4768,9 @@ function buildClosureDraftRules(context: ChapterDraftContext) {
     "正文篇幅预算：前 70%-85% 写已登记信息闭环和阶段落点；阶段后钩子、现实异常、后续暗线最多只能占最后 1-2 句，不能占中段场面。",
     "上一章尾巴、上一章台账或任务卡 endingHook 中的阶段后异常只能轻触；人物可以产生疑问、恐惧、自我怀疑、试图用现实逻辑解释，但不能把疑问推进成查证含义、来源、幕后人、旧事、组织、势力、新地点、新物件或新角色的行动链。",
     "如果本章出现现实/梦境、现世/异世、前世/今生、主世界/副本等异常切换，必须写正常人的认知链：先否认或归因于压力/疲惫/幻觉，再被一两个具体感官细节动摇，最后暂时压下或做低成本自检；不能直接得出确定结论，也不能升级成中段调查。",
-    "如果角色提到后续暗线，必须立刻由结果落定、外部阻力、时间耗尽、返回或身体/现实切换把它压住；不得继续追下去。",
-    "收束章的悬疑细节只能服务现有信息闭环；不要把每 400 字的新信息写成新调查方向，可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作替代。",
-    "收束/交接章里，只有完成本章阶段目标和主线推进后，才允许最后轻触阶段后异常；如果任务卡明确给了具体可见场面，则按具体场面预算进入该场面，但不得在中段扩成新调查链。",
+    "如果角色提到后续暗线，必须立刻由结果落定、外部阻力、时间耗尽、返回或身体/现实切换把它压住；不得继续深挖。",
+    "收束章的题材细节只能服务现有信息闭环；不要把每 400 字的新信息写成新行动方向，可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作替代。",
+    "收束/交接章里，只有完成本章阶段目标和主线推进后，才允许最后轻触阶段后异常；如果任务卡明确给了具体可见场面，则按具体场面预算进入该场面，但不得在中段扩成新任务链。",
     "收束/休整/结算章的最后一段必须落在结果、状态、关系、奖励、休息、返回或情绪余波上；不得停在推门、进屋、拐入新地点、看见陌生人、发现新物件、听见异常声音等开放式动作入口。"
   ];
 }
@@ -2769,6 +4803,33 @@ function buildConcreteHookBudgetRules(endingHook: string) {
   ];
 }
 
+function buildReaderExperienceDraftRules(taskCard: StoredWritingTaskCard) {
+  const taskText = [
+    taskCard.chapterGoal,
+    taskCard.mainPlotProgress,
+    taskCard.pleasurePoint,
+    taskCard.endingHook,
+    taskCard.foreshadowingTasks.join("\n")
+  ].join("\n");
+  const hasLowDramaDetails = isLowDramaDetailText(taskText);
+
+  return [
+    "本章第一优先级是读者体验：信息、道具、数值、规则、合同、材料、证据等都只能作为冲突和回报的工具，不能写成连续流程或资料整理。",
+    "正文禁止只写情绪标签：不要只写“委屈、愤怒、震惊、害怕、心动、尴尬、紧张”；必须用动作、停顿、身体反应、物件变化、没说出口的话或旁观者反应写出来。",
+    "每个核心情绪场面必须有“触发点 -> 人物反应 -> 外部后果”：谁压过来、角色当场怎么撑住或失态、局面因此发生什么变化，不能只用旁白总结情绪。",
+    "读者情绪优先级高于逻辑解释：专业判断、设定说明、规则演算和信息分析只能服务压制、反击、暧昧、危机、打脸或情绪补偿场面。",
+    "如果主角被压制，至少写一个具体可感的丢脸、憋屈、损失、被误解或被卡住的细节；如果主角反击，至少写一个旁观者、对手、关键人物或局势的可见反应。",
+    "正文必须至少写出一场人与人的正面摩擦或外部压力：被质疑、被轻视、被催促、被阻拦、被诱惑、被威胁、被竞争者抢先、被规则卡住、被关系牵制或被误判。没有外部压力时，要把任务卡里的信息获取动作放进这些场面里。",
+    "本章必须有一个可见回报落点：地位、资源、权限、关系、名声、能力边界、行动选择、反派代价、误判推翻、关键人物态度变化或阶段结论，至少兑现一种。",
+    "专业判断、规则试错、信息验证、数值变化或道具发现后，必须立刻出现人物反应或局面变化；不要连续写两个以上低戏剧步骤。每个信息点最多一两句，随后转入对白、阻力、反击、沉默、让步、惩罚或新的压力。",
+    "可选爽点类型要按题材挑选：被轻视后反击、误判推翻、身份/能力局部曝光、资源获取、权限/地位提升、危机反转、众人震惊、信息差反杀、复仇推进、情绪补偿、关系站队变化。每章至少明确一种小爽点功能，铺垫章也要有小回报或压力升级。",
+    hasLowDramaDetails
+      ? "任务卡包含低戏剧细节：正文不得把它写成整章查资料、验物件、看面板或整理信息。把它并入对抗、竞争、谈判、试炼、公开反馈、资格争夺、关系摊牌或阶段落点场面里，并让结果马上换来外部后果。"
+      : "",
+    "章节结尾不要只停在新物件、新字样、新数值或新疑点上；优先落在人物选择、权力动作、公开态度、关系变化、对手反应、奖励/惩罚或下一步行动压力上。"
+  ].filter(Boolean);
+}
+
 function buildDraftGenerationPayloadContext(context: ChapterDraftContext) {
   const closureMode = isDraftStageClosureContext(context);
 
@@ -2780,6 +4841,7 @@ function buildDraftGenerationPayloadContext(context: ChapterDraftContext) {
       ...buildClosureDraftRules(context),
       ...buildConcreteHookBudgetRules(context.taskCard.endingHook)
     ],
+    readerExperienceRules: buildReaderExperienceDraftRules(context.taskCard),
     closureMode
   };
 }
@@ -2902,13 +4964,13 @@ function buildProtagonistEmbodimentRules(context: {
     "转场必须有时间成本和行动理由：一章内最多保留 2-3 个有效地点，赶路、等待、天色变化和休整可以压缩，但不能完全消失；如果连续多章都是夜间行动，必须处理天亮、休息、官府当值或现实身体疲惫。",
     ...dislocationRules,
     hasExplicitLayerShiftPremise
-      ? "如果涉及梦境、穿越、重生或异世，必须区分主观经历时间、异世界时间与现实时间；可以把醒来/再入梦作为休整和现实回响，但必须承接同一世界、同一案件或同一任务进度，不得擅自跳成新世界或重置关系。"
+      ? "如果涉及梦境、穿越、重生或异世，必须区分主观经历时间、异世界时间与现实时间；可以把醒来/再入梦作为休整和现实回响，但必须承接同一世界、同一阶段目标或同一任务进度，不得擅自跳成新世界或重置关系。"
       : ""
   ];
 }
 
 export function sanitizeChapterDraftDiction(content: string, context: ChapterDraftContext) {
-  const pronounFixed = normalizeChapterDraftPunctuation(fixCharacterPronouns(content, context.characters))
+  const pronounFixed = normalizeChapterDraftPunctuation(fixCharacterPronouns(content, context.characters, context))
     .replace(/瞳孔(?:猛|骤|微)?(?:地)?一?缩/g, "眼神顿住")
     .replace(/眸色一沉/g, "眼神沉了沉")
     .replace(/心头一震/g, "心里一震")
@@ -2989,6 +5051,7 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
             lastLedger: compactTaskCardLedger(context.lastLedger),
             latestDraft: compactTaskCardLatestDraft(context.latestDraft),
             latestDraftActualEnding: cleanPromptText(context.latestDraftActualEnding ?? "", 260),
+            continuityFacts: (context.continuityFacts ?? []).slice(0, 16),
             characters: context.characters.slice(0, 5).map(compactTaskCardCharacter),
             chapterCharacterConstraints: context.chapterCharacterConstraints ?? [],
             foreshadowings: context.foreshadowings.slice(0, 10).map(compactTaskCardForeshadowing),
@@ -3019,19 +5082,27 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
                   "requiredCharacters 只放本章必须实际出场并推动冲突的人。"
                 ],
             migrationRules: [
-              "title 只写章节标题本身，不要包含“第N章”“Chapter N”或序号；标题不追求工整，允许短句式、动作式、地点异常式或线索式。",
+              "硬验收：任务卡必须显式写出四件事：谁/什么规则先压主角，主角用什么可见动作反击或扭转，外部回报落在哪里，章末留下什么行动压力。缺任一项都视为不合格。",
+              "硬验收：任务卡必须把“读者这一章要产生什么情绪”写进 chapterGoal 或 pleasurePoint：憋屈、紧张、期待、心疼、心动、上头或解气至少选一种，并写清先欠什么情绪债、在哪里还。",
+              "硬验收：chapterGoal 和 mainPlotProgress 不能只写追踪、观察、验证、查资料、读提示、找道具、换地点；必须把信息动作放进对抗、谈判、竞争、公开反馈、资格争夺、关系摊牌、规则限制或阶段落点场面里。",
+              "硬验收：pleasurePoint 禁止只写某人刮目相看、信服、开始配合、专业能力展示、发现信息或逻辑推理；必须落成资源、权限、名声、关系站队、公开背书、对手代价、阶段结论或下一步选择权。",
+              "硬验收：endingHook 禁止只停在新物件、新字样、新地点、新信息、新数值、新提示或残片上；必须落在人物行动、权力阻碍、倒计时、对手反扑、关系选择、奖励/惩罚或下一步不可回避的行动压力上。",
+              "title 只写章节标题本身，不要包含“第N章”“Chapter N”或序号；标题不追求工整，允许短句式、动作式、地点异常式或信息压力式。",
               "title 必须参考 recentChapterTitles 避免连续相同字数和相同句式；如果最近 2 个以上标题都是 4 个中文字，本章 title 禁止再用 4 个中文字。",
-              "title 不要压成四字成语式概括；优先抓本章具体冲突、物件、线索、地点压力或章末钩子；避免套用固定模板词、空泛气氛词或万能概括词。",
-              "title 不能写成普通动作句，例如“她打开了某物”“他走进某地”“主角发现线索”；应压成有悬念或压力的标题，例如物件异常、地点压力、外部阻拦、错误判断、代价或章末危机。",
+              "title 不要压成四字成语式概括；优先抓本章具体冲突、物件、信息压力、地点压力或章末钩子；避免套用固定模板词、空泛气氛词或万能概括词。",
+              "title 不能写成普通动作句，例如“她打开了某物”“他走进某地”“主角发现信息”；应压成有悬念或压力的标题，例如物件异常、地点压力、外部阻拦、错误判断、代价或章末危机。",
               "title 不能像系统日志、后台记录、剧情摘要或面板数值；禁止出现“+10/-10/倒计时/23:59:58/KPI达标/看见真相/发现真相/锁定真凶”等直白说明式标题。",
               "title 尽量使用可视化的场面、物件、地点或外部压力，例如“茶水间的锅”“那份PPT”“监控缺口”，不要写成“数值变化，角色看见结果”。",
               "titleAlternatives 必须给 3 个备选标题，且三个备选标题的字数和句式不能相同；至少 2 个不能是 4 个中文字。",
               "输出必须精炼：chapterGoal、continuity、mainPlotProgress、pleasurePoint、endingHook 每项控制在 60-140 个中文字；requiredCharacters 不超过 4 个；foreshadowingTasks 不超过 3 条；rulesNotToBreak 不超过 8 条，每条不超过 60 个中文字。",
               "不要在任务卡里写正文片段、长对白、连续动作描写或完整段落；任务卡只写可执行剧情功能。",
+              "rulesNotToBreak 只能写稳定设定、题材边界、称谓口径、时间体力和能力限制；不得新增与 chapterGoal、mainPlotProgress 或 endingHook 冲突的地点、时间、权限、人物状态或行动范围。若不确定，宁可不写这条规则。",
               "任务卡里的本章目标、承接、主线推进、爽点和章末钩子都必须服务当前 projectName、projectDescription、bible、plotState。",
               "latestDraftActualEnding 是上一章真实正文落点；continuity 必须优先承接这个落点。lastLedger.cliffhanger 和旧任务卡 endingHook 只能辅助，不能覆盖真实正文。",
+              "continuityFacts 是前文已发生硬事实，优先级高于 longFormPlan、阶段蓝图和临场套话；如果其中显示人物已死亡、已抓获、已收押、已离场或已转交，本章不得把该人物重新写成自由行动、外逃、设伏、转移资源或现场同行，除非本章明确安排释放、越狱、被劫、调包、替身、误认、赶回或重新会合等解释桥段。",
               "如果 lastLedger.carryOverTasks 不为空，本章必须优先选择其中 1-2 项承接；不要强行一章清空全部未完成任务，剩余项可以继续滚入后续章节。",
-              "carryOverTasks 只承接真正未完成的剧情动作、证据闭环、人物对质或伏笔回收；不要把心理适应、伤痛、恐惧、收益来源、触发条件、写作手法说明当成下一章任务。",
+              "carryOverTasks 只承接真正未完成的剧情动作、人物冲突、阶段收束、资源/权限兑现、关系变化、公开反馈或伏笔回收；不要把单个信息、道具、数值、材料、合同、记录、符号、痕迹这类低戏剧细节单独扩成下一章目标。",
+              "如果上一章留下的是低戏剧细节，本章必须把它合并进更大的戏剧场面：对抗、谈判、试炼、竞争、公开反馈、资格争夺、关系摊牌、反派反扑或阶段落点，至少选择一种。",
               "requiredCharacters 必须包含本章必须实际出场或被现场比对、质询、阻拦、抢夺、指认的关键人物或角色；如果承接 carryOverTasks，必须把承接任务里的关键参与者写入 requiredCharacters。",
               "任务卡需要维护配角/暗线节奏：每 3-5 章至少安排一次配角小目标、秘密、亏欠、误判、立场变化、资源代价或小高光；但不得每章硬塞，也不得让支线替代主线。",
               "当 characters 中存在当前目标、秘密、未知信息或态度变化尚未兑现的配角时，本章可选择 1 个作为配角节拍：让他/她提供阻力、误导、帮助、隐瞒、付出代价或暴露新信息，并在 mainPlotProgress 里写清如何回扣主线。",
@@ -3040,14 +5111,14 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               "开局任务蓝图是开局阶段任务队列，不是严格章节编号；当上一章任务拆成多章完成时，不要跳过未完成项，也不要为了追第N章蓝图硬塞新任务。",
               "如果本章主要承接 carryOverTasks，mainPlotProgress 要说明本章承接的是上一章未完成项，并把开局任务蓝图中的新任务延后到后续章节。",
               "如果 latestDraftActualEnding 与 lastLedger.cliffhanger、旧任务卡钩子或主线状态不一致，以 latestDraftActualEnding 为准；缺失事件只能写成后续待发生，不能写成已经发生。",
-              "每张任务卡只安排一个核心场面、一个关键发现、一个主要阻力和一个章末钩子；不要把多个专业检验点、多个地点、旧案揭示和嫌疑人反转全塞进同一章。",
-              "连续查证章节必须合并节奏：发现线索 -> 验证关键点 -> 对质/收束/转入下一案，不能把撤退、跟踪、伤痛、等待、赶路单独扩成一整章目标。",
-              "任务卡必须写出本章小闭环：本章要解决或缩小的具体问题是什么，验证方式是什么，现场阻力是什么，结尾得到什么阶段结论。不能只写前往新地点、发现新线索、引出新人物。",
-              "如果上一章已经以新线索、新地点或新人物收尾，本章优先验证和对质，不要再把目标写成继续换地点寻找另一条线索；除非先给出明确阶段结论。",
+              "每张任务卡只安排一个核心戏剧场面、一个读者情绪承诺、一个主要阻力和一个章末钩子；关键发现只能服务戏剧场面，不能让“验证一个细节/读取一个提示/获得一个道具”成为整章唯一目标。",
+              "连续信息获取章节必须合并节奏：发现问题 -> 遭遇阻力或误判 -> 主角试错/反击 -> 得到阶段结论或小回报 -> 引出下一步压力，不能把撤退、跟踪、伤痛、等待、赶路、查资料单独扩成一整章目标。",
+              "任务卡必须写出本章读者体验闭环：开头谁压主角/谁不信主角/什么规则卡住主角，中段主角用什么行动反击或扭转，后段谁的态度、局面、权限、资源、关系、名声或阶段判断发生可见变化。不能只写前往新地点、发现新信息、验证物件、读取面板。",
+              "如果上一章已经以新信息、新地点、新人物、新道具或新规则收尾，本章优先让它产生冲突和回报，不要再把目标写成继续换地点寻找另一条信息；除非先给出明确阶段结论。",
               "任务卡必须检查时间与体力连续性：如果上一章已经夜探、奔逃、审讯、受伤、长时间查案或现实疲惫，本章应优先安排休整、天亮后的正式流程、现实醒来缓冲或压缩转场，不能继续无缝奔向新地点。",
-              "梦境/穿越类作品不需要默认“完成任务才能醒来”；除非创作圣经明确规定，否则可安排中途醒来再入梦，但再入梦必须承接同一案件进度，不能跳成新世界或重置关系。",
+              "梦境/穿越类作品不需要默认“完成任务才能醒来”；除非创作圣经明确规定，否则可安排中途醒来再入梦，但再入梦必须承接同一任务或同一阶段进度，不能跳成新世界或重置关系。",
               "如果项目存在现实/梦境、现世/异世、前世/今生、主世界/副本等双层空间，任务卡里的现实回响不能只写成情绪提示；必须安排一个有效现实场面，至少包含现实压力、身体代价、人际/工作/家庭阻力、信息误差或选择成本中的两项，并说明它如何影响主角下一次行动心态。",
-              "悬疑查案章必须设计现场阻力：有人质疑、催促、遮掩、破坏证物、给出错误判断或限制时间。不能只让主角顺畅观察并连续解释。",
+              "任何题材都必须设计现场阻力：有人质疑、轻视、催促、遮掩、抢功、设限、诱惑、竞争、给出错误判断或限制时间。不能只让主角顺畅观察、解释、升级或领取奖励。",
               "如果 projectDescription 不为空，它是本书核心承诺参考，任务卡不要明显违背简介里的主角身份、初始危机、金手指机制和核心卖点。",
               ...familyNameRules.slice(0, 2),
               ...addressFormRules.slice(0, 2),
@@ -3056,17 +5127,20 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
               ...protagonistEmbodimentRules,
               ...longFormPlanRules,
               "任务卡的 chapterGoal 必须写清本章如何推进核心承诺锚点；mainPlotProgress 必须写清这章推进的是主线还是支线，以及支线如何回到主线。",
-              "mainPlotProgress 必须包含阶段性结果：确认了什么、排除了什么、锁定了谁/哪类范围、改变了哪段关系或状态；禁止只写“获得新线索、继续追查、前往某处”。",
-              "mainPlotProgress 如果写支线，必须说明：关联配角是谁、该配角本章有什么小目标或压力、这条支线如何给主线提供线索/阻力/情绪补偿/伏笔，不允许只写“推进配角线”。",
+              "mainPlotProgress 必须包含阶段性结果：确认了什么、排除了什么、锁定了谁/哪类范围、改变了哪段关系或状态；禁止只写“获得新信息、继续深挖、前往某处”。",
+              "mainPlotProgress 如果写支线，必须说明：关联配角是谁、该配角本章有什么小目标或压力、这条支线如何给主线提供信息、阻力、情绪补偿、资源代价或伏笔作用，不允许只写“推进配角线”。",
               "任务卡只能规划剧情功能，不要安排“用旁白交代人物履历/学历/专业能力/世界观规则”；需要能力展示时，必须写成具体场面、动作、对话或现场判断。",
-              "任务卡的 pleasurePoint 不能只是“主角发现线索”；必须包含压制来源、反对者或风险，以及主角如何用一个可见动作扭转局面。",
-              "任务卡的 pleasurePoint 必须写清：本章收益是什么、收益来源是什么、触发条件是什么、是否符合关键机制、是否存在越级风险；如果只是铺垫章，可以明确写“小收益/线索/误会加深”，不要强行突破。",
+              "任务卡要把读者情绪当成剧情功能，而不是评价词：先设计让读者憋屈、担心、心疼、心动、期待或替主角不服的具体场面，再设计主角如何还债。",
+              "任务卡的 pleasurePoint 不能只是“主角发现信息/读到提示/拿到道具/数值上涨”；必须包含压制来源、反对者或风险，以及主角如何用一个可见动作扭转局面。",
+              "pleasurePoint 必须优先写成读者能感到爽的外部反馈：被质疑后压回去、误判被推翻、围观者震惊、关键人物改变态度、主角获得资源/权限/名额/地位/关系优势、反派付出代价或规则被主角反利用。技术验证、机制试错和信息获取只占爽点的一部分。",
+              "爽点类型必须从当前题材里挑选：被轻视后反击、打脸反派、身份/能力局部曝光、战力或专业能力碾压、金手指奖励、资源获取、危机反转、众人震惊、情绪补偿、地位提升、复仇推进、误会制造的信息差、关系站队变化。",
+              "任务卡的 pleasurePoint 必须写清：本章收益是什么、收益来源是什么、触发条件是什么、是否符合关键机制、是否存在越级风险；如果只是铺垫章，可以明确写“小收益/信息差/误会加深”，不要强行突破。",
               "最近章节台账只提供连续性，不等于自动变成新主线；如果上一章钩子开启了支线，本章必须说明它如何回扣核心承诺，或如何在本章/下章收束。",
-              "阶段收束优先级高于伏笔扩展：如果 longFormPlan、rulesNotToBreak 或 lastLedger.carryOverTasks 显示当前应收束、结案、回收或返回，本章不得把未解标记、旧线索、幕后压力、新地点、新物证继续扩成新的调查链；这些只能作为案后钩子保留。",
-              "阶段收束或阶段交接时，案后钩子、现实异常、后续暗线、下一阶段铺垫只能进入 endingHook 或 rulesNotToBreak，不能写进 title、chapterGoal、mainPlotProgress 或 foreshadowingTasks 的硬任务位。",
-              "如果上一章台账中的 newClues/cliffhanger/stateChanges 已标明只是案后钩子、暂不深挖、不揭示含义或后续铺垫，本章目标必须优先写结案、定责、返回、奖励、状态更新，不得把该钩子升级为本章主任务。",
-              "当本章处于收束模式时，foreshadowingTasks 只能写“回收/部分回收/保留为案后钩子/暂不深挖”，不得写“继续追查新线索、前往新地点、调查旧案细节”。",
-              "支线使用边界：支线章最多占本章一个核心场面；它可以制造误导、情绪、配角高光或新证据，但章末必须回到主线压力、核心承诺或下一步行动。",
+              "阶段收束优先级高于伏笔扩展：如果 longFormPlan、rulesNotToBreak 或 lastLedger.carryOverTasks 显示当前应收束、结算、回收或返回，本章不得把未解标记、旧信息、幕后压力、新地点、新道具继续扩成新的多章任务链；这些只能作为阶段后钩子保留。",
+              "阶段收束或阶段交接时，阶段后钩子、现实异常、后续暗线、下一阶段铺垫只能进入 endingHook 或 rulesNotToBreak，不能写进 title、chapterGoal、mainPlotProgress 或 foreshadowingTasks 的硬任务位。",
+              "如果上一章台账中的 newClues/cliffhanger/stateChanges 已标明只是阶段后钩子、暂不深挖、不揭示含义或后续铺垫，本章目标必须优先写结算、责任归属、返回、奖励、状态更新，不得把该钩子升级为本章主任务。",
+              "当本章处于收束模式时，foreshadowingTasks 只能写“回收/部分回收/保留为阶段后钩子/暂不深挖”，不得写“继续深挖新信息、前往新地点、调查旧任务细节”。",
+              "支线使用边界：支线章最多占本章一个核心场面；它可以制造误导、情绪、配角高光或新信息，但章末必须回到主线压力、核心承诺或下一步行动。",
               "任务卡章末钩子是本章优先争取的章末落点；普通压力钩子如果在目标字数内装不下，可以作为下一章承接目标，但本章必须留下清楚的阶段性压力或未解决问题；用户明确给出的具体可见场面钩子不能被改写成“下章再说”。",
               "章节功能可以轮换：允许日常经营、关系铺垫、信息差误会、资源小收益、机制试错、低强度压制，不要每章都强行新敌人、新地图、大战斗或大境界突破。",
               "前10章应优先稳住题材卖点、主角日常循环、关键机制反馈和第一阶段压力；除非大纲明确要求，不要过早开启大型副本或连续升级地图。",
@@ -3102,16 +5176,117 @@ export async function generateWritingTaskCardWithAi(context: TaskCardContext) {
   return attachAiTokenUsage({
     title: cleanPromptText(String(response.title ?? ""), 24),
     titleAlternatives: compactTextList((response as { titleAlternatives?: unknown }).titleAlternatives, 3, 24),
-    chapterGoal: cleanPromptText(String(response.chapterGoal ?? ""), 180),
-    continuity: cleanPromptText(String(response.continuity ?? ""), 180),
-    mainPlotProgress: cleanPromptText(String(response.mainPlotProgress ?? ""), 180),
+    chapterGoal: cleanPromptSentenceText(String(response.chapterGoal ?? ""), 180),
+    continuity: cleanPromptSentenceText(String(response.continuity ?? ""), 180),
+    mainPlotProgress: cleanPromptSentenceText(String(response.mainPlotProgress ?? ""), 180),
     requiredCharacters: asTextList(response.requiredCharacters).slice(0, 4),
-    pleasurePoint: cleanPromptText(String(response.pleasurePoint ?? ""), 180),
+    pleasurePoint: cleanPromptSentenceText(String(response.pleasurePoint ?? ""), 180),
     foreshadowingTasks: compactTextList(response.foreshadowingTasks, 3, 120),
-    rulesNotToBreak: compactTextList(response.rulesNotToBreak, 8, 90),
-    endingHook: cleanPromptText(String(response.endingHook ?? ""), 160)
+    rulesNotToBreak: compactTaskCardHardRules(response.rulesNotToBreak, 8, 90),
+    endingHook: cleanPromptSentenceText(String(response.endingHook ?? ""), 160)
   }, getAiTokenUsage(response));
 }
+
+export async function repairWritingTaskCardWithAi(input: {
+  context: TaskCardContext;
+  taskCard: Partial<StoredWritingTaskCard> & {
+    title?: string;
+    titleAlternatives?: string[];
+    requiredCharacters?: string[];
+    foreshadowingTasks?: string[];
+    rulesNotToBreak?: string[];
+  };
+  qualityIssues: string[];
+}) {
+  const response = await requestAiJson<Partial<StoredWritingTaskCard>>({
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是网文任务卡质检修复助手。请严格输出 JSON。你的任务是基于当前项目上下文，把已生成但读者体验偏弱的章节任务卡修成可执行任务卡。你只能修当前新作品，不能复用原书桥段，不能套用任何固定题材模板；不要引入项目上下文没有的类型元素、行业术语、能力机制、势力关系、道具或职业动作。必须根据 projectDescription、bible、plotState、lastLedger、latestDraft 和人物状态选择当前题材自己的冲突、收益和章末压力。"
+      },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            projectName: cleanPromptText(input.context.projectName, 120),
+            projectDescription: cleanPromptText(input.context.projectDescription ?? "", 800),
+            bible: compactTaskCardBible(input.context.bible),
+            plotState: compactTaskCardPlotState(input.context.plotState),
+            longFormPlan: buildTaskCardLongFormPlanSummary(input.context.longFormPlan, input.context.chapterNumber),
+            lastLedger: compactTaskCardLedger(input.context.lastLedger),
+            latestDraft: compactTaskCardLatestDraft(input.context.latestDraft),
+            latestDraftActualEnding: cleanPromptText(input.context.latestDraftActualEnding ?? "", 260),
+            continuityFacts: (input.context.continuityFacts ?? []).slice(0, 16),
+            characters: input.context.characters.slice(0, 5).map(compactTaskCardCharacter),
+            foreshadowings: input.context.foreshadowings.slice(0, 8).map(compactTaskCardForeshadowing),
+            chapterNumber: input.context.chapterNumber,
+            userInput: input.context.userInput ?? {},
+            currentTaskCard: {
+              title: cleanPromptText(input.taskCard.title ?? "", 40),
+              titleAlternatives: compactTextList(input.taskCard.titleAlternatives, 3, 24),
+              chapterGoal: cleanPromptText(input.taskCard.chapterGoal ?? "", 220),
+              continuity: cleanPromptText(input.taskCard.continuity ?? "", 220),
+              mainPlotProgress: cleanPromptText(input.taskCard.mainPlotProgress ?? "", 220),
+              requiredCharacters: compactTextList(input.taskCard.requiredCharacters, 4, 40),
+              pleasurePoint: cleanPromptText(input.taskCard.pleasurePoint ?? "", 220),
+              foreshadowingTasks: compactTextList(input.taskCard.foreshadowingTasks, 3, 120),
+              rulesNotToBreak: compactTaskCardHardRules(input.taskCard.rulesNotToBreak, 10, 100),
+              endingHook: cleanPromptText(input.taskCard.endingHook ?? "", 180)
+            },
+            qualityIssues: input.qualityIssues.slice(0, 5),
+	            repairRules: [
+	              "只修任务卡，不写正文，不写解释，不输出质检报告。",
+		              "必须保留上一章真实落点和已登记事实；不能让角色知道尚未揭露的信息。",
+		              "continuityFacts 是前文硬事实，优先级高于 longFormPlan 和当前任务卡；已死亡、已抓获、已收押、已离场或已转交的人物，不能被修成自由行动、外逃、设伏、转移资源或同场同行，除非任务卡明确安排释放、越狱、被劫、调包、替身、误认、赶回或重新会合等解释桥段。",
+		              "chapterGoal 和 mainPlotProgress 必须写成一个核心戏剧场面：外部压制或规则阻碍 -> 主角行动反击/扭转 -> 可见阶段结果。",
+		              "chapterGoal 或 pleasurePoint 必须写清读者情绪目标：憋屈、紧张、期待、心疼、心动、上头或解气至少一种，并写出情绪债由谁制造、由什么动作偿还。",
+		              "修复时优先保留单一核心场面；不要为了补戏剧性而同时加入多个地点转场、连续追逐、新物件、新危机或多轮行动链。",
+	              "容量硬限制：只保留一个主要地点/场域、一个主要阻力、一个关键道具或信息点、一个阶段结果；不要把追赶、换地点、发现物件、遭遇新危机连续堆成整章流程。",
+	              "如果需要章末压力，只写一个尚未展开的行动压力；不要在 endingHook 里继续完成追逐、逃亡、打斗、跳转新地图或开启下一章的大场面。",
+	              "pleasurePoint 必须包含压制来源、主角反击动作和外部回报；外部回报可为行动权、资源支持、公开支持、关系变化、对手代价、阶段结果、选择权或名声变化。",
+	              "endingHook 禁止只停在新信息、新地点、新物件、新数值或新提示；必须落到人物行动、对手反扑、权力阻碍、期限逼近、关系选择或奖惩变化。",
+	              "不得把规则话术写进字段，例如“必须”“不能只”“质检”“外部回报落在”“至少一种”“①②③”；字段应像作者能直接确认的任务卡。",
+	              "rulesNotToBreak 只能保留稳定设定和写作边界，不能写入与本章目标、主线推进或章末钩子互相打架的地点、时间、权限、人物状态或行动范围。",
+	              "不要按固定题材模板补桥段；只能使用当前项目上下文已经出现或明确允许的题材元素、人物关系、职业动作、能力机制和道具类型。",
+	              "输出字段要精炼，chapterGoal、mainPlotProgress、pleasurePoint、endingHook 每项控制在 60-130 个中文字；continuity 只承接上一章真实落点，不预演本章后半段。"
+	            ],
+            outputSchema: {
+              title: "string",
+              titleAlternatives: "string[]",
+              chapterGoal: "string",
+              continuity: "string",
+              mainPlotProgress: "string",
+              requiredCharacters: "string[]",
+              pleasurePoint: "string",
+              foreshadowingTasks: "string[]",
+              rulesNotToBreak: "string[]",
+              endingHook: "string"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ],
+    temperature: 0.2,
+    maxTokens: TASK_CARD_MAX_TOKENS,
+    timeoutMs: TASK_CARD_TIMEOUT_MS
+  });
+
+	  return attachAiTokenUsage({
+	    title: cleanPromptText(String(response.title ?? input.taskCard.title ?? ""), 24),
+	    titleAlternatives: compactTextList((response as { titleAlternatives?: unknown }).titleAlternatives, 3, 24),
+	    chapterGoal: cleanPromptSentenceText(String(response.chapterGoal ?? input.taskCard.chapterGoal ?? ""), 150),
+	    continuity: cleanPromptSentenceText(String(response.continuity ?? input.taskCard.continuity ?? ""), 140),
+	    mainPlotProgress: cleanPromptSentenceText(String(response.mainPlotProgress ?? input.taskCard.mainPlotProgress ?? ""), 150),
+	    requiredCharacters: asTextList(response.requiredCharacters).slice(0, 3),
+	    pleasurePoint: cleanPromptSentenceText(String(response.pleasurePoint ?? input.taskCard.pleasurePoint ?? ""), 140),
+	    foreshadowingTasks: compactTextList(response.foreshadowingTasks ?? input.taskCard.foreshadowingTasks, 3, 120),
+	    rulesNotToBreak: compactTaskCardHardRules(response.rulesNotToBreak ?? input.taskCard.rulesNotToBreak, 8, 90),
+	    endingHook: cleanPromptSentenceText(String(response.endingHook ?? input.taskCard.endingHook ?? ""), 130)
+	  }, getAiTokenUsage(response));
+	}
 
 export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
   try {
@@ -3163,12 +5338,13 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                 `必须在 ${maxCharacters} 字以内自然收束并写出章末落点，不要写到被系统长度限制截断。`,
                 "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
                 ...draftContext.closureRules,
+                ...draftContext.readerExperienceRules,
                 "节奏经济：环境、进门、躲藏、赶路、伤痛、呼吸、手部动作等过程描写只保留会改变局面的细节；不能把一次撤退、跟踪或身体不适扩成整章主体。",
                 draftContext.closureMode
                   ? "收束章的细节只能服务已登记信息闭环、关键回应、结果归属、状态更新或返回；不得把细节写成新的主动行动方向。"
-                  : "悬疑细节必须换来推进：每个细节要么形成证据、制造误判、逼出人物反应、推动对质或服务章末钩子；纯氛围和重复感受要压缩。",
-                "本章必须完成一个小闭环：开头承接问题，中段验证或遭遇阻力，后段给出阶段结论、排除项、锁定范围、人物反应或状态变化。章末可以留新压力，但不能整章只有换地点和发现新东西。",
-                "如果正文连续出现前往、赶到、进入、离开、返回等转场，要立刻压缩转场，把篇幅转回同一个场景内的验证、对质、误判被推翻、人物露馅或短复盘。",
+                  : "题材细节必须换来推进：每个细节要么制造误判、逼出人物反应、推动对抗/谈判/试炼/竞争、兑现资源或服务章末钩子；纯氛围、资料整理和重复感受要压缩。",
+                "本章必须完成一个小闭环：开头承接问题，中段验证或遭遇阻力，后段给出阶段结论、排除项、目标范围、人物反应、资源/权限变化或状态变化。章末可以留新压力，但不能整章只有换地点和发现新东西。",
+                "如果正文连续出现前往、赶到、进入、离开、返回等转场，要立刻压缩转场，把篇幅转回同一个场景内的验证、对抗、谈判、试炼、误判被推翻、人物露馅或短复盘。",
                 "时间与体力连续性必须可信：如果上一章刚经历夜探、奔逃、审讯、长时间查案、受伤或强刺激，本章要处理休息、饥饿、天色、换药、当值、等待或现实醒来缓冲；不能让主角像不需要睡觉一样连续转场。",
                 "转场只写有效成本：可用一两句交代天亮、回住处、换班、吃点东西、短睡或现实醒来；不要把休息写成水文，但也不能完全没有。",
                 draftContext.closureMode
@@ -3179,16 +5355,16 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                   : "正文预算必须先保证本章有完整阶段落点：中段细节可以压缩；任务卡普通压力钩子优先兑现，若目标字数内装不下，可以停在更早的有效压力点；但具体可见场面钩子不能顺延，必须压缩前置内容后在本章兑现。",
                 "如果目标字数偏短，只保留 3-5 个关键场面，最后 15%-25% 篇幅必须留给本章收束；不要为了兑现所有任务把正文硬撑长。",
                 "任务卡 requiredCharacters 是硬要求：除“主角”这类泛称外，名单里的每个具体人物都必须在正文中实际出现；若任务卡写的是“身份/职务+称呼”，正文可使用自然称呼，但必须有动作、对白、观察、质询、指认、阻拦或选择。",
-                "任务卡 foreshadowingTasks 只有在明确写了“本章必须/本章要/回收/处理/验证/比对/对质/定责”等动作时才是硬要求；如果写的是暂不回收、只确认方向、只保留钩子或不展开，本章只需轻触，不能扩成调查链。",
-                "涉及明确回收伏笔时，必须让读者看到对应对象、痕迹、人物反应或对质过程；不能只让旁白说“线索被回收”。",
+                "任务卡 foreshadowingTasks 只有在明确写了“本章必须/本章要/回收/处理/验证/比对/对质/兑现/摊牌/定责”等动作时才是硬要求；如果写的是暂不回收、只确认方向、只保留钩子或不展开，本章只需轻触，不能扩成新任务链。",
+                "涉及明确回收伏笔时，必须让读者看到对应对象、异常、人物反应、选择代价、对质或兑现过程；不能只让旁白说“线索被回收”。",
                 "任务卡和长篇规划里的心理适应、身体反应、现实记忆回响是人物节奏提示，不是每章打卡项；只有任务卡明确写“本章必须”时才需要可见兑现，否则优先写当前场景推进，不要反复写害怕、反胃或手抖。",
                 draftContext.closureMode
                   ? "如果本章有现实/梦境、现世/异世、前世/今生、主世界/副本等异常切换，主角必须有完整但克制的认知链：先否认或归因于压力/疲惫/幻觉，再被一两个具体感官细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定、直接判定真相或开启新行动链。"
                   : "",
                 "如果本章从原本生活层再次进入另一层空间，不能用“合眼/睡着/再睁眼”直接换场景；必须写出入睡前抗拒或自我解释、切换时的感官异常或时间断裂、醒来后的短暂错位、通过衣物/身体/地点/时间/他人反应确认已回到另一层。",
                 "开写前先把本章拆成 4-7 个可见场面，但不要把场面表输出；正文只能输出小说内容。",
-                "本章必须有现场阻力：质疑、催促、证物将被处理、错误结论压过主角、有人遮掩或时间限制。不能写成主角一路顺畅观察和讲解。",
-                "专业判断必须写成冲突里的动作：先有人误判或阻拦，再由主角抓住一个具体细节反击。每个专业点最多用一两句，不要连续教学。",
+                "本章必须有现场阻力：质疑、轻视、催促、资源/信息/机会将被夺走、错误判断压过主角、有人遮掩或时间限制。不能写成主角一路顺畅观察、解释、升级或领取奖励。",
+                "专业判断、规则试错或能力展示必须写成冲突里的动作：先有人误判或阻拦，再由主角抓住一个具体细节反击。每个专业点最多用一两句，不要连续教学。",
                 draftContext.closureMode
                   ? "收束章每 400 字内可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作制造节奏，不要强行加入新信息。"
                   : "每 400 字内至少出现一次外部反应、误解、打断、风险升级或新信息，不要整段整段平铺叙事。",
@@ -3269,6 +5445,7 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                   "只续写正文后半段，不要重复已有内容。",
                   `续写后整章最高不得超过 ${maxCharacters} 字。`,
                   ...draftContext.closureRules,
+                  ...draftContext.readerExperienceRules,
                   "continuityFacts 是前文已发生事实；续写不得把已经见过、已经知道对方身份或已经处理过同一事件的人物写成陌生人。",
                   "如果当前正文已经接近或超过最高字数，只补完整句和章末落点，不要继续展开新战斗、新设定或新对话。",
                   ...buildNarrativeDictionRules(context),
@@ -3280,7 +5457,7 @@ export async function generateChapterDraftWithAi(context: ChapterDraftContext) {
                   "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
                   "如果已有内容过早收尾，可以补一个更清楚的阶段性压力或未解决问题。",
                   draftContext.closureMode
-                    ? "收束章续写不得为了普通阶段后钩子继续展开暗线；具体可见场面钩子只兑现可见动作和外部压力，不继续追查。"
+                    ? "收束章续写不得为了普通阶段后钩子继续展开暗线；具体可见场面钩子只兑现可见动作和外部压力，不继续深挖。"
                     : "任务卡普通压力钩子优先兑现；如果篇幅不够，允许不完整兑现，但具体可见场面钩子必须压缩前置内容后进入场面，不要把正文写成半截。",
                   "续写结尾必须以完整句子结束，不能停在逗号、顿号、破折号、连词或半句话。"
                 ],
@@ -3369,12 +5546,13 @@ export async function* streamChapterDraftTextWithAi(
               `必须在 ${maxCharacters} 字以内自然收束并写出章末落点，不要写到被系统长度限制截断。`,
               "如果篇幅不足以展开所有细节，优先保留本章目标、核心冲突、爽点释放和章末钩子，压缩铺垫和旁支描写。",
                 ...draftContext.closureRules,
+                ...draftContext.readerExperienceRules,
                 "节奏经济：环境、进门、躲藏、赶路、伤痛、呼吸、手部动作等过程描写只保留会改变局面的细节；不能把一次撤退、跟踪或身体不适扩成整章主体。",
               draftContext.closureMode
                 ? "收束章的细节只能服务已登记信息闭环、关键回应、结果归属、状态更新或返回；不得把细节写成新的主动行动方向。"
-                : "悬疑细节必须换来推进：每个细节要么形成证据、制造误判、逼出人物反应、推动对质或服务章末钩子；纯氛围和重复感受要压缩。",
-              "本章必须完成一个小闭环：开头承接问题，中段验证或遭遇阻力，后段给出阶段结论、排除项、锁定范围、人物反应或状态变化。章末可以留新压力，但不能整章只有换地点和发现新东西。",
-              "如果正文连续出现前往、赶到、进入、离开、返回等转场，要立刻压缩转场，把篇幅转回同一个场景内的验证、对质、误判被推翻、人物露馅或短复盘。",
+                : "题材细节必须换来推进：每个细节要么制造误判、逼出人物反应、推动对抗/谈判/试炼/竞争、兑现资源或服务章末钩子；纯氛围、资料整理和重复感受要压缩。",
+              "本章必须完成一个小闭环：开头承接问题，中段验证或遭遇阻力，后段给出阶段结论、排除项、目标范围、人物反应、资源/权限变化或状态变化。章末可以留新压力，但不能整章只有换地点和发现新东西。",
+              "如果正文连续出现前往、赶到、进入、离开、返回等转场，要立刻压缩转场，把篇幅转回同一个场景内的验证、对抗、谈判、试炼、误判被推翻、人物露馅或短复盘。",
               "时间与体力连续性必须可信：如果上一章刚经历夜探、奔逃、审讯、长时间查案、受伤或强刺激，本章要处理休息、饥饿、天色、换药、当值、等待或现实醒来缓冲；不能让主角像不需要睡觉一样连续转场。",
               "转场只写有效成本：可用一两句交代天亮、回住处、换班、吃点东西、短睡或现实醒来；不要把休息写成水文，但也不能完全没有。",
               draftContext.closureMode
@@ -3385,16 +5563,16 @@ export async function* streamChapterDraftTextWithAi(
                 : "正文预算必须先保证本章有完整阶段落点：中段细节可以压缩；任务卡普通压力钩子优先兑现，若目标字数内装不下，可以停在更早的有效压力点；但具体可见场面钩子不能顺延，必须压缩前置内容后在本章兑现。",
               "如果目标字数偏短，只保留 3-5 个关键场面，最后 15%-25% 篇幅必须留给本章收束；不要为了兑现所有任务把正文硬撑长。",
               "任务卡 requiredCharacters 是硬要求：除“主角”这类泛称外，名单里的每个具体人物都必须在正文中实际出现；若任务卡写的是“身份/职务+称呼”，正文可使用自然称呼，但必须有动作、对白、观察、质询、指认、阻拦或选择。",
-              "任务卡 foreshadowingTasks 只有在明确写了“本章必须/本章要/回收/处理/验证/比对/对质/定责”等动作时才是硬要求；如果写的是暂不回收、只确认方向、只保留钩子或不展开，本章只需轻触，不能扩成调查链。",
-              "涉及明确回收伏笔时，必须让读者看到对应对象、痕迹、人物反应或对质过程；不能只让旁白说“线索被回收”。",
+              "任务卡 foreshadowingTasks 只有在明确写了“本章必须/本章要/回收/处理/验证/比对/对质/兑现/摊牌/定责”等动作时才是硬要求；如果写的是暂不回收、只确认方向、只保留钩子或不展开，本章只需轻触，不能扩成新任务链。",
+              "涉及明确回收伏笔时，必须让读者看到对应对象、异常、人物反应、选择代价、对质或兑现过程；不能只让旁白说“线索被回收”。",
               "任务卡和长篇规划里的心理适应、身体反应、现实记忆回响是人物节奏提示，不是每章打卡项；只有任务卡明确写“本章必须”时才需要可见兑现，否则优先写当前场景推进，不要反复写害怕、反胃或手抖。",
               draftContext.closureMode
                 ? "如果本章有现实/梦境、现世/异世、前世/今生、主世界/副本等异常切换，主角必须有完整但克制的认知链：先否认或归因于压力/疲惫/幻觉，再被一两个具体感官细节动摇，最后暂时压下、记录或做低成本自检；不能直接接受设定、直接判定真相或开启新行动链。"
                 : "",
               "如果本章从原本生活层再次进入另一层空间，不能用“合眼/睡着/再睁眼”直接换场景；必须写出入睡前抗拒或自我解释、切换时的感官异常或时间断裂、醒来后的短暂错位、通过衣物/身体/地点/时间/他人反应确认已回到另一层。",
               "开写前先把本章拆成 4-7 个可见场面，但不要把场面表输出；正文只能输出小说内容。",
-              "本章必须有现场阻力：质疑、催促、证物将被处理、错误结论压过主角、有人遮掩或时间限制。不能写成主角一路顺畅观察和讲解。",
-              "专业判断必须写成冲突里的动作：先有人误判或阻拦，再由主角抓住一个具体细节反击。每个专业点最多用一两句，不要连续教学。",
+              "本章必须有现场阻力：质疑、轻视、催促、资源/信息/机会将被夺走、错误判断压过主角、有人遮掩或时间限制。不能写成主角一路顺畅观察、解释、升级或领取奖励。",
+              "专业判断、规则试错或能力展示必须写成冲突里的动作：先有人误判或阻拦，再由主角抓住一个具体细节反击。每个专业点最多用一两句，不要连续教学。",
               draftContext.closureMode
                 ? "收束章每 400 字内可以用质疑、沉默、承认、反驳、判定、离场、返回等收束动作制造节奏，不要强行加入新信息。"
                 : "每 400 字内至少出现一次外部反应、误解、打断、风险升级或新信息，不要整段整段平铺叙事。",
@@ -3482,6 +5660,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
               "只续写正文后半段，不要重复已有内容。",
               `续写后整章最高不得超过 ${maxCharacters} 字。`,
               ...draftContext.closureRules,
+              ...draftContext.readerExperienceRules,
               "continuityFacts 是前文已发生事实；续写不得把已经见过、已经知道对方身份或已经处理过同一事件的人物写成陌生人。",
               "如果当前正文已经接近或超过最高字数，只补完整句和章末落点，不要继续展开新战斗、新设定或新对话。",
               "续写也不能补成说明书：不要集中补人物履历、专业知识或世界观规则；只补场面推进、动作、对白和结尾落点。",
@@ -3497,7 +5676,7 @@ export async function* streamChapterDraftExpansionTextWithAi(
               "重点补足场景推进、人物对话、压制过程、反击动作和爽点释放。",
               "如果已有内容过早收尾，可以补一个更清楚的阶段性压力或未解决问题。",
                 draftContext.closureMode
-                  ? "收束章续写不得为了普通阶段后钩子继续展开暗线；具体可见场面钩子只兑现可见动作和外部压力，不继续追查。"
+                  ? "收束章续写不得为了普通阶段后钩子继续展开暗线；具体可见场面钩子只兑现可见动作和外部压力，不继续深挖。"
                   : "任务卡普通压力钩子优先兑现；如果篇幅不够，允许不完整兑现，但具体可见场面钩子必须压缩前置内容后进入场面，不要把正文写成半截。",
                 draftContext.closureMode
                   ? "收束/休整/结算章续写的最后一段必须落在结果、状态、关系、奖励、休息、返回或情绪余波上，不得补成新的场景入口。"
@@ -3600,10 +5779,13 @@ export async function repairChapterDraftAgainstTaskCardWithAi(
             foreshadowings: context.foreshadowings,
             repairRules: [
               "必出人物必须在正文中实际出现，并发生有效动作、对白、观察、质询、指认、阻拦或选择；若任务卡写的是“身份/职务+称呼”，正文可使用自然称呼，不能只在台账式旁白里提一下。",
-              "伏笔任务只有明确要求本章回收、处理、验证、比对、对质或定责时才必须补场面；若任务写的是暂不回收、只确认方向、只保留钩子或不展开，只需轻触并压住，不能扩成调查链。",
+              "如果 repairIssues 提到跨章人物在场反写，只补清人物如何赶回、会合、带人赶到、接应或交接；不要改成角色凭空同行，也不要新增大支线。",
+              "跨章承接以 previousDraftTail 的真实落点为准；如果上一章结尾已经同场或已经到达当前场面，不要为了形式重复写一遍赶路。",
+              "伏笔任务只有明确要求本章回收、处理、验证、比对、对质、兑现、摊牌或定责时才必须补场面；若任务写的是暂不回收、只确认方向、只保留钩子或不展开，只需轻触并压住，不能扩成新任务链。",
               ...draftContext.closureRules,
-              "如果正文处于阶段收束模式，必须把新线索降级为案后钩子或背景压力，优先合并既有证据、人物供词和前文线索，推进对质、定责、回收、返回或阶段性结案。",
-              "修复时不要新增另一个更大的新案、新地点、新组织、新嫌疑人或多章调查链。",
+              ...draftContext.readerExperienceRules,
+              "如果正文处于阶段收束模式，必须把新信息降级为阶段后钩子或背景压力，优先合并既有信息、人物选择和前文伏笔，推进对抗结果、责任归属、资源兑现、关系变化、回收、返回或阶段落点。",
+              "修复时不要新增另一个更大的新任务、新地图、新组织、新对手或多章行动链。",
               draftContext.closureMode
                 ? "如果正文结尾停在推门、进屋、拐入新地点、看见陌生人、发现新物件或听见异常声音，必须改成结果落定后的轻微余波，不要保留开放式动作入口。"
                 : "",
@@ -3706,8 +5888,10 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
               "events 只写本章真实发生的关键事件，3-6 条。",
               "events 必须服务章节因果网：每条尽量包含触发原因、人物行动和直接结果，不要只写氛围。",
               "提取状态时必须以现有 plotState.mainGoal、shortTermGoal、currentStage 和任务卡为参照；不要因为本章出现新地图、新组织或新危机，就自动把它升级为新的长期主线。",
-              "如果任务卡或长篇规划显示本章处于收束、结案、回收或返回阶段，newClues 只能记录能服务当前收束的关键证据；案后暗线只能写进 cliffhanger 或 foreshadowingUpdates，不得把它扩成 plotState 的新主线或下一章必须深挖的任务。",
-              "伏笔更新要区分“案内证据”和“案后钩子”：案内证据用于对质、定责、结案；案后钩子只保留为未回收伏笔，不能自动生成新地点、新嫌疑人、新旧案调查链。",
+              "如果任务卡或长篇规划显示本章处于收束、结算、回收或返回阶段，newClues 只能记录能服务当前收束的关键驱动信息；阶段后暗线只能写进 cliffhanger 或 foreshadowingUpdates，不得把它扩成 plotState 的新主线或下一章必须深挖的任务。",
+              "伏笔更新要区分“阶段内驱动信息”和“阶段后钩子”：阶段内信息用于对抗、定责、兑现、结算或关系变化；阶段后钩子只保留为未回收伏笔，不能自动生成新地点、新对手、新组织或多章行动链。",
+              "newClues 只记录会改变下一步行动、对抗对象、目标范围、权限、资源、关系、人物态度或阶段结论的信息；单个线索、道具、数值、材料、合同、记录、符号、痕迹如果没有造成外部后果，只能并入 events 或 payoff，不要单独列为 newClues。",
+              "cliffhanger 必须优先写成下一章的戏剧压力：谁会阻拦、谁要摊牌、谁态度变化、哪项资源/权限刚打开又被卡住、哪个对手要反扑、哪段关系要站队；不要只写“又发现某个物件/字样/数值/痕迹”。",
               ...mechanismIntegrityRules,
               ...longFormPlanRules,
               "角色对外撒谎、遮掩、误导、猜测或临时编造的说法，不能当成真实设定入库；必须标注为“某角色对外宣称/误导信息”，真实状态以旁白、系统提示和已发生事件为准。",
@@ -3776,7 +5960,7 @@ export async function extractChapterStateUpdateWithAi(context: ChapterStateUpdat
   return attachAiTokenUsage({
     events: asTextList(response.events).slice(0, 8),
     newCharacters: asTextList(response.newCharacters).slice(0, 8),
-    newClues: asTextList(response.newClues).slice(0, 10),
+    newClues: compactDramaticTaskDrivers(response.newClues, 8, 130),
     payoff: String(response.payoff ?? "").trim(),
     cliffhanger: String(response.cliffhanger ?? "").trim(),
     stateChanges: asTextList(response.stateChanges).slice(0, 12),
@@ -3850,12 +6034,17 @@ export async function reviewChapterDraftWithAi(context: ReviewContext) {
                 ...mechanismIntegrityRules,
                 ...longFormPlanRules,
                 "必须检查正文是否只是在延续上一章支线，却没有让本章目标、收益、冲突或章末钩子回到核心承诺；如果是，应标为 high severity 的“主线偏移风险”。",
-                "如果长篇规划、任务卡或不可违反规则显示本章应收束、结案、回收或返回，但正文继续新增旧案、新地点、新物证、新组织、新嫌疑人或多章调查链，应标为 high severity 的“阶段收束失控”。",
-                "伏笔可以保留为案后钩子，但不能在收束章被正文继续深挖成新主线；审稿建议应要求降级为一两句压力点，或滚入后续案外暗线，而不是让本章继续查。",
+                "如果长篇规划、任务卡或不可违反规则显示本章应收束、结算、回收或返回，但正文继续新增旧任务、新地图、新道具、新组织、新对手或多章行动链，应标为 high severity 的“阶段收束失控”。",
+                "伏笔可以保留为阶段后钩子，但不能在收束章被正文继续深挖成新主线；审稿建议应要求降级为一两句压力点，或滚入后续暗线，而不是让本章继续扩写。",
                 "审稿口径不是要求一章完成整张任务卡；如果正文已经完成一个合理阶段落点，并且未完成任务可以通过章节台账里的“滚入下一章的未完成任务”承接到后续章节，不要标为任务未完成。",
                 "开局任务蓝图是开局任务队列和节奏参考，不是严格章节编号；如果上一章任务拆成多章完成，不要仅因第N章没有执行蓝图第N条就判定跑偏。但如果蓝图中明确写了当前章节号和“必须”要求，应检查任务卡和正文是否落实或正确承接。",
                 "如果正文没有完成任务卡全部内容，应判断是否留下清楚阶段性压力、未解决线索或下一步动作；只有既没阶段落点、又没有可承接方向时，才标为中高风险。",
-                "必须检查行动闭环：如果正文频繁换场、赶路、进入新地点、发现新物件或新线索，但很少验证、排除、对质、复盘、锁定范围或给出阶段结论，应标为 medium severity 的“行动推进多，问题闭环弱”。",
+                "必须检查行动闭环：如果正文频繁换场、赶路、进入新地点、发现新物件、读取新提示或获得新信息，但很少遭遇阻力、试错、验证、对抗、复盘、给出阶段结论或兑现回报，应标为 medium severity 的“行动推进多，问题闭环弱”。",
+                "必须检查读者体验闭环：如果正文主要在写信息整理、物件观察、技术验证、数值变化、规则解释或线索记录，却缺少人物正面摩擦、外部压制、公开反应、态度变化或可见收益，应标为 medium severity 的“细节流程压过戏剧体验”。",
+                "必须检查本章有没有明确读者情绪目标：憋屈、紧张、期待、心疼、心动、上头或解气。如果正文只有逻辑推进，没有让读者产生情绪，应标为 medium severity 的“情绪价值不足”。",
+                "必须检查情绪债是否成立：压制、误判、威胁、羞辱、抢功、关系冷落、暧昧拉扯或规则卡人是否具体可感。如果只写“她很委屈”“他很愤怒”“众人震惊”等标签，应标为 medium severity 的“情绪标签化”。",
+                "必须检查爽点还债是否有场面：主角是否用可见动作扭转，是否有对手失态、旁观者反应、关键人物态度变化、资源权限打开、关系站队或阶段结论。如果没有，应标为 medium severity 的“爽点兑现不足”。",
+                "如果爽点只是主角发现信息、比对成功、解释原理、读到面板、拿到道具或数值上涨，但没有让对手露怯、关键人物改变态度、误判被推翻、资源/权限打开、关系站队或局势反转，应指出爽点外部反馈不足。",
                 "必须逐项核验本章收益：收益是什么、来源是什么、触发条件是什么、是否符合关键机制、是否造成阶段越级；如果来源偷换或越级过快，应标为 high severity 的“关键机制失真”。",
                 "如果正文保留了关键机制的名词，但实际让主角靠另一套资源、奇遇、外力或副本收益完成核心成长，应指出这是机制偷换，并建议改成符合关键机制的小收益、线索或外部诱因。",
                 "如果角色为了遮掩真相对外编造收益来源，正文必须明确这是借口或误导，不能让读者或项目台账误以为真实成长来源已经变成另一套机制。",

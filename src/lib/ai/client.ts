@@ -67,6 +67,113 @@ function normalizeTokenUsage(raw: unknown): AiTokenUsage | undefined {
   };
 }
 
+function textFromAiContentValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => textFromAiContentValue(item))
+      .filter(Boolean)
+      .join("");
+  }
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as Record<string, unknown>;
+  const text =
+    textFromAiContentValue(record.text) ||
+    textFromAiContentValue(record.content) ||
+    textFromAiContentValue(record.output_text);
+
+  return text;
+}
+
+function textFromAiJsonFallbackValue(value: unknown): string {
+  const text = textFromAiContentValue(value).trim();
+
+  if (!text) {
+    return "";
+  }
+
+  const candidate = extractJsonCandidate(text).trim();
+
+  return /^[\[{]/.test(candidate) ? candidate : "";
+}
+
+function extractAiResponseContent(payload: unknown, options: { allowJsonFromReasoning?: boolean } = {}) {
+  const body = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const choices = Array.isArray(body.choices) ? body.choices : [];
+  const firstChoice = choices[0] && typeof choices[0] === "object" ? (choices[0] as Record<string, unknown>) : {};
+  const message = firstChoice.message && typeof firstChoice.message === "object"
+    ? (firstChoice.message as Record<string, unknown>)
+    : {};
+  const delta = firstChoice.delta && typeof firstChoice.delta === "object"
+    ? (firstChoice.delta as Record<string, unknown>)
+    : {};
+  const outputItems = Array.isArray(body.output) ? body.output : [];
+
+  const candidates = [
+    message.content,
+    firstChoice.text,
+    firstChoice.content,
+    delta.content,
+    body.output_text,
+    body.content,
+    body.text,
+    body.message && typeof body.message === "object"
+      ? (body.message as Record<string, unknown>).content
+      : undefined,
+    outputItems
+  ];
+
+  const content = candidates
+    .map(textFromAiContentValue)
+    .find((item) => item.trim().length > 0)
+    ?.trim();
+
+  if (content || !options.allowJsonFromReasoning) {
+    return content;
+  }
+
+  const reasoningCandidates = [
+    message.reasoning_content,
+    message.reasoning,
+    firstChoice.reasoning_content,
+    firstChoice.reasoning,
+    body.reasoning_content,
+    body.reasoning
+  ];
+
+  return reasoningCandidates
+    .map(textFromAiJsonFallbackValue)
+    .find((item) => item.trim().length > 0)
+    ?.trim();
+}
+
+function summarizeAiResponseShape(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return typeof payload;
+  }
+
+  const body = payload as Record<string, unknown>;
+  const choice = Array.isArray(body.choices) && body.choices[0] && typeof body.choices[0] === "object"
+    ? (body.choices[0] as Record<string, unknown>)
+    : null;
+  const message = choice?.message && typeof choice.message === "object"
+    ? (choice.message as Record<string, unknown>)
+    : null;
+
+  return [
+    `top=${Object.keys(body).slice(0, 8).join(",") || "none"}`,
+    choice ? `choice=${Object.keys(choice).slice(0, 8).join(",") || "none"}` : "choice=none",
+    message ? `message=${Object.keys(message).slice(0, 8).join(",") || "none"}` : "message=none"
+  ].join("; ");
+}
+
 export function attachAiTokenUsage<T>(value: T, usage?: AiTokenUsage): WithAiTokenUsage<T> {
   if (!usage || !value || typeof value !== "object") {
     return value as WithAiTokenUsage<T>;
@@ -324,55 +431,88 @@ async function requestJsonRepair<T>(
   originalContent: string,
   maxTokens?: number
 ) {
-  const timeout = withTimeout(config.timeoutMs);
-  const repairBody: Record<string, unknown> = {
-    model: config.model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "你是 JSON 修复器。请只输出一个合法 JSON 对象，不要解释，不要 Markdown，不要代码块。保留原内容里的字段和值；如果某个字段无法修复，用空字符串或空数组。"
-      },
-      {
-        role: "user",
-        content: originalContent.slice(0, 24000)
+  const requestedMaxTokens = Math.max(maxTokens ?? 0, 1800);
+
+  async function executeRepair(prompt: string, maxTokenBudget: number) {
+    const repairTimeout = withTimeout(config.timeoutMs);
+    const repairBody: Record<string, unknown> = {
+      model: config.model,
+      messages: [
+        {
+          role: "system",
+          content: prompt
+        },
+        {
+          role: "user",
+          content: originalContent.slice(0, 24000)
+        }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: maxTokenBudget
+    };
+
+    try {
+      const response = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`
+        },
+        body: JSON.stringify(repairBody),
+        signal: repairTimeout.signal
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`AI JSON 修复请求失败：${response.status} ${errorText}`);
       }
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0,
-    max_tokens: Math.max(maxTokens ?? 0, 1800)
-  };
+
+      const payload = await response.json();
+      const choice = payload?.choices?.[0];
+      const finishReason = choice?.finish_reason;
+      const content = extractAiResponseContent(payload, { allowJsonFromReasoning: true });
+
+      if (!content || typeof content !== "string") {
+        throw new Error(`AI JSON 修复响应缺少可解析文本内容：${summarizeAiResponseShape(payload)}`);
+      }
+
+      if (finishReason && finishReason !== "stop") {
+        if (finishReason === "length") {
+          try {
+            return attachAiTokenUsage(parseJsonContent<T>(content, { warn: false }), normalizeTokenUsage(payload?.usage));
+          } catch {
+            throw new Error(`AI JSON 修复未正常结束：${finishReason}`);
+          }
+        }
+
+        throw new Error(`AI JSON 修复未正常结束：${finishReason}`);
+      }
+
+      return attachAiTokenUsage(parseJsonContent<T>(content, { warn: false }), normalizeTokenUsage(payload?.usage));
+    } finally {
+      repairTimeout.clear();
+    }
+  }
+
+  const timeout = withTimeout(config.timeoutMs);
 
   try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`
-      },
-      body: JSON.stringify(repairBody),
-      signal: timeout.signal
-    });
+    return await executeRepair(
+      "你是 JSON 修复器。请只输出一个合法 JSON 对象，不要解释，不要 Markdown，不要代码块。保留原内容里的字段和值；如果某个字段无法修复，用空字符串或空数组。",
+      requestedMaxTokens
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AI JSON 修复请求失败：${response.status} ${errorText}`);
+    if (!/AI JSON 修复未正常结束：length|JSON 不完整|不是有效 JSON/i.test(message)) {
+      throw error;
     }
 
-    const payload = await response.json();
-    const choice = payload?.choices?.[0];
-    const finishReason = choice?.finish_reason;
-    const content = choice?.message?.content;
-
-    if (finishReason && finishReason !== "stop") {
-      throw new Error(`AI JSON 修复未正常结束：${finishReason}`);
-    }
-
-    if (!content || typeof content !== "string") {
-      throw new Error("AI JSON 修复响应缺少 message.content");
-    }
-
-    return attachAiTokenUsage(parseJsonContent<T>(content, { warn: false }), normalizeTokenUsage(payload?.usage));
+    return await executeRepair(
+      "你是 JSON 压缩修复器。只输出一个合法 JSON 对象，不要解释，不要 Markdown。保留原字段结构；字符串字段只保留关键短句，数组只保留已有项的精简版；不要新增剧情内容。",
+      Math.max(requestedMaxTokens, 3600)
+    );
   } finally {
     timeout.clear();
   }
@@ -416,7 +556,7 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
     const payload = await response.json();
     const choice = payload?.choices?.[0];
     const finishReason = choice?.finish_reason;
-    const content = choice?.message?.content;
+    const content = extractAiResponseContent(payload, { allowJsonFromReasoning: true });
 
     if (finishReason && finishReason !== "stop") {
       if (finishReason === "length") {
@@ -443,7 +583,7 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
     }
 
     if (!content || typeof content !== "string") {
-      throw new Error("AI 响应缺少 message.content");
+      throw new Error(`AI 响应缺少可解析文本内容：${summarizeAiResponseShape(payload)}`);
     }
 
     try {
