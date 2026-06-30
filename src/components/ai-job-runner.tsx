@@ -20,27 +20,34 @@ function sleep(ms: number) {
 
 const MAX_POLL_ATTEMPTS = 240;
 const RUN_REQUEST_TIMEOUT_MS = 720000;
-const STALE_LONG_FORM_JOB_MS = 90 * 1000;
+const RESUMABLE_JOB_TYPES = new Set([
+  "analyze_chapters",
+  "generate_task_card",
+  "generate_chapter",
+  "review_chapter",
+  "generate_chapter_batch",
+  "generate_long_form_plan",
+  "review_long_form_plan",
+  "edit_second_draft",
+  "project_creation_assist"
+]);
 
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
 }
 
 function isResumableRunningJob(job: NonNullable<JobResponse["job"]>) {
-  if (job.status !== "running") {
+  if (job.status !== "running" || !job.type || !RESUMABLE_JOB_TYPES.has(job.type)) {
     return false;
   }
 
-  if (
-    job.type !== "generate_long_form_plan" &&
-    job.type !== "review_long_form_plan" &&
-    job.type !== "generate_chapter_batch"
-  ) {
-    return false;
-  }
+  const staleAfterMs =
+    job.type === "analyze_chapters" || job.type === "generate_chapter_batch"
+      ? 10 * 60 * 1000
+      : 90 * 1000;
 
   const updatedAt = Date.parse(String(job.updatedAt ?? ""));
-  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > STALE_LONG_FORM_JOB_MS;
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > staleAfterMs;
 }
 
 export function AiJobRunner({

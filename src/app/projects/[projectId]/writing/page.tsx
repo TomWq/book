@@ -319,6 +319,10 @@ export default async function ProjectWritingPage({
     ...writingState.ledgers.map((ledger) => ledger.chapterNumber),
     ...writingState.reviews.map((review) => review.chapterNumber)
   );
+  const latestWrittenChapterNumber = Math.max(
+    0,
+    ...writingState.drafts.map((draft) => draft.chapterNumber)
+  );
   const nextChapterNumber = maxChapterNumber + 1;
   const activeTaskCard = latestTaskCard && !latestTaskCardDraft ? latestTaskCard : null;
   const taskCardChapterNumber = activeTaskCard?.chapterNumber ?? nextChapterNumber;
@@ -338,6 +342,12 @@ export default async function ProjectWritingPage({
     writingState.writingBatchJobs.find((job) => job.status === "pending" || job.status === "running") ?? null;
   const activeWritingBatchOutput = activeWritingBatchJob ? readJobObject(activeWritingBatchJob.output) : {};
   const activeWritingBatchInput = activeWritingBatchJob ? readJobObject(activeWritingBatchJob.input) : {};
+  const activeWritingBatchReplaceExisting =
+    activeWritingBatchOutput.replaceExisting === true || activeWritingBatchInput.replaceExisting === true;
+  const activeWritingBatchTitle = activeWritingBatchReplaceExisting ? "正在批量范围重写" : "正在批量连写章节";
+  const activeWritingBatchDoneMessage = activeWritingBatchReplaceExisting
+    ? "批量范围重写已完成，正在刷新创作工作台。"
+    : "批量连写已完成，正在刷新创作工作台。";
   const activeWritingBatchTotal = Number(
     activeWritingBatchOutput.requestedChapters ?? activeWritingBatchInput.chapterCount ?? 0
   );
@@ -588,16 +598,16 @@ export default async function ProjectWritingPage({
                 <strong>从第 {taskCardChapterNumber} 章开始批量生成</strong>
                 <span>适合先跑 3-5 章看节奏；稳定后可以增加到十几章或几十章。</span>
               </div>
-              {activeWritingBatchJob ? (
+              {activeWritingBatchJob && !activeWritingBatchReplaceExisting ? (
                 <AiJobRunner
                   jobId={activeWritingBatchJob.id}
-                  title="正在批量连写章节"
+                  title={activeWritingBatchTitle}
                   runningMessage={
                     activeWritingBatchCurrentChapter > 0
                       ? `正在处理第 ${activeWritingBatchCurrentChapter} 章${activeWritingBatchStep ? `：${activeWritingBatchStep}` : ""}。已完成 ${activeWritingBatchCompleted}/${activeWritingBatchTotal || "?"} 章。`
                       : "批量任务正在后台执行，页面会自动刷新进度。"
                   }
-                  doneMessage="批量连写已完成，正在刷新创作工作台。"
+                  doneMessage={activeWritingBatchDoneMessage}
                 />
               ) : null}
               <div className="quote-box compact-note">
@@ -634,6 +644,80 @@ export default async function ProjectWritingPage({
               <div className="hero-actions writing-submit-row">
                 <button className="button primary" type="submit" disabled={Boolean(activeWritingBatchJob)}>
                   {activeWritingBatchJob ? "批量任务进行中" : "开始批量连写"}
+                </button>
+                <Link className="button" href={`/projects/${projectId}/jobs`}>
+                  查看任务中心
+                </Link>
+              </div>
+            </ApiForm>
+          </Panel>
+
+          <Panel title="批量范围重写" description="按章节范围重写已有正文；每章保存后自动重建章节台账，并让下一章读取最新台账继续写。">
+            <ApiForm
+              className="forms writing-form"
+              endpoint={`/api/projects/${projectId}/writing`}
+              body={{ action: "generate_chapter_batch", defer: true, replaceExisting: true }}
+              booleanFields={["reviewDraft"]}
+              pendingTitle="正在提交批量范围重写任务"
+              pendingDescription="系统会从起始章回滚旧台账状态，再按顺序重写正文并重建台账。"
+              successMessage="批量范围重写任务已提交"
+            >
+              {activeWritingBatchJob && activeWritingBatchReplaceExisting ? (
+                <AiJobRunner
+                  jobId={activeWritingBatchJob.id}
+                  title={activeWritingBatchTitle}
+                  runningMessage={
+                    activeWritingBatchCurrentChapter > 0
+                      ? `正在处理第 ${activeWritingBatchCurrentChapter} 章${activeWritingBatchStep ? `：${activeWritingBatchStep}` : ""}。已完成 ${activeWritingBatchCompleted}/${activeWritingBatchTotal || "?"} 章。`
+                      : "批量任务正在后台执行，页面会自动刷新进度。"
+                  }
+                  doneMessage={activeWritingBatchDoneMessage}
+                />
+              ) : null}
+              <div className="quote-box warning-box compact-note">
+                范围重写会替换指定章节已有正文，并从起始章清理旧台账和旧审稿；任务卡会保留，重写后每章自动生成新台账。
+              </div>
+              <div className="writing-form-grid">
+                <div className="field">
+                  <div className="field-label">起始章节</div>
+                  <input
+                    name="startChapterNumber"
+                    type="number"
+                    min="1"
+                    max={latestWrittenChapterNumber || undefined}
+                    placeholder="如 4"
+                    required
+                  />
+                </div>
+                <div className="field">
+                  <div className="field-label">结束章节</div>
+                  <input
+                    name="endChapterNumber"
+                    type="number"
+                    min="1"
+                    max={latestWrittenChapterNumber || undefined}
+                    placeholder="如 11"
+                    required
+                  />
+                  <div className="field-hint">
+                    已有正文最高到第 {latestWrittenChapterNumber.toLocaleString("zh-CN")} 章。
+                  </div>
+                </div>
+                <div className="field">
+                  <div className="field-label">每章目标字数</div>
+                  <input name="targetWordCount" type="number" min="800" max="3000" step="100" defaultValue="1600" />
+                </div>
+                <label className="option-row">
+                  <input name="reviewDraft" type="checkbox" />
+                  <span>
+                    <strong>每章重写后自动审稿</strong>
+                    <small>会额外消耗时间；不勾选也会自动重建章节台账。</small>
+                  </span>
+                </label>
+              </div>
+              <div className="hero-actions writing-submit-row">
+                <button className="button danger" type="submit" disabled={Boolean(activeWritingBatchJob)}>
+                  {activeWritingBatchJob ? "批量任务进行中" : "按范围重写正文"}
                 </button>
                 <Link className="button" href={`/projects/${projectId}/jobs`}>
                   查看任务中心

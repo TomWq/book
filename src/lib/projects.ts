@@ -432,6 +432,43 @@ function now() {
   return new Date().toISOString();
 }
 
+const resumableAiJobTypes = new Set([
+  "analyze_chapters",
+  "generate_task_card",
+  "generate_chapter",
+  "review_chapter",
+  "generate_chapter_batch",
+  "generate_long_form_plan",
+  "review_long_form_plan",
+  "edit_second_draft",
+  "project_creation_assist"
+]);
+
+function aiJobStaleAfterMs(job: Pick<StoredAiJob, "type">) {
+  return [
+    "analyze_chapters",
+    "generate_task_card",
+    "generate_chapter",
+    "review_chapter",
+    "generate_chapter_batch",
+    "generate_long_form_plan",
+    "review_long_form_plan",
+    "edit_second_draft",
+    "project_creation_assist"
+  ].includes(job.type)
+    ? 30 * 60 * 1000
+    : 5 * 60 * 1000;
+}
+
+function isStaleRunningAiJob(job: Pick<StoredAiJob, "status" | "type" | "updatedAt">) {
+  if (job.status !== "running" || !resumableAiJobTypes.has(job.type)) {
+    return false;
+  }
+
+  const updatedAt = Date.parse(job.updatedAt);
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > aiJobStaleAfterMs(job);
+}
+
 function isRunnableAiJob(job: StoredAiJob) {
   if (job.status === "pending") {
     return true;
@@ -441,32 +478,7 @@ function isRunnableAiJob(job: StoredAiJob) {
     return false;
   }
 
-  const resumableTypes = new Set([
-    "analyze_chapters",
-    "generate_task_card",
-    "generate_chapter",
-    "review_chapter",
-    "generate_chapter_batch",
-    "generate_long_form_plan",
-    "review_long_form_plan",
-    "edit_second_draft"
-  ]);
-
-  if (!resumableTypes.has(job.type)) {
-    return false;
-  }
-
-  const updatedAt = Date.parse(job.updatedAt);
-  if (!Number.isFinite(updatedAt)) {
-    return true;
-  }
-
-  const staleAfterMs =
-    job.type === "analyze_chapters" || job.type === "generate_chapter_batch"
-      ? 10 * 60 * 1000
-      : 90 * 1000;
-
-  return Date.now() - updatedAt > staleAfterMs;
+  return isStaleRunningAiJob(job);
 }
 
 function isActiveAiJob(job: StoredAiJob) {
@@ -3217,13 +3229,44 @@ function ensureDefaultWritingState(store: AppStore, project: StoredProject) {
   return false;
 }
 
-function cleanList(values?: string[]) {
+function listItemToText(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(listItemToText).filter(Boolean).join("；");
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => {
+        const text = listItemToText(item).trim();
+        return text ? `${key}：${text}` : "";
+      })
+      .filter(Boolean);
+
+    return entries.join("；");
+  }
+
+  return "";
+}
+
+function cleanList(values?: unknown[] | null) {
   return Array.from(
-    new Set((values ?? []).map((item) => item.trim()).filter(Boolean))
+    new Set((Array.isArray(values) ? values : []).map((item) => listItemToText(item).trim()).filter(Boolean))
   );
 }
 
-function normalizeOpeningBlueprintEntries(values?: string[]) {
+function normalizeOpeningBlueprintEntries(values?: unknown[] | null) {
   const chapterHeadingPattern = /^(?:第\s*(?:\d+|[零一二两三四五六七八九十百千万]+)\s*章|chapter\s*\d+|\d+\s*[.、:：])/i;
   const entries = cleanList(values);
   const result: string[] = [];
@@ -3240,7 +3283,7 @@ function normalizeOpeningBlueprintEntries(values?: string[]) {
   return result;
 }
 
-function normalizeProgressionRuleEntries(values?: string[]) {
+function normalizeProgressionRuleEntries(values?: unknown[] | null) {
   const structuredRulePattern =
     /^(?:第\s*(?:\d+|[零一二两三四五六七八九十百千万]+)\s*章|前\s*\d+\s*章|第[一二三四五六七八九十百千万]+案|第一案|第二案|第三案|现实返回|现实主线|符号相关|成长速度|跨越世界|每个世界|每卷|无CP|禁止在|不得在|允许|必须)/;
   const terminalPattern = /[。！？!?；;]$/;
@@ -3263,7 +3306,7 @@ function normalizeProgressionRuleEntries(values?: string[]) {
   return result;
 }
 
-function normalizeFragmentedLongFormEntries(values?: string[]) {
+function normalizeFragmentedLongFormEntries(values?: unknown[] | null) {
   const terminalPattern = /[。！？!?；;]$/;
   const entries = cleanList(values);
   const result: string[] = [];
@@ -7694,6 +7737,13 @@ function getLatestChapterDraft(store: AppStore, projectId: string) {
     ?? null;
 }
 
+function getLatestChapterDraftForChapter(store: AppStore, projectId: string, chapterNumber: number) {
+  return store.chapterDrafts
+    .filter((draft) => draft.projectId === projectId && draft.chapterNumber === chapterNumber)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+    ?? null;
+}
+
 function getLatestChapterLedgerBefore(store: AppStore, projectId: string, chapterNumber: number) {
   return store.chapterLedgers
     .filter((ledger) => ledger.projectId === projectId && ledger.chapterNumber < chapterNumber)
@@ -7959,6 +8009,61 @@ function failActiveChildAiJobs(
       item.updatedAt = timestamp;
       item.finishedAt = timestamp;
     });
+}
+
+function recoverStaleAiJobsInStore(store: AppStore) {
+  const timestamp = now();
+  let changed = false;
+
+  for (const job of store.aiJobs) {
+    if (!isStaleRunningAiJob(job)) {
+      continue;
+    }
+
+    const output = getJobObject(job.output);
+    const errorText = String(job.error ?? output.error ?? "");
+    const alreadyFailed =
+      output.failed === true ||
+      Boolean(job.retryOfJobId) ||
+      Boolean(errorText) ||
+      /失败|错误|超时|中止|aborted|timeout|error/i.test(errorText);
+
+    if (alreadyFailed) {
+      job.status = "failed";
+      job.error = errorText || (job.retryOfJobId
+        ? "子任务执行中断：客户端关闭或后台进程退出，已交给父任务恢复调度。"
+        : "任务执行中断：客户端关闭或后台进程退出，已自动标记失败。");
+      job.output = {
+        ...output,
+        failed: true,
+        recoveredFromStaleRunning: true
+      };
+      job.finishedAt = timestamp;
+    } else {
+      job.status = "pending";
+      job.error = undefined;
+      job.output = {
+        ...output,
+        recoveredFromStaleRunning: true
+      };
+      job.finishedAt = undefined;
+    }
+
+    job.updatedAt = timestamp;
+    changed = true;
+  }
+
+  return changed;
+}
+
+async function readStoreWithRecoveredAiJobs() {
+  const store = await readStore();
+
+  if (recoverStaleAiJobsInStore(store)) {
+    await writeStore(store);
+  }
+
+  return store;
 }
 
 function normalizeProjectChapterOrder(store: AppStore, projectId: string) {
@@ -12904,7 +13009,7 @@ export function formatProjectStatus(status: string) {
 }
 
 export async function getRecentAiJobs(limit = 3) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const currentUser = await getCurrentUserFromStore(store);
 
   if (!currentUser) {
@@ -12956,7 +13061,7 @@ export async function getRecentAiJobs(limit = 3) {
 }
 
 export async function getProjectAiJobs(projectId: string) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const currentUser = await getCurrentUserFromStore(store);
   const repo = createDomainReadRepository(store);
   const project = currentUser ? repo.getProjectRecordForUser(projectId, currentUser.id) : null;
@@ -12969,7 +13074,7 @@ export async function getProjectAiJobs(projectId: string) {
 }
 
 export async function getAiJob(jobId: string) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const currentUser = await getCurrentUserFromStore(store);
 
   if (!currentUser) {
@@ -15327,7 +15432,7 @@ export async function getProjectAnalysis(projectId: string) {
 }
 
 export async function getProjectWritingState(projectId: string) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const currentUser = await getCurrentUserFromStore(store);
   const repo = createDomainReadRepository(store);
 
@@ -18109,7 +18214,12 @@ export async function generateChapterDraft(
 export async function regenerateChapterDraftContent(
   projectId: string,
   draftId: string,
-  options?: { targetWordCount?: number; existingJobId?: string; retryOfJobId?: string }
+  options?: {
+    targetWordCount?: number;
+    existingJobId?: string;
+    retryOfJobId?: string;
+    syncTitleFromTaskCard?: boolean;
+  }
 ) {
   const store = await readStore();
   const currentUser = await requireCurrentUser(store);
@@ -18307,7 +18417,21 @@ export async function regenerateChapterDraftContent(
 
   const timestamp = now();
   const invalidatedState = invalidateWritingStateFromChapter(store, project, draft.chapterNumber);
+  const title = options?.syncTitleFromTaskCard
+    ? chooseChapterTitleForStorage({
+        title: draftTaskCard.title,
+        fallbackTitle: draft.title,
+        recentTitles: getRecentChapterTitles(store, projectId, taskCard.chapterNumber),
+        titleContext: [
+          draftTaskCard.chapterGoal,
+          draftTaskCard.mainPlotProgress,
+          draftTaskCard.endingHook,
+          content.slice(-600)
+        ]
+      })
+    : draft.title;
 
+  draft.title = title;
   draft.content = content;
   draft.status = "draft";
   draft.updatedAt = timestamp;
@@ -20427,6 +20551,7 @@ type ChapterBatchInput = {
   startChapterNumber?: number;
   targetWordCount?: number;
   reviewDraft?: boolean;
+  replaceExisting?: boolean;
 };
 
 type ChapterBatchChapterResult = {
@@ -20674,6 +20799,7 @@ export async function generateChapterBatch(
   const chapterCount = normalizeChapterBatchCount(input?.chapterCount);
   const targetWordCount = normalizeDraftTargetWordCount(input?.targetWordCount);
   const reviewDraft = input?.reviewDraft === true;
+  const replaceExisting = input?.replaceExisting === true;
   const initialStore = await readStore();
   const currentUser = await requireCurrentUser(initialStore);
   const project = createDomainWriteRepository(initialStore).requireProjectForUser(projectId, currentUser.id);
@@ -20704,7 +20830,11 @@ export async function generateChapterBatch(
       ? getChapterBatchDraftProgress(initialStore, projectId, existingJob.id, chapterNumber)
       : null;
 
-    if (!completedChapterNumbers.has(chapterNumber) && !draftProgress) {
+    const existingDraft = replaceExisting
+      ? getLatestChapterDraftForChapter(initialStore, projectId, chapterNumber)
+      : null;
+
+    if (!completedChapterNumbers.has(chapterNumber) && !draftProgress && !existingDraft) {
       ensureChapterSlotAvailable(initialStore, projectId, chapterNumber);
     }
   }
@@ -20717,7 +20847,8 @@ export async function generateChapterBatch(
       startChapterNumber,
       chapterCount,
       targetWordCount,
-      reviewDraft
+      reviewDraft,
+      replaceExisting
     },
     model: "",
     retryOfJobId: options?.retryOfJobId
@@ -20736,10 +20867,27 @@ export async function generateChapterBatch(
       startChapterNumber,
       targetWordCount,
       reviewDraft,
+      replaceExisting,
       chapters: []
     };
     project.status = "writing";
     project.updatedAt = now();
+    await writeStore(initialStore);
+  }
+
+  const latestJobOutput = getJobObject(job.output);
+
+  if (replaceExisting && latestJobOutput.rangeRewritePrepared !== true) {
+    const invalidatedState = invalidateWritingStateFromChapter(initialStore, project, startChapterNumber);
+    job.output = {
+      ...latestJobOutput,
+      rangeRewritePrepared: true,
+      replaceExisting: true,
+      deletedLedgerCountBeforeRewrite: invalidatedState.deletedLedgerCount,
+      deletedReviewCountBeforeRewrite: invalidatedState.deletedReviewCount
+    };
+    job.updatedAt = now();
+    project.updatedAt = job.updatedAt;
     await writeStore(initialStore);
   }
 
@@ -20756,6 +20904,7 @@ export async function generateChapterBatch(
     startChapterNumber,
     targetWordCount,
     reviewDraft,
+    replaceExisting,
     currentChapterNumber: startChapterNumber,
     chapters: completedChapters.length > 0 ? completedChapters : output.chapters
   }));
@@ -20779,8 +20928,11 @@ export async function generateChapterBatch(
       const draftProgress = existingJob
         ? getChapterBatchDraftProgress(store, projectId, job.id, chapterNumber)
         : null;
+      const existingDraft = replaceExisting
+        ? getLatestChapterDraftForChapter(store, projectId, chapterNumber)
+        : null;
 
-      if (!draftProgress) {
+      if (!draftProgress && !existingDraft) {
         ensureChapterSlotAvailable(store, projectId, chapterNumber);
       }
     }
@@ -20789,24 +20941,44 @@ export async function generateChapterBatch(
       ...output,
       completedChapters: completedChapters.length,
       currentChapterNumber: chapterNumber,
-      currentStep: "生成任务卡"
+      currentStep: replaceExisting ? "读取任务卡" : "生成任务卡"
     }));
 
     const taskCardStore = await readStore();
     const draftProgress = existingJob
       ? getChapterBatchDraftProgress(taskCardStore, projectId, job.id, chapterNumber)
       : null;
-    const existingTaskCard = getOpenTaskCardForChapter(taskCardStore, projectId, chapterNumber);
+    const existingDraft = replaceExisting
+      ? getLatestChapterDraftForChapter(taskCardStore, projectId, chapterNumber)
+      : null;
+    const draftTaskCard = existingDraft
+      ? taskCardStore.writingTaskCards.find(
+          (item) => item.id === existingDraft.taskCardId && item.projectId === projectId
+        ) ?? null
+      : null;
+    const existingTaskCard = draftTaskCard ?? getOpenTaskCardForChapter(taskCardStore, projectId, chapterNumber);
+
+    if (replaceExisting && existingDraft && !draftTaskCard) {
+      throw new Error(`第 ${chapterNumber} 章已有正文，但找不到对应任务卡，无法按原任务卡重写。`);
+    }
+
     const taskCard = draftProgress?.taskCard ?? existingTaskCard ?? await generateWritingTaskCard(projectId, { chapterNumber }, { retryOfJobId: job.id });
 
     await updateChapterBatchJobOutput(job.id, (output) => ({
       ...output,
       completedChapters: completedChapters.length,
       currentChapterNumber: chapterNumber,
-      currentStep: "生成正文"
+      currentStep: replaceExisting && existingDraft ? "重写正文" : "生成正文"
     }));
 
-    const draft = draftProgress?.draft ?? await generateChapterDraft(projectId, taskCard.id, { targetWordCount, retryOfJobId: job.id });
+    const draft = draftProgress?.draft ??
+      (replaceExisting && existingDraft
+        ? (await regenerateChapterDraftContent(projectId, existingDraft.id, {
+            targetWordCount,
+            retryOfJobId: job.id,
+            syncTitleFromTaskCard: true
+          })).draft
+        : await generateChapterDraft(projectId, taskCard.id, { targetWordCount, retryOfJobId: job.id }));
     const latestStoreAfterDraft = await readStore();
     const ledger = latestStoreAfterDraft.chapterLedgers.find(
       (item) => item.projectId === projectId && item.draftId === draft.id
@@ -20876,6 +21048,7 @@ export async function generateChapterBatch(
     endChapterNumber: startChapterNumber + chapterCount - 1,
     targetWordCount,
     reviewDraft,
+    replaceExisting,
     currentStep: "全部完成",
     childJobIds
   }, tokenUsage));
@@ -20891,6 +21064,7 @@ export async function generateChapterBatch(
     endChapterNumber: startChapterNumber + chapterCount - 1,
     requestedChapters: chapterCount,
     completedChapters: completedChapters.length || finalOutput.chapters.length,
+    replaceExisting,
     chapters: completedChapters.length ? completedChapters : finalOutput.chapters
   };
 }
@@ -20921,12 +21095,20 @@ export async function enqueueChapterBatchJob(
   const chapterCount = normalizeChapterBatchCount(input?.chapterCount);
   const targetWordCount = normalizeDraftTargetWordCount(input?.targetWordCount);
   const reviewDraft = input?.reviewDraft === true;
+  const replaceExisting = input?.replaceExisting === true;
   const startChapterNumber =
     normalizeOptionalChapterNumber(input?.startChapterNumber) ??
     resolveNextChapterBatchStartNumber(store, projectId);
 
   for (let offset = 0; offset < chapterCount; offset += 1) {
-    ensureChapterSlotAvailable(store, projectId, startChapterNumber + offset);
+    const chapterNumber = startChapterNumber + offset;
+    const existingDraft = replaceExisting
+      ? getLatestChapterDraftForChapter(store, projectId, chapterNumber)
+      : null;
+
+    if (!existingDraft) {
+      ensureChapterSlotAvailable(store, projectId, chapterNumber);
+    }
   }
 
   const job = createAiJob(store, {
@@ -20937,7 +21119,8 @@ export async function enqueueChapterBatchJob(
       startChapterNumber,
       chapterCount,
       targetWordCount,
-      reviewDraft
+      reviewDraft,
+      replaceExisting
     },
     model: "",
     retryOfJobId: options?.retryOfJobId
@@ -20949,6 +21132,7 @@ export async function enqueueChapterBatchJob(
     startChapterNumber,
     targetWordCount,
     reviewDraft,
+    replaceExisting,
     chapters: []
   };
   project.status = "writing";
@@ -21071,7 +21255,7 @@ export async function enqueueEditSecondDraftJob(
 }
 
 export async function processAiJob(jobId: string) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const currentUser = await requireCurrentUser(store);
   const repo = createDomainWriteRepository(store);
   const job = repo.requireJobForUser(jobId, currentUser.id);
@@ -21215,7 +21399,8 @@ export async function processAiJob(jobId: string) {
         startChapterNumber: Number(payload?.startChapterNumber ?? 0) || undefined,
         chapterCount: Number(payload?.chapterCount ?? 0) || undefined,
         targetWordCount: Number(payload?.targetWordCount ?? 0) || undefined,
-        reviewDraft: payload?.reviewDraft === true
+        reviewDraft: payload?.reviewDraft === true,
+        replaceExisting: payload?.replaceExisting === true
       }, {
         existingJobId: job.id
       });
@@ -21313,7 +21498,7 @@ export async function processAiJob(jobId: string) {
 }
 
 async function resolveAiJobOwnerUserId(jobId: string) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const repo = createDomainReadRepository(store);
   const job = repo.getJobRecord(jobId);
 
@@ -21343,7 +21528,7 @@ export async function processAiJobAsOwner(jobId: string) {
 }
 
 export async function processPendingAiJobs(limit = 5) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const currentUser = await requireCurrentUser(store);
   const jobIds = createDomainReadRepository(store).listPendingJobIdsForUser(currentUser.id, limit);
   const results = [];
@@ -21367,7 +21552,7 @@ export async function processPendingAiJobs(limit = 5) {
 }
 
 export async function processPendingAiJobsAsWorker(limit = 10) {
-  const store = await readStore();
+  const store = await readStoreWithRecoveredAiJobs();
   const jobIds = createDomainReadRepository(store).listPendingJobIds(limit);
   const results = [];
 
@@ -21497,7 +21682,8 @@ export async function retryAiJob(jobId: string) {
             startChapterNumber: retryStartChapterNumber,
             chapterCount: retryChapterCount,
             targetWordCount: Number(input?.targetWordCount ?? output.targetWordCount ?? 0) || undefined,
-            reviewDraft: input?.reviewDraft === true || output.reviewDraft === true
+            reviewDraft: input?.reviewDraft === true || output.reviewDraft === true,
+            replaceExisting: input?.replaceExisting === true || output.replaceExisting === true
           }, { retryOfJobId: job.id })
         };
       }

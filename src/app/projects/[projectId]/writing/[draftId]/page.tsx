@@ -116,7 +116,7 @@ export default async function ChapterDraftReaderPage({
             <div className="task-block">
               <div className="task-title">保留任务卡重写正文</div>
               <div className="muted">
-                用本章原任务卡重新生成正文；保存成功后会替换当前正文，并清空旧台账和旧审稿。
+                用本章原任务卡重新生成正文；保存成功后会替换当前正文，清空旧审稿，并自动重建本章台账。
               </div>
               <StreamDraftButton
                 projectId={projectId}

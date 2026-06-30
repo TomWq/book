@@ -33,35 +33,67 @@ type RelationGraph = {
   edges: RelationGraphEdge[];
 };
 
-function splitStateLines(value: string) {
-  return value
+function graphText(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(graphText).filter(Boolean).join("；");
+  }
+
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => {
+        const text = graphText(item).trim();
+        return text ? `${key}：${text}` : "";
+      })
+      .filter(Boolean)
+      .join("；");
+  }
+
+  return "";
+}
+
+function splitStateLines(value: unknown) {
+  return graphText(value)
     .split(/\r?\n|；|;/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function uniqueTextList(values: string[]) {
-  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
+function uniqueTextList(values: unknown[]) {
+  return Array.from(new Set(values.map((item) => graphText(item).trim()).filter(Boolean)));
 }
 
-function statusTone(value: string): RelationGraphNode["tone"] {
-  if (/已回收|已解决|closed|完成|兑现/.test(value)) {
+function statusTone(value: unknown): RelationGraphNode["tone"] {
+  const text = graphText(value);
+
+  if (/已回收|已解决|closed|完成|兑现/.test(text)) {
     return "success";
   }
 
-  if (/未回收|未解决|open|风险|敌|威胁|限制|代价/.test(value)) {
+  if (/未回收|未解决|open|风险|敌|威胁|限制|代价/.test(text)) {
     return "danger";
   }
 
-  if (/部分|待|后续|悬念|伏笔|线索/.test(value)) {
+  if (/部分|待|后续|悬念|伏笔|线索/.test(text)) {
     return "warning";
   }
 
   return "neutral";
 }
 
-function normalizeMapOrForceEntry(value: string) {
-  const raw = value.trim();
+function normalizeMapOrForceEntry(value: unknown) {
+  const raw = graphText(value).trim();
 
   if (
     !raw ||
@@ -131,7 +163,7 @@ function preferredMapLabel(current: string | undefined, next: string) {
   return current;
 }
 
-function uniqueMapNodes(values: string[]) {
+function uniqueMapNodes(values: unknown[]) {
   const byCluster = values.reduce<Map<string, string>>((items, value) => {
     const normalized = normalizeMapOrForceEntry(value);
 
@@ -148,22 +180,42 @@ function uniqueMapNodes(values: string[]) {
   return Array.from(byCluster.values());
 }
 
-export function shortText(value: string, fallback: string, maxLength = 46) {
-  const text = value.trim() || fallback;
+export function shortText(value: unknown, fallback: string, maxLength = 46) {
+  const text = graphText(value).trim() || fallback;
 
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-function relationTone(value: string) {
-  if (/敌|反派|冲突|压制|怀疑|威胁|对立|打压/.test(value)) {
+function relationTone(value: unknown) {
+  const text = graphText(value);
+
+  if (/敌|反派|冲突|压制|怀疑|威胁|对立|打压/.test(text)) {
     return "danger";
   }
 
-  if (/师|盟友|保护|支持|朋友|伙伴|弟子|信任|帮助/.test(value)) {
+  if (/师|盟友|保护|支持|朋友|伙伴|弟子|信任|帮助/.test(text)) {
     return "success";
   }
 
   return "neutral";
+}
+
+function textListIncludes(values: unknown[], value: string) {
+  return values.some((item) => graphText(item).trim() === value);
+}
+
+function lineValue<T extends { value: unknown }>(item: T) {
+  return graphText(item.value).trim();
+}
+
+function textContains(value: unknown, needle: unknown) {
+  const source = graphText(value);
+  const target = graphText(needle).trim();
+  return Boolean(target && source.includes(target));
+}
+
+function mapNodeMatches(mapNode: string, relatedLocation: string) {
+  return mapNode === relatedLocation || mapNode.includes(relatedLocation) || relatedLocation.includes(mapNode);
 }
 
 function graphPoint(
@@ -303,7 +355,7 @@ function buildForeshadowingGraph(state: WritingState): RelationGraph {
           : [];
       });
       const normalizedLocation = normalizeMapOrForceEntry(item.relatedLocation);
-      const placeIndex = locationNodes.findIndex((name) => normalizedLocation && (name === normalizedLocation || name.includes(normalizedLocation) || normalizedLocation.includes(name)));
+      const placeIndex = locationNodes.findIndex((name) => normalizedLocation && mapNodeMatches(name, normalizedLocation));
 
       return [
         ...personEdges,
@@ -337,13 +389,13 @@ function buildPlotProgressGraph(state: WritingState): RelationGraph {
     if (value === state.plotState.nextStageGoal) {
       return { kind: "plotStateField", field: "nextStageGoal", value };
     }
-    if (state.plotState.nextMilestones.includes(value)) {
+    if (textListIncludes(state.plotState.nextMilestones, value)) {
       return { kind: "plotStateList", field: "nextMilestones", value };
     }
-    if (state.plotState.openThreads.includes(value)) {
+    if (textListIncludes(state.plotState.openThreads, value)) {
       return { kind: "plotStateList", field: "openThreads", value };
     }
-    if (state.plotState.resolvedThreads.includes(value)) {
+    if (textListIncludes(state.plotState.resolvedThreads, value)) {
       return { kind: "plotStateList", field: "resolvedThreads", value };
     }
     return undefined;
@@ -374,22 +426,22 @@ function buildPowerGraph(state: WritingState): RelationGraph {
       source: { kind: "plotStateLine" as const, field: "powerSystemState" as const, value }
     })),
     ...state.characters
-      .filter((character) => character.abilityBoundary.trim())
+      .filter((character) => graphText(character.abilityBoundary).trim())
       .map((character) => ({
-        value: character.abilityBoundary,
+        value: graphText(character.abilityBoundary).trim(),
         source: { kind: "characterField" as const, id: character.id, field: "abilityBoundary" as const }
       }))
   ]
-    .filter((item, index, items) => item.value.trim() && items.findIndex((candidate) => candidate.value === item.value) === index)
+    .filter((item, index, items) => lineValue(item) && items.findIndex((candidate) => lineValue(candidate) === lineValue(item)) === index)
     .slice(0, 24);
 
   return buildBoardGraph({
     center: projectCenterNode(state, "战力体系", "境界、能力、限制、代价和克制关系"),
     items: powerLines.map((item, index) => ({
       id: `power-${index}`,
-      label: /限制|代价|不能|边界/.test(item.value) ? "限制 / 代价" : index === 0 ? "金手指规则" : "能力节点",
+      label: /限制|代价|不能|边界/.test(lineValue(item)) ? "限制 / 代价" : index === 0 ? "金手指规则" : "能力节点",
       meta: shortText(item.value, item.value, 38),
-      tone: /限制|代价|不能|风险/.test(item.value) ? "danger" : "warning",
+      tone: /限制|代价|不能|风险/.test(lineValue(item)) ? "danger" : "warning",
       type: "power",
       source: item.source
     })),
@@ -407,16 +459,16 @@ function buildResourceGraph(state: WritingState): RelationGraph {
     ...state.ledgers.map((ledger) => ({ value: ledger.payoff, source: undefined })),
     ...state.ledgers.flatMap((ledger) => ledger.newClues.map((value) => ({ value, source: undefined })))
   ]
-    .filter((item, index, items) => item.value.trim() && items.findIndex((candidate) => candidate.value === item.value) === index)
+    .filter((item, index, items) => lineValue(item) && items.findIndex((candidate) => lineValue(candidate) === lineValue(item)) === index)
     .slice(0, 28);
 
   return buildBoardGraph({
     center: projectCenterNode(state, "资源收益", "功法、线索、道具、权限和阶段性收益"),
     items: resourceLines.map((item, index) => ({
       id: `resource-${index}`,
-      label: /线索|证据|秘密|真相/.test(item.value) ? "线索" : /功法|丹药|装备|资源|奖励|获得|拿到/.test(item.value) ? "收益" : "资源",
+      label: /线索|证据|秘密|真相/.test(lineValue(item)) ? "线索" : /功法|丹药|装备|资源|奖励|获得|拿到/.test(lineValue(item)) ? "收益" : "资源",
       meta: shortText(item.value, item.value, 38),
-      tone: /线索|秘密|真相/.test(item.value) ? "warning" : "success",
+      tone: /线索|秘密|真相/.test(lineValue(item)) ? "warning" : "success",
       type: "resource",
       source: item.source
     })),
@@ -564,7 +616,7 @@ function buildCustomGraph(graph: WritingState["customRelationGraphs"][number]): 
 
 export function buildStateRelationGraphs(state: WritingState) {
   const protagonist =
-    state.characters.find((character) => /本人|主角/.test(character.relationshipToProtagonist)) ??
+    state.characters.find((character) => /本人|主角/.test(graphText(character.relationshipToProtagonist))) ??
     state.characters[0] ??
     null;
   const supportingCharacters = state.characters
@@ -578,14 +630,14 @@ export function buildStateRelationGraphs(state: WritingState) {
   const relationshipNodes = uniqueTextList([
     ...state.plotState.relationshipChanges,
     ...state.characters
-      .filter((character) => character.relationshipToProtagonist)
-      .map((character) => `${character.name}：${character.relationshipToProtagonist}`)
+      .filter((character) => graphText(character.relationshipToProtagonist).trim())
+      .map((character) => `${graphText(character.name)}：${graphText(character.relationshipToProtagonist)}`)
   ]).slice(0, 10);
   const openForeshadowings = Array.from(
     new Map(
       state.foreshadowings
         .filter((item) => item.status !== "closed")
-        .map((item) => [item.name.trim(), item])
+        .map((item) => [graphText(item.name).trim(), item])
     ).values()
   ).slice(0, 4);
   const characterRingCount = Math.max(1, Math.ceil(supportingCharacters.length / 16));
@@ -632,7 +684,7 @@ export function buildStateRelationGraphs(state: WritingState) {
     })
   ];
   const relationMentionEdges = state.plotState.relationshipChanges.flatMap((item, index) => {
-    const mentioned = state.characters.filter((character) => item.includes(character.name)).slice(0, 4);
+    const mentioned = state.characters.filter((character) => textContains(item, character.name)).slice(0, 4);
 
     if (mentioned.length >= 2) {
       return mentioned.slice(1).map((character) => ({
@@ -716,9 +768,7 @@ export function buildStateRelationGraphs(state: WritingState) {
     })),
     ...openForeshadowings.map((item) => {
       const relatedLocation = normalizeMapOrForceEntry(item.relatedLocation);
-      const relatedMapIndex = mapNodes.findIndex((mapNode) =>
-        relatedLocation && (mapNode === relatedLocation || mapNode.includes(relatedLocation) || relatedLocation.includes(mapNode))
-      );
+      const relatedMapIndex = mapNodes.findIndex((mapNode) => relatedLocation && mapNodeMatches(mapNode, relatedLocation));
 
       return {
         id: `foreshadow-map-${item.id}`,

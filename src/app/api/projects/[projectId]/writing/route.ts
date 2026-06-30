@@ -109,14 +109,29 @@ export async function POST(
     }
 
     if (action === "generate_chapter_batch") {
+      const startChapterNumber = Number(body.startChapterNumber ?? 0) || undefined;
+      const explicitChapterCount = Number(body.chapterCount ?? 0) || undefined;
+      const endChapterNumber = Number(body.endChapterNumber ?? 0) || undefined;
+      if (startChapterNumber && endChapterNumber && endChapterNumber < startChapterNumber) {
+        throw new Error("结束章节不能小于起始章节");
+      }
+      const chapterCount =
+        explicitChapterCount ??
+        (startChapterNumber && endChapterNumber && endChapterNumber >= startChapterNumber
+          ? endChapterNumber - startChapterNumber + 1
+          : undefined);
       const input = {
-        startChapterNumber: Number(body.startChapterNumber ?? 0) || undefined,
-        chapterCount: Number(body.chapterCount ?? 0) || undefined,
+        startChapterNumber,
+        chapterCount,
         targetWordCount: Number(body.targetWordCount ?? 0) || undefined,
         reviewDraft:
           body.reviewDraft === true ||
           body.reviewDraft === "true" ||
-          body.reviewDraft === "on"
+          body.reviewDraft === "on",
+        replaceExisting:
+          body.replaceExisting === true ||
+          body.replaceExisting === "true" ||
+          body.replaceExisting === "on"
       };
 
       if (body.defer === false) {

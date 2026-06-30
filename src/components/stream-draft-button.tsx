@@ -181,7 +181,7 @@ export function StreamDraftButton({
       !(await confirm({
         title: "流式重写正文",
         message: "确定清空当前正文并流式重写吗？",
-        detail: "保存成功后会替换原正文，旧台账和旧审稿会清空，请重新生成章节台账。",
+        detail: "保存成功后会替换原正文，旧台账和旧审稿会清空，并自动重建本章台账。",
         confirmLabel: "开始重写",
         tone: "danger"
       }))
@@ -293,7 +293,7 @@ export function StreamDraftButton({
       {isSavingStreamDraft ? (
         <ActionLoadingOverlay
           title={isRegenerating ? "正在保存重写正文" : "正在保存章节草稿"}
-          description={isRegenerating ? "新正文已经生成，正在替换当前正文并清空旧台账，请不要刷新页面。" : "正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"}
+          description={isRegenerating ? "新正文已经生成，正在替换当前正文并重建章节台账，请不要刷新页面。" : "正文已经生成，正在写入草稿并更新章节台账，请不要刷新页面。"}
         />
       ) : null}
       <div className="field">
@@ -379,7 +379,7 @@ export function StreamDraftButton({
           {state.status === "done" ? (
             <div className="pill success">
               {isRegenerating
-                ? "正文已重写并替换，上方“可编辑正文”会同步为最新版本；旧台账已清空，请重新生成章节台账。"
+                ? "正文已重写并替换，上方“可编辑正文”会同步为最新版本；章节台账已自动重建。"
                 : "草稿已保存，台账已更新，可以继续审稿。"}
             </div>
           ) : null}
