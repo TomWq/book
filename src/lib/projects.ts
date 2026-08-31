@@ -81,6 +81,7 @@ import {
   setPrimaryAiSettings,
   setUserAiProfiles
 } from "@/lib/ai-settings-store";
+import { isActiveAiJob, isRunnableAiJob, isStaleRunningAiJob } from "@/lib/ai-job-status";
 import {
   hashPassword,
   isAdminUser,
@@ -430,59 +431,6 @@ function ensureInspirationOwner(inspiration: StoredInspiration, userId: string) 
 
 function now() {
   return new Date().toISOString();
-}
-
-const resumableAiJobTypes = new Set([
-  "analyze_chapters",
-  "generate_task_card",
-  "generate_chapter",
-  "review_chapter",
-  "generate_chapter_batch",
-  "generate_long_form_plan",
-  "review_long_form_plan",
-  "edit_second_draft",
-  "project_creation_assist"
-]);
-
-function aiJobStaleAfterMs(job: Pick<StoredAiJob, "type">) {
-  return [
-    "analyze_chapters",
-    "generate_task_card",
-    "generate_chapter",
-    "review_chapter",
-    "generate_chapter_batch",
-    "generate_long_form_plan",
-    "review_long_form_plan",
-    "edit_second_draft",
-    "project_creation_assist"
-  ].includes(job.type)
-    ? 30 * 60 * 1000
-    : 5 * 60 * 1000;
-}
-
-function isStaleRunningAiJob(job: Pick<StoredAiJob, "status" | "type" | "updatedAt">) {
-  if (job.status !== "running" || !resumableAiJobTypes.has(job.type)) {
-    return false;
-  }
-
-  const updatedAt = Date.parse(job.updatedAt);
-  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > aiJobStaleAfterMs(job);
-}
-
-function isRunnableAiJob(job: StoredAiJob) {
-  if (job.status === "pending") {
-    return true;
-  }
-
-  if (job.status !== "running") {
-    return false;
-  }
-
-  return isStaleRunningAiJob(job);
-}
-
-function isActiveAiJob(job: StoredAiJob) {
-  return job.status === "pending" || (job.status === "running" && !isRunnableAiJob(job));
 }
 
 function findActiveLongFormPlanJob(store: AppStore, projectId: string) {
@@ -3676,7 +3624,13 @@ function inferTargetTotalWordsFromState(project: StoredProject, bible: StoredWri
 }
 
 function estimateChapterCount(targetTotalWords: number) {
-  return Math.max(20, Math.ceil(targetTotalWords / 1800));
+  const chapterCount = Math.max(20, Math.ceil(targetTotalWords / 2200));
+
+  if (targetTotalWords < 300_000) {
+    return Math.min(100, chapterCount);
+  }
+
+  return chapterCount;
 }
 
 type AiLongFormPlanResult = Awaited<ReturnType<typeof generateLongFormPlanWithAi>>;
@@ -6922,6 +6876,227 @@ function validateAiLongFormPlan(
   assertLongFormReaderEngine(aiPlan, estimatedChapters);
   assertLongFormStageVariety(aiPlan, estimatedChapters);
   assertLongFormVolumeStageAlignment(aiPlan);
+}
+
+function isRecoverableLongFormPlanFailure(message: string) {
+  return /长度限制截断|未正常结束：length|JSON 不完整|不是有效 JSON|前100阶段|后100阶段|字段补齐失败|缺段补齐|未返回完整长篇规划|未返回合格长篇规划|读者追读引擎|收益节奏/.test(message);
+}
+
+function localLongFormStageLine(
+  range: { start: number; end: number },
+  index: number,
+  total: number,
+  input: {
+    project: StoredProject;
+    bible: StoredWritingBible;
+    plotState: StoredPlotState;
+    terminal?: boolean;
+  }
+) {
+  const label = `第${range.start}-${range.end}章`;
+  const core = compactStateText(
+    input.bible.corePleasure || input.plotState.mainGoal || input.project.description || input.project.name,
+    48
+  );
+  const stageTargets = [
+    `建立${core}的核心压力与第一轮可见行动，让主角在限制中取得局部主动`,
+    "放大规则阻力和人物站队，把短期目标推成必须公开承担的责任",
+    "转换地图与势力压力，让旧线索带来新代价和更高层对抗",
+    "推进关键关系与资源权限，逼主角用新方法处理旧问题余波",
+    "提高对手反扑强度，让阶段成果经受质疑并转为后续筹码",
+    "整合前段压力、关系和资源，让阶段目标形成可见结论"
+  ];
+  const pressureSources = [
+    "现有对手、规则限制和关系误判共同施压，逼主角证明选择",
+    "上层势力、公开评价和资源门槛同时收紧，压缩主角回旋空间",
+    "旧线索引出新责任，盟友立场不稳，对手借规则反咬主角",
+    "阶段收益引来代价和监督，主角必须在风险中保持主动权",
+    "隐藏压力只露出表层，明面冲突与暗线误导一起推高期待",
+    "阶段旧账集中回流，人物选择、资源归属和主线方向同时受压"
+  ];
+  const relationshipBeats = [
+    "关键人物从旁观转为试探，信任与戒备同时增加",
+    "一名配角因主角行动改变态度，形成临时站队或隐性阻力",
+    "关系从单向利用转成互相承担代价，留下后续选择题",
+    "旧误会得到局部修正，但新的信息差制造更深层拉扯",
+    "对手阵营出现裂缝，盟友也暴露不能立刻兑现的条件",
+    "核心关系完成阶段性表态，同时保留未说破的情绪余波"
+  ];
+  const target = input.terminal
+    ? "终局阶段收束全书主线、回收核心伏笔，并给出人物选择后的余波"
+    : stageTargets[index % stageTargets.length];
+  const pressure = input.terminal
+    ? "最终对手、核心规则和未回收伏笔集中施压，逼主角完成最终抉择"
+    : pressureSources[index % pressureSources.length];
+  const relationshipChange = input.terminal
+    ? "主要关系完成最终表态，保留余波、番外或开放式情绪空间"
+    : relationshipBeats[index % relationshipBeats.length];
+  const hook = input.terminal
+    ? "阶段钩子：主线闭合后的余波、人物去向和番外可能形成情绪回响"
+    : `阶段钩子：阶段末出现${index + 1 < total ? "必须处理的新压力、公开质疑或选择代价" : "后续主线压力和行动入口"}`;
+  const nextCondition = input.terminal
+    ? "进入下一阶段条件：无下一阶段，全书主线已闭合，只保留余波或番外空间"
+    : "进入下一阶段条件：阶段目标形成可见结果，同时留下更高层压力和行动入口";
+
+  return [
+    `${label}：阶段目标：${target}`,
+    "读者追问：主角能否把当前压力转成公开反馈，而不是只得到信息线索",
+    "情绪曲线：前段制造质疑和憋屈，中段加压，后段用可见回报还债并留余波",
+    `主要压力/对手：${pressure}`,
+    "压制反击循环：先被误判或阻拦，再用行动破局，最后让对手付出代价",
+    "成长上限：只允许获得阶段性能力、资源或权限，不提前兑现终局答案",
+    "地图/势力推进：从当前场域扩展到相邻势力，先建立规则和利益冲突",
+    "爽点节奏：小爽点服务行动反馈，大爽点放在阶段末形成公开认可",
+    "收益轮换：资源、权限、关系站队、对手代价、公开反馈和选择权轮换兑现",
+    "反套路变局：收益同时带来新限制或误导反噬，避免按流程查证",
+    "伏笔：核心真相和机制来源只保留疑似线索，不在本阶段定性",
+    "支线收束：收掉一个阶段支线或配角选择，同时留下主线相关余波",
+    `关系变化：${relationshipChange}`,
+    hook,
+    "追读钩子引擎：让读者等主角如何反击、兑现收益并处理反噬",
+    nextCondition
+  ].join("；");
+}
+
+function buildLocalLongFormPacing(
+  ranges: Array<{ start: number; end: number }>,
+  input: {
+    project: StoredProject;
+    bible: StoredWritingBible;
+    plotState: StoredPlotState;
+    terminalLastStage?: boolean;
+  }
+) {
+  return ranges
+    .map((range, index) =>
+      localLongFormStageLine(range, index, ranges.length, {
+        project: input.project,
+        bible: input.bible,
+        plotState: input.plotState,
+        terminal: input.terminalLastStage === true && index === ranges.length - 1
+      })
+    )
+    .join("\n");
+}
+
+function buildLocalLongFormBlueprint(
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>
+) {
+  const start = expectedOpeningBlueprintStartChapter(existingStoryProgress);
+
+  return Array.from({ length: 10 }, (_, index) => {
+    const chapter = start + index;
+    const phase = index % 5;
+
+    if (phase === 0) {
+      return `第${chapter}章：承接上一章压力，明确本章行动目标；先制造阻力和误判，再让主角拿到一个小回报，章末留下必须处理的新压力。`;
+    }
+
+    if (phase === 1) {
+      return `第${chapter}章：让对手或规则继续压缩空间，主角用可见行动反击；收益落到资源、权限或人物态度变化，结尾抛出选择代价。`;
+    }
+
+    if (phase === 2) {
+      return `第${chapter}章：推进暗线或配角支线，不只查线索；让信息差制造反套路变局，并把阶段伏笔接回主线任务。`;
+    }
+
+    if (phase === 3) {
+      return `第${chapter}章：安排公开反馈或关系站队，释放一轮小爽点；同时让收益带来新限制，避免主角无代价升级。`;
+    }
+
+    return `第${chapter}章：收束一个小目标或支线压力，把阶段成果变成下一步筹码；章末用新质疑、反扑或未兑现收益制造追读。`;
+  });
+}
+
+function buildLocalLongFormPlan(input: {
+  project: StoredProject;
+  bible: StoredWritingBible;
+  plotState: StoredPlotState;
+  targetTotalWords: number;
+  estimatedChapters: number;
+  existingStoryProgress?: ReturnType<typeof buildExistingStoryProgressForLongFormPlan>;
+}): AiLongFormPlanResult {
+  const core = compactStateText(
+    input.bible.corePleasure || input.plotState.mainGoal || input.project.description || input.project.name,
+    80
+  );
+  const mainGoal = compactStateText(input.plotState.mainGoal || input.bible.protagonistDesire || core, 90);
+  const frontRanges = getExpectedFirst100StageRanges(input.estimatedChapters);
+  const postRanges = getExpectedPost100StageRanges(input.estimatedChapters);
+  const existingLock = input.existingStoryProgress
+    ? `第1-${input.existingStoryProgress.latestChapterNumber}章已写内容和最新结尾为历史锁，只能承接不能改写。`
+    : "新书从开局建立核心承诺，后续按阶段规划逐步兑现。";
+
+  return {
+    planningBasis: `本地兜底规划基于项目设定、创作圣经和当前主线生成；目标约${input.estimatedChapters}章，优先保证阶段范围完整、读者引擎完整和历史锁不被覆盖。`,
+    corePromise: `围绕${core}建立长期追读：先压制和误判，再用行动反击；收益必须有外部反馈，并持续留下主线追问。`,
+    volumePlan: [
+      ...frontRanges.map((range, index) =>
+        `第${range.start}-${range.end}章：${index === 0 ? "建立核心循环、主角处境、初始压力和第一轮收益兑现" : "承接前段压力，放大关系站队、资源权限和阶段性反击"}。`
+      ),
+      ...postRanges.map((range, index) =>
+        `第${range.start}-${range.end}章：${index === postRanges.length - 1 ? "收束全书主线、回收核心伏笔并给出余波" : "升级地图/势力压力，轮换收益类型并推进远期伏笔"}。`
+      )
+    ],
+    progressionPacing: [
+      "成长只按阶段解锁：先解决当前压力，再获得局部能力、资源或权限，不提前兑现终局档位。",
+      "连续信息获取后必须转入对抗、公开反馈、关系变化、资源兑现、责任归属或阶段结论。",
+      "每个阶段至少安排一次收益带来的新代价，避免主角单向碾压导致追读断层。",
+      "远期真相只作为疑似伏笔逐层显影，未被正文确认前不得写死来源、身份或终局答案。"
+    ],
+    rewardPacing: [
+      "收益轮换：每2-3章让行动换来资源、权限、公开反馈、关系站队、对手代价或选择权，不能只给线索。",
+      "外部反馈：关键爽点必须有人物态度、名声、责任归属或公开评价变化，让读者看见回报。",
+      "阶段末安排一次较强兑现：压制被反击、误判被推翻、资源或地位变化落地，同时带来新限制。",
+      "支线收益必须服务主线：配角高光、关系推进或伏笔回收都要改变下一步行动条件。"
+    ],
+    confirmedFacts: cleanList([
+      existingLock,
+      input.bible.worldRules ? `世界规则已建立：${compactStateText(input.bible.worldRules, 90)}` : "",
+      input.bible.goldenFingerRules ? `核心机制限制已建立：${compactStateText(input.bible.goldenFingerRules, 90)}` : "",
+      mainGoal ? `当前主线目标：${mainGoal}` : ""
+    ]).slice(0, 6),
+    openQuestions: [
+      "核心真相、机制来源、幕后力量和终局解释仍是待确认伏笔，必须以后续正文证据逐层确认。",
+      "当前阶段对手、支线压力和人物站队如何收束，需要随任务卡继续细化。",
+      "收益兑现后的新代价、外部反馈和关系变化，需要在每章台账里持续更新。"
+    ],
+    doNotChange: [
+      existingLock,
+      "不得改写创作圣经中的世界规则、金手指限制、人物已知信息和已生成章节事实。",
+      "不得把未确认的核心真相、身份答案、幕后组织或终局解释提前写成确定事实。"
+    ],
+    doNotRevealEarly: [
+      "不得提前揭示核心真相、机制来源、幕后力量、最终身份答案或终局解释。",
+      "远期组织、终局危机和特殊机制只能作为压力、疑似线索或伏笔，不得在前段定性。"
+    ],
+    tagPromises: [
+      `核心卖点：${core}`,
+      "持续兑现压制反击、收益轮换、公开反馈、反套路变局和章末追读钩子。",
+      "长篇推进必须维护人物状态、伏笔状态、主线阶段和不可违反设定。"
+    ],
+    first10Chapters: buildLocalLongFormBlueprint(input.existingStoryProgress),
+    first100Pacing: buildLocalLongFormPacing(frontRanges, {
+      project: input.project,
+      bible: input.bible,
+      plotState: input.plotState
+    }),
+    post100Pacing: input.estimatedChapters > 100
+      ? buildLocalLongFormPacing(postRanges, {
+          project: input.project,
+          bible: input.bible,
+          plotState: input.plotState,
+          terminalLastStage: true
+        })
+      : "",
+    progressionRules: [
+      "任务卡必须先承接上一章钩子，再明确本章主线推进、爽点、伏笔和章末行动压力。",
+      "每章至少落到人物态度、资源权限、关系站队、对手代价、公开反馈、选择权或阶段结论之一。",
+      "连续2章偏信息获取后，下一章必须转入对抗、公开反馈、关系变化、资源兑现或阶段结论。",
+      "任何新增设定都要进入章节台账或状态管理，不能只留在正文里。",
+      "审稿时重点检查世界观、金手指限制、人物已知信息、伏笔状态和战力边界。"
+    ]
+  };
 }
 
 function applyInitialProjectState(
@@ -16836,8 +17011,10 @@ export async function generateLongFormPlan(
     throw new Error(message);
   }
 
-  let aiPlan: AiLongFormPlanResult;
+  let aiPlan: AiLongFormPlanResult | null = null;
   let repairedAiPlan: Awaited<ReturnType<typeof repairLongFormPlanWithAi>> | null = null;
+  let usedLongFormPlanFallback = false;
+  let longFormPlanFallbackReason = "";
 
   try {
     aiPlan = await generateLongFormPlanWithAi({
@@ -16945,6 +17122,50 @@ export async function generateLongFormPlan(
     validateAiLongFormPlan(aiPlan, estimatedChapters, existingStoryProgress);
   } catch (error) {
     const message = error instanceof Error ? error.message : "长篇规划 AI 生成失败";
+
+    if (!isRecoverableLongFormPlanFailure(message)) {
+      failAiJob(job, message);
+      refundAiJobCredits(store, job, "长篇规划生成失败返还");
+      await writeStore(store);
+      throw new Error(message);
+    }
+
+    console.warn("长篇规划 AI 生成失败，使用本地兜底规划", error);
+    longFormPlanFallbackReason = message;
+    usedLongFormPlanFallback = true;
+    aiPlan = buildLocalLongFormPlan({
+      project,
+      bible,
+      plotState,
+      targetTotalWords,
+      estimatedChapters,
+      existingStoryProgress
+    });
+    aiPlan = softenUnprovenLongFormSpecificsInPlan(aiPlan, {
+      project,
+      bible,
+      plotState,
+      characters,
+      foreshadowings,
+      storyAnalysis
+    });
+    aiPlan = cleanLongFormGenericTruthHoldNoiseInPlan(aiPlan);
+    aiPlan = sanitizeGeneratedLongFormFactLocks(aiPlan, existingStoryProgress);
+    aiPlan = ensureLongFormDoNotChange(aiPlan, { bible, plotState, existingStoryProgress });
+
+    try {
+      validateAiLongFormPlan(aiPlan, estimatedChapters, existingStoryProgress);
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "本地兜底长篇规划校验失败";
+      failAiJob(job, `${message}；${fallbackMessage}`);
+      refundAiJobCredits(store, job, "长篇规划生成失败返还");
+      await writeStore(store);
+      throw new Error(`${message}；${fallbackMessage}`);
+    }
+  }
+
+  if (!aiPlan) {
+    const message = "长篇规划生成失败：未得到可保存的规划";
     failAiJob(job, message);
     refundAiJobCredits(store, job, "长篇规划生成失败返还");
     await writeStore(store);
@@ -16983,20 +17204,28 @@ export async function generateLongFormPlan(
   store.longFormPlans = (store.longFormPlans ?? []).filter((item) => item.projectId !== projectId);
   store.longFormPlans.push(plan);
   project.updatedAt = timestamp;
-  const reviewJob = createAiJob(store, {
-    userId: currentUser.id,
+  const reviewJob = usedLongFormPlanFallback
+    ? null
+    : createAiJob(store, {
+        userId: currentUser.id,
+        projectId,
+        type: "review_long_form_plan",
+        payload: { longFormPlanId: plan.id },
+        model: getActiveAiModel(store, "local-long-form-plan-review", currentUser.id)
+      });
+  removeOutdatedLongFormPlanJobs(
+    store,
     projectId,
-    type: "review_long_form_plan",
-    payload: { longFormPlanId: plan.id },
-    model: getActiveAiModel(store, "local-long-form-plan-review", currentUser.id)
-  });
-  removeOutdatedLongFormPlanJobs(store, projectId, plan.id, new Set([job.id, reviewJob.id]));
+    plan.id,
+    new Set(reviewJob ? [job.id, reviewJob.id] : [job.id])
+  );
   finishAiJob(job, withAiBillingOutput(store, job, {
     usedAi: true,
-    usedFallback: false,
+    usedFallback: usedLongFormPlanFallback,
     longFormPlanId: plan.id,
-    reviewJobId: reviewJob.id,
+    reviewJobId: reviewJob?.id,
     usedLongFormPlanRepair: Boolean(repairedAiPlan),
+    longFormPlanFallbackReason: longFormPlanFallbackReason || undefined,
     targetTotalWords,
     estimatedChapters
   }, combineAiTokenUsages([getAiTokenUsage(aiPlan), getAiTokenUsage(repairedAiPlan)])));

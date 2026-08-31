@@ -1736,6 +1736,218 @@ function compactLongFormContextForDistantStage(context: ReturnType<typeof buildL
   };
 }
 
+function compactLongFormContextForFirst100Stage(context: ReturnType<typeof buildLongFormPlanPromptContext>) {
+  return {
+    ...compactLongFormContextForDistantStage(context),
+    bible: {
+      ...compactLongFormContextForDistantStage(context).bible,
+      worldRules: cleanPromptText(context.bible.worldRules, 140),
+      goldenFingerRules: cleanPromptText(context.bible.goldenFingerRules, 140),
+      narrativeTaboos: cleanPromptText(context.bible.narrativeTaboos, 100)
+    },
+    plotState: {
+      ...compactLongFormContextForDistantStage(context).plotState,
+      shortTermGoal: cleanPromptText(context.plotState.shortTermGoal, 100),
+      currentEnemy: cleanPromptText(context.plotState.currentEnemy, 80),
+      unresolvedQuestions: compactTextList(context.plotState.unresolvedQuestions, 3, 80),
+      openThreads: compactTextList(context.plotState.openThreads, 3, 80)
+    },
+    existingStoryProgress: context.existingStoryProgress
+      ? {
+          latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+          continuationChapterNumber: context.existingStoryProgress.continuationChapterNumber,
+          latestDraftEnding: cleanPromptText(context.existingStoryProgress.latestDraftEnding ?? "", 120),
+          recentLedgers: context.existingStoryProgress.recentLedgers.slice(-2).map((ledger) => ({
+            chapterNumber: ledger.chapterNumber,
+            title: cleanPromptText(ledger.title, 50),
+            payoff: cleanPromptText(ledger.payoff, 70),
+            cliffhanger: cleanPromptText(ledger.cliffhanger, 80),
+            carryOverTasks: compactTextList(ledger.carryOverTasks, 2, 70)
+          })),
+          currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 4, 90),
+          openCarryOverTasks: compactTextList(context.existingStoryProgress.openCarryOverTasks, 3, 80)
+        }
+      : null,
+    characters: context.characters.slice(0, 4).map((character) => ({
+      name: cleanPromptText(character.name, 50),
+      identity: cleanPromptText(character.identity, 70),
+      currentGoal: cleanPromptText(character.currentGoal, 80),
+      currentState: cleanPromptText(character.currentState, 80)
+    })),
+    foreshadowings: context.foreshadowings.slice(0, 4).map((item) => ({
+      name: cleanPromptText(item.name, 60),
+      status: item.status,
+      hiddenInformation: cleanPromptText(item.hiddenInformation, 80),
+      revealMethod: cleanPromptText(item.revealMethod, 70)
+    }))
+  };
+}
+
+function compactLongFormContextForReaderEngine(context: ReturnType<typeof buildLongFormPlanPromptContext>) {
+  return {
+    projectName: context.projectName,
+    projectDescription: cleanPromptText(context.projectDescription, 320),
+    targetTotalWords: context.targetTotalWords,
+    estimatedChapters: context.estimatedChapters,
+    bible: {
+      workType: cleanPromptText(context.bible.workType, 80),
+      targetReader: cleanPromptText(context.bible.targetReader, 80),
+      corePleasure: cleanPromptText(context.bible.corePleasure, 220),
+      protagonistDesire: cleanPromptText(context.bible.protagonistDesire, 160),
+      worldRules: cleanPromptText(context.bible.worldRules, 160),
+      goldenFingerRules: cleanPromptText(context.bible.goldenFingerRules, 160),
+      powerSystem: cleanPromptText(context.bible.powerSystem, 120),
+      narrativeTaboos: cleanPromptText(context.bible.narrativeTaboos, 120),
+      immutableSettings: cleanPromptText(context.bible.immutableSettings, 180),
+      styleGuide: cleanPromptText(context.bible.styleGuide, 100)
+    },
+    plotState: {
+      currentVolume: cleanPromptText(context.plotState.currentVolume, 80),
+      currentMap: cleanPromptText(context.plotState.currentMap, 80),
+      mainGoal: cleanPromptText(context.plotState.mainGoal, 150),
+      shortTermGoal: cleanPromptText(context.plotState.shortTermGoal, 140),
+      currentStage: cleanPromptText(context.plotState.currentStage, 140),
+      currentEnemy: cleanPromptText(context.plotState.currentEnemy, 100),
+      unresolvedQuestions: compactTextList(context.plotState.unresolvedQuestions, 4, 90),
+      openThreads: compactTextList(context.plotState.openThreads, 4, 90),
+      nextMilestones: compactTextList(context.plotState.nextMilestones, 3, 90),
+      nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 120),
+      powerSystemState: cleanPromptText(context.plotState.powerSystemState, 110),
+      mapAndForces: cleanPromptText(context.plotState.mapAndForces, 120),
+      resourceState: cleanPromptText(context.plotState.resourceState, 110),
+      relationshipChanges: compactTextList(context.plotState.relationshipChanges, 3, 90)
+    },
+    existingStoryProgress: context.existingStoryProgress
+      ? {
+          latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+          continuationChapterNumber: context.existingStoryProgress.continuationChapterNumber,
+          latestDraftEnding: cleanPromptText(context.existingStoryProgress.latestDraftEnding ?? "", 160),
+          recentLedgers: context.existingStoryProgress.recentLedgers.slice(-3).map((ledger) => ({
+            chapterNumber: ledger.chapterNumber,
+            title: cleanPromptText(ledger.title, 60),
+            payoff: cleanPromptText(ledger.payoff, 90),
+            cliffhanger: cleanPromptText(ledger.cliffhanger, 100),
+            carryOverTasks: compactTextList(ledger.carryOverTasks, 2, 80)
+          })),
+          currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 5, 100),
+          openCarryOverTasks: compactTextList(context.existingStoryProgress.openCarryOverTasks, 3, 90)
+        }
+      : null,
+    characters: context.characters.slice(0, 4).map((character) => ({
+      name: cleanPromptText(character.name, 60),
+      identity: cleanPromptText(character.identity, 80),
+      currentGoal: cleanPromptText(character.currentGoal, 90),
+      relationshipToProtagonist: cleanPromptText(character.relationshipToProtagonist, 80),
+      attitude: cleanPromptText(character.attitude, 60),
+      currentState: cleanPromptText(character.currentState, 90)
+    })),
+    foreshadowings: context.foreshadowings.slice(0, 4).map((item) => ({
+      name: cleanPromptText(item.name, 70),
+      status: item.status,
+      hiddenInformation: cleanPromptText(item.hiddenInformation, 100),
+      revealMethod: cleanPromptText(item.revealMethod, 90)
+    })),
+    storyReference: context.storyReference
+      ? {
+          genre: cleanPromptText(context.storyReference.genre, 60),
+          protagonistModel: cleanPromptText(context.storyReference.protagonistModel, 90),
+          openingModel: cleanPromptText(context.storyReference.openingModel, 90),
+          goldenFingerMechanism: cleanPromptText(context.storyReference.goldenFingerMechanism, 90),
+          openingHookPattern: cleanPromptText(context.storyReference.openingHookPattern, 90),
+          mainLoopPattern: cleanPromptText(context.storyReference.mainLoopPattern, 120),
+          pacingPattern: cleanPromptText(context.storyReference.pacingPattern, 100),
+          topPleasureTypes: compactTextList(context.storyReference.topPleasureTypes, 5, 50),
+          usablePatterns: compactTextList(context.storyReference.usablePatterns, 4, 90),
+          avoidCopying: compactTextList(context.storyReference.avoidCopying, 4, 90),
+          migrationAdvice: cleanPromptText(context.storyReference.migrationAdvice, 120)
+        }
+      : null
+  };
+}
+
+function compactLongFormContextForFactLock(context: ReturnType<typeof buildLongFormPlanPromptContext>) {
+  return {
+    projectName: context.projectName,
+    projectDescription: cleanPromptText(context.projectDescription, 360),
+    targetTotalWords: context.targetTotalWords,
+    estimatedChapters: context.estimatedChapters,
+    bible: {
+      workType: cleanPromptText(context.bible.workType, 80),
+      targetReader: cleanPromptText(context.bible.targetReader, 80),
+      corePleasure: cleanPromptText(context.bible.corePleasure, 220),
+      protagonistDesire: cleanPromptText(context.bible.protagonistDesire, 140),
+      worldRules: cleanPromptText(context.bible.worldRules, 180),
+      goldenFingerRules: cleanPromptText(context.bible.goldenFingerRules, 180),
+      powerSystem: cleanPromptText(context.bible.powerSystem, 120),
+      narrativeTaboos: cleanPromptText(context.bible.narrativeTaboos, 140),
+      immutableSettings: cleanPromptText(context.bible.immutableSettings, 220),
+      styleGuide: cleanPromptText(context.bible.styleGuide, 100)
+    },
+    plotState: {
+      currentVolume: cleanPromptText(context.plotState.currentVolume, 80),
+      currentMap: cleanPromptText(context.plotState.currentMap, 80),
+      mainGoal: cleanPromptText(context.plotState.mainGoal, 150),
+      shortTermGoal: cleanPromptText(context.plotState.shortTermGoal, 130),
+      currentStage: cleanPromptText(context.plotState.currentStage, 140),
+      currentEnemy: cleanPromptText(context.plotState.currentEnemy, 100),
+      unresolvedQuestions: compactTextList(context.plotState.unresolvedQuestions, 4, 90),
+      openThreads: compactTextList(context.plotState.openThreads, 4, 90),
+      nextMilestones: compactTextList(context.plotState.nextMilestones, 3, 90),
+      nextStageGoal: cleanPromptText(context.plotState.nextStageGoal, 110),
+      powerSystemState: cleanPromptText(context.plotState.powerSystemState, 110),
+      mapAndForces: cleanPromptText(context.plotState.mapAndForces, 120),
+      resourceState: cleanPromptText(context.plotState.resourceState, 100),
+      relationshipChanges: compactTextList(context.plotState.relationshipChanges, 3, 90)
+    },
+    existingStoryProgress: context.existingStoryProgress
+      ? {
+          latestChapterNumber: context.existingStoryProgress.latestChapterNumber,
+          continuationChapterNumber: context.existingStoryProgress.continuationChapterNumber,
+          latestDraftEnding: cleanPromptText(context.existingStoryProgress.latestDraftEnding ?? "", 160),
+          recentLedgers: context.existingStoryProgress.recentLedgers.slice(-3).map((ledger) => ({
+            chapterNumber: ledger.chapterNumber,
+            title: cleanPromptText(ledger.title, 60),
+            events: compactTextList(ledger.events, 2, 80),
+            payoff: cleanPromptText(ledger.payoff, 90),
+            cliffhanger: cleanPromptText(ledger.cliffhanger, 90),
+            stateChanges: compactTextList(ledger.stateChanges, 2, 80),
+            carryOverTasks: compactTextList(ledger.carryOverTasks, 2, 80)
+          })),
+          establishedEvents: compactTextList(context.existingStoryProgress.establishedEvents, 5, 90),
+          establishedPayoffs: compactTextList(context.existingStoryProgress.establishedPayoffs, 4, 80),
+          establishedStateChanges: compactTextList(context.existingStoryProgress.establishedStateChanges, 4, 80),
+          currentStatusLines: compactTextList(context.existingStoryProgress.currentStatusLines ?? [], 5, 100),
+          openCarryOverTasks: compactTextList(context.existingStoryProgress.openCarryOverTasks, 3, 90)
+        }
+      : null,
+    characters: context.characters.slice(0, 4).map((character) => ({
+      name: cleanPromptText(character.name, 60),
+      identity: cleanPromptText(character.identity, 80),
+      currentGoal: cleanPromptText(character.currentGoal, 80),
+      relationshipToProtagonist: cleanPromptText(character.relationshipToProtagonist, 80),
+      currentState: cleanPromptText(character.currentState, 80)
+    })),
+    foreshadowings: context.foreshadowings.slice(0, 4).map((item) => ({
+      name: cleanPromptText(item.name, 70),
+      status: item.status,
+      plantedChapter: cleanPromptText(item.plantedChapter, 50),
+      hiddenInformation: cleanPromptText(item.hiddenInformation, 90),
+      revealMethod: cleanPromptText(item.revealMethod, 80)
+    })),
+    storyReference: context.storyReference
+      ? {
+          genre: cleanPromptText(context.storyReference.genre, 60),
+          protagonistModel: cleanPromptText(context.storyReference.protagonistModel, 80),
+          openingModel: cleanPromptText(context.storyReference.openingModel, 80),
+          goldenFingerMechanism: cleanPromptText(context.storyReference.goldenFingerMechanism, 80),
+          mainLoopPattern: cleanPromptText(context.storyReference.mainLoopPattern, 100),
+          topPleasureTypes: compactTextList(context.storyReference.topPleasureTypes, 4, 50),
+          avoidCopying: compactTextList(context.storyReference.avoidCopying, 3, 80)
+        }
+      : null
+  };
+}
+
 function chunkList<T>(items: T[], size: number) {
   const chunks: T[][] = [];
 
@@ -2085,11 +2297,48 @@ function longFormAdjacentStageIssue(previousStage: LongFormStageItem, currentSta
   return "";
 }
 
+function isAiJsonLengthLimitError(message: string) {
+  return /长度限制截断|未正常结束：length|finish[_ ]?reason[^。；\n]*length/i.test(message);
+}
+
+function buildLongFormJsonLengthRetryRequest(request: AiJsonRequest): AiJsonRequest {
+  const originalMaxTokens = request.maxTokens ?? 0;
+  const retryMaxTokens = Math.min(
+    5200,
+    Math.max(3600, originalMaxTokens + 1600, Math.ceil(originalMaxTokens * 1.6))
+  );
+
+  return {
+    ...request,
+    temperature: Math.min(request.temperature ?? 0.2, 0.12),
+    maxTokens: retryMaxTokens,
+    timeoutMs: Math.max(request.timeoutMs ?? 0, 180000),
+    messages: [
+      ...request.messages,
+      {
+        role: "user",
+        content:
+          "上一次 JSON 输出被长度限制截断。本次必须压缩输出：只返回 outputSchema 要求的字段；如果 schema 要求恰好 N 项必须保持 N 项，否则数组数量控制在 schema 上限的三分之二以内；不可省略必填字段；每个字符串控制在 schema 字数上限的 60% 左右；用短句保留关键约束，确保 JSON 完整闭合。"
+      }
+    ]
+  };
+}
+
 async function requestLongFormPlanJson<T>(stepName: string, request: AiJsonRequest) {
   try {
     return await requestAiJson<T>(request);
   } catch (error) {
     const message = error instanceof Error ? error.message : "AI JSON 请求失败";
+
+    if (isAiJsonLengthLimitError(message)) {
+      try {
+        return await requestAiJson<T>(buildLongFormJsonLengthRetryRequest(request));
+      } catch (retryError) {
+        const retryMessage = retryError instanceof Error ? retryError.message : "AI JSON 请求失败";
+        throw new Error(`${stepName}失败：${retryMessage}`);
+      }
+    }
+
     throw new Error(`${stepName}失败：${message}`);
   }
 }
@@ -2261,7 +2510,7 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
         role: "user",
         content: JSON.stringify(
           {
-            ...promptContext,
+            context: compactLongFormContextForFactLock(promptContext),
             planningRules: [
               "如果 existingStoryProgress 不为空，说明本项目已经生成过正文或章节台账；这些内容是历史锁，不是可重写素材。",
               "existingStoryProgress.currentStatusLines 与最近章节台账代表当前状态，优先级高于较早章节里的阶段性结论；如果早期台账写过完成，但最近章节又出现继续追查、未收束、未兑现、逃脱、待确认等状态，confirmedFacts/doNotChange 只能写最近状态。",
@@ -2281,12 +2530,12 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
               "本次只输出 planningBasis、confirmedFacts、openQuestions、doNotChange、doNotRevealEarly、tagPromises；不要输出 corePromise、volumePlan、progressionPacing、rewardPacing、progressionRules、first10Chapters、first100Pacing、post100Pacing。"
             ],
             outputSchema: {
-              planningBasis: "string，220字以内，说明事实源、已有章节承接、目标篇幅和分段依据",
-              confirmedFacts: "string[]，每项120字以内，最多10项；只写项目事实源明确且不冲突的事实",
-              openQuestions: "string[]，每项120字以内，最多8项；写未定、互相有张力或需要作者确认的方向",
-              doNotChange: "string[]，每项120字以内，最多10项；写后续规划和正文不得改写的核心事实",
-              doNotRevealEarly: "string[]，每项120字以内，最多8项；写前期不能提前揭开的底牌或终局信息",
-              tagPromises: "string[]，每项100字以内，最多8项；写题材标签、情绪卖点、读者期待必须兑现的承诺"
+              planningBasis: "string，160字以内，说明事实源、已有章节承接和目标篇幅",
+              confirmedFacts: "string[]，每项100字以内，最多6项；只写项目事实源明确且不冲突的事实",
+              openQuestions: "string[]，每项100字以内，最多5项；写未定、互相有张力或需要作者确认的方向",
+              doNotChange: "string[]，每项100字以内，最多6项；写后续规划和正文不得改写的核心事实",
+              doNotRevealEarly: "string[]，每项100字以内，最多5项；写前期不能提前揭开的底牌或终局信息",
+              tagPromises: "string[]，每项90字以内，最多5项；写题材标签、情绪卖点、读者期待必须兑现的承诺"
             }
           },
           null,
@@ -2295,7 +2544,7 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
       }
     ],
     temperature: 0.22,
-    maxTokens: 2400,
+    maxTokens: 3000,
     timeoutMs: 180000
   });
 
@@ -2313,12 +2562,12 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
         role: "user",
         content: JSON.stringify(
           {
-            context: promptContext,
+            context: compactLongFormContextForReaderEngine(promptContext),
             factLock: compactLongFormPlanForStagePrompt(factLockPlan),
-	            rules: [
-	              "核心承诺必须贴合本书题材、主角处境、世界规则、人物关系和已有章节；不能写成通用套话。",
-	              "读者引擎必须包含：读者追问、情绪曲线、压制反击循环、可见外部回报、反套路变局、追读钩子。",
-	              "必须写清长期情绪曲线：哪些阶段负责憋屈/紧张/心疼/心动/期待，哪些节点还债解气，哪些节点让收益带来新代价或余波。",
+            rules: [
+              "核心承诺必须贴合本书题材、主角处境、世界规则、人物关系和已有章节；不能写成通用套话。",
+              "读者引擎必须包含：读者追问、情绪曲线、压制反击循环、可见外部回报、反套路变局、追读钩子。",
+              "必须写清长期情绪曲线：哪些阶段负责憋屈/紧张/心疼/心动/期待，哪些节点还债解气，哪些节点让收益带来新代价或余波。",
               "不能把爽点长期等同于拿线索、查资料、换地点、解碎片；收益必须轮换资源、权限、地位/名声、关系站队、对手代价、公开反馈、选择权或阶段结论。",
               "任何题材都可以释放爽点，但必须按作品机制表达：被轻视后反击、误判推翻、能力局部曝光、资源/权限获取、危机反转、众人震惊、情绪补偿、地位提升、复仇推进、信息差反杀、关系站队变化。",
               "progressionRules 必须能被后续任务卡直接执行，必须包含避免流程化、信息化、按部就班的读者体验约束。",
@@ -2328,12 +2577,13 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
               ...antiPrematureSpecificsRules,
               ...storyModeRules,
               ...planningGuardRules,
+              "每个字段只写短句，不要铺成长段落；能用一个判断句说清就不要拆成多句。",
               "本次只输出 corePromise、rewardPacing、progressionRules；不要输出事实锁、卷纲、前10章、前100章或后100章阶段。"
             ],
-	            outputSchema: {
-	              corePromise: "string，360字以内，说明核心承诺、长期爽点循环、读者追问、情绪曲线、情绪补偿、追读钩子引擎和终局承诺边界",
-	              rewardPacing: "string[]，每项170字以内，最多8项；必须写清小/中/大收益频率、情绪债、还债节点、收益轮换、外部反馈、出现条件、兑现方式和限制",
-	              progressionRules: "string[]，每项150字以内，最多10项；必须是后续任务卡可执行的硬规则，包含避免流程化和连续查证的约束"
+            outputSchema: {
+              corePromise: "string，240字以内，说明核心承诺、长期爽点循环、读者追问、情绪曲线和追读边界",
+              rewardPacing: "string[]，每项130字以内，最多6项；必须写清收益频率、情绪债、收益轮换、外部反馈、兑现方式和限制",
+              progressionRules: "string[]，每项120字以内，最多8项；必须是后续任务卡可执行的硬规则，包含避免流程化和连续查证的约束"
             }
           },
           null,
@@ -2342,7 +2592,7 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
       }
     ],
     temperature: 0.22,
-    maxTokens: 2600,
+    maxTokens: 3200,
     timeoutMs: 180000
   });
 
@@ -2479,7 +2729,7 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
             role: "user",
             content: JSON.stringify(
               {
-                ...promptContext,
+                context: compactLongFormContextForFirst100Stage(promptContext),
                 planCore: compactLongFormPlanForStagePrompt(initialPlan),
                 previousStage,
                 requiredRange,
@@ -2547,7 +2797,7 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
             role: "user",
             content: JSON.stringify(
               {
-                ...promptContext,
+                context: compactLongFormContextForFirst100Stage(promptContext),
                 planCore: compactLongFormPlanForStagePrompt(initialPlan),
                 previousStage,
                 requiredRanges: missingFirst100Ranges,
@@ -3093,14 +3343,13 @@ export async function generateLongFormPlanWithAi(context: LongFormPlanContext) {
 
 export async function repairLongFormPlanWithAi(input: LongFormPlanRepairInput) {
   const storyModeRules = buildLongFormStoryModeRules(input.context);
-  const response = await requestAiJson<
+  const needsFirst10Repair = input.issues.some((issue) => /连续10章蓝图缺章|first10Chapters/i.test(issue));
+  const response = await requestLongFormPlanJson<
     Partial<
       Pick<
         StoredLongFormPlan,
         | "planningBasis"
         | "corePromise"
-        | "volumePlan"
-        | "progressionPacing"
         | "rewardPacing"
         | "confirmedFacts"
         | "openQuestions"
@@ -3113,7 +3362,7 @@ export async function repairLongFormPlanWithAi(input: LongFormPlanRepairInput) {
         | "progressionRules"
       >
     >
-  >({
+  >("长篇规划纠偏修复", {
     messages: [
       {
         role: "system",
@@ -3145,8 +3394,6 @@ export async function repairLongFormPlanWithAi(input: LongFormPlanRepairInput) {
               narrativeTaboos: cleanPromptText(input.context.bible.narrativeTaboos, 360)
             },
             issues: input.issues.slice(0, 6),
-            expectedFirst100Ranges: buildRequiredFirst100PlanRanges(input.context.estimatedChapters).map(requiredRangeLabel),
-            expectedPost100Ranges: buildRequiredPost100PlanRanges(input.context.estimatedChapters).map(requiredRangeLabel),
             currentPlan: compactLongFormPlanForRepair(input.plan),
             repairRules: [
               "只返回需要修改的字段；没有修改的字段可以省略。",
@@ -3155,35 +3402,32 @@ export async function repairLongFormPlanWithAi(input: LongFormPlanRepairInput) {
               "修复 planningBasis 时也要最近状态优先：如果早期写过结案/认罪，但最近章节显示潜逃、追捕、未收束或待确认，planningBasis 只能写最新开放状态，不得并列写成当前已收束。",
               "核心真相、特殊机制来源、幕后组织、终局解释、主角是否被选中、现实与异世界/副本/系统等多层关系，除非 confirmedFacts 或 doNotChange 已明确，否则只能写成伏笔、疑似方向、压力或待确认；禁止写成其实是、原来是、本质是、确定为、来自、目的是。",
               "如当前规划已经把核心真相、机制来源、终局解释或幕后身份写成具体答案，必须改为开放表述：可能方向、疑似机制、未确认线索、待后期揭示；除非项目事实源明确要求，不得新增任何具体答案。",
-              "volumePlan、first100Pacing、post100Pacing 的章节范围必须连续且不倒退；不能前一阶段写进入新单元/新卷/新主案，后一阶段又倒退回旧单元/旧卷/旧主案。",
-              "first100Pacing、post100Pacing 只能保留顶层阶段范围；阶段正文里禁止继续写具体章节号、细分章段或“第X章/第X-Y章/第X章左右”，这类细排只能放在 first10Chapters 或任务卡。",
-              "相邻阶段必须递进，禁止两个连续阶段复写同一阶段目标、主案、对手组合或收束动作；如果上一阶段已开启下一单元，下一阶段必须先建立新压力，不能直接写收束。",
-              "最后一个后100阶段是全书终局/剩余结尾，只能收束全书主线、回收核心伏笔、给出余波或开放式结局；不能再开启新单元、新主案、新阶段或新入口。",
-              "修阶段错位时，优先拉长当前单元/当前卷，或把后续单元顺延，不要压缩已写章节和正在进行的当前行动线。",
               "修复续写项目时，existingStoryProgress.latestChapterNumber 之前的章节只能作为历史摘要，不能改写为未来任务；continuationChapterNumber 之后才是可优化的新规划。",
-              "first100Pacing、post100Pacing 必须与 volumePlan 的卷/主案范围一致；不得把后续卷名、后续主案或后续单元提前写进前100阶段。",
 	              "保留读者引擎字段语义：读者追问、情绪曲线、压制反击循环、收益轮换、反套路变局、追读钩子引擎。",
               "如果阶段规划只写事件排期或收益频率，必须补成情绪曲线：欠什么情绪债、怎样加压、何处还债、还债后留下什么余波或新期待。",
 	              "rewardPacing 必须包含收益轮换或外部反馈，不能长期只有信息、线索、物证、碎片或道具。",
-              "如果 issues 提到连续10章蓝图缺章，必须返回完整 first10Chapters 字段，恰好10项，并从 existingStoryProgress.continuationChapterNumber 开始连续编号。",
-              "如果 issues 提到前100阶段缺段、模板化重复、阶段目标重复、阶段衔接不成立、阶段字段缺失或缺少读者追读引擎，必须重写完整 first100Pacing，并严格覆盖 expectedFirst100Ranges 里的每一个范围；如果不能完整覆盖，就不要返回 first100Pacing 字段。",
-              "如果 issues 提到第101章后缺段、模板化重复、阶段目标重复、阶段衔接不成立、阶段字段缺失、终局阶段不收束或阶段覆盖不足，必须重写完整 post100Pacing，并严格覆盖 expectedPost100Ranges 里的每一个范围；如果不能完整覆盖，就不要返回 post100Pacing 字段。",
-              "不要用“承接核心承诺、读者等待前期压力如何反转、旧压力升级、阶段结论后进入下一阶段”等通用模板复制到多个阶段；每个阶段必须有不同的目标、压力源、情绪债、还债点、支线收束和阶段钩子。",
+              needsFirst10Repair
+                ? "如果 issues 提到连续10章蓝图缺章，才返回完整 first10Chapters 字段，恰好10项，并从 existingStoryProgress.continuationChapterNumber 开始连续编号；否则不要返回 first10Chapters。"
+                : "不要返回 first10Chapters。",
+              "不要返回 volumePlan、progressionPacing、first100Pacing 或 post100Pacing；阶段缺段、阶段字段缺失、阶段衔接和终局收束由单阶段修复器或本地兜底处理。",
+              "不要用长段落解释，不要重写整份规划；每项只写一个可执行短句。",
+              "数组字段最多返回6项，每项100字以内；planningBasis/corePromise 最多160字。",
               ...storyModeRules,
               "输出不得 Markdown，不得解释。"
             ],
             outputSchema: {
-              corePromise: "string，可选",
-              volumePlan: "string[]，可选",
-              rewardPacing: "string[]，可选",
+              planningBasis: "string，可选，160字以内",
+              corePromise: "string，可选，160字以内",
+              rewardPacing: "string[]，可选，最多6项，每项100字以内；必须包含收益轮换或外部反馈",
               confirmedFacts: "string[]，可选",
               openQuestions: "string[]，可选",
               doNotChange: "string[]，可选",
               doNotRevealEarly: "string[]，可选",
-              first10Chapters: "string[]，可选；如需修复连续10章蓝图，必须完整返回10项",
-              first100Pacing: "string，可选",
-              post100Pacing: "string，可选",
-              progressionRules: "string[]，可选"
+              tagPromises: "string[]，可选",
+              first10Chapters: needsFirst10Repair
+                ? "string[]，可选；如需修复连续10章蓝图，必须完整返回10项"
+                : "不要返回",
+              progressionRules: "string[]，可选，最多6项，每项100字以内"
             }
           },
           null,
@@ -3192,7 +3436,7 @@ export async function repairLongFormPlanWithAi(input: LongFormPlanRepairInput) {
       }
     ],
     temperature: 0.12,
-    maxTokens: 5200,
+    maxTokens: needsFirst10Repair ? 3600 : 2400,
     timeoutMs: 180000
   });
   const guardedResponse: Partial<StoredLongFormPlan> = { ...response };

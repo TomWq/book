@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiButton, ApiForm } from "@/components/api-form";
 import { AiJobRunner } from "@/components/ai-job-runner";
+import { aiJobResumeAfterMs, isStaleRunningAiJob } from "@/lib/ai-job-status";
 import { getProjectWritingState } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
@@ -236,16 +237,17 @@ function displayJobError(value: string) {
 }
 
 function isStaleLongFormJob(job?: { status: string; type: string; updatedAt?: string } | null) {
-  if (
-    !job ||
-    job.status !== "running" ||
-    (job.type !== "generate_long_form_plan" && job.type !== "review_long_form_plan")
-  ) {
+  if (!job || (job.type !== "generate_long_form_plan" && job.type !== "review_long_form_plan")) {
     return false;
   }
 
-  const updatedAt = Date.parse(String(job.updatedAt ?? ""));
-  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > 90 * 1000;
+  return isStaleRunningAiJob(job);
+}
+
+function formatResumeDelay(job: { type: string }) {
+  const seconds = Math.round(aiJobResumeAfterMs(job) / 1000);
+
+  return seconds >= 60 ? `${Math.round(seconds / 60)} 分钟` : `${seconds} 秒`;
 }
 
 function isActiveLongFormJob(job?: { status: string; type: string; updatedAt?: string } | null) {
@@ -920,7 +922,7 @@ export default async function ProjectStatePage({
           ) : null}
           {hasStaleLongFormPlanJob ? (
             <div className="quote-box warning-box compact-note long-form-stale-note">
-              <strong>这个长篇规划任务已经超过 90 秒没有更新。</strong>
+              <strong>这个长篇规划任务已经超过 {latestLongFormPlanJob ? formatResumeDelay(latestLongFormPlanJob) : "一段时间"} 没有更新。</strong>
               <span>如果页面一直停在进行中，可以先解除卡住状态，再由页面或任务中心重新接管执行。</span>
               <ApiForm
                 className="long-form-review-form"

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { ApiButton } from "@/components/api-form";
 import { AiJobRunner } from "@/components/ai-job-runner";
 import { Panel } from "@/components/panel";
+import { aiJobResumeAfterMs, isStaleRunningAiJob } from "@/lib/ai-job-status";
 import { calculateAiJobProgress, formatAiJobType, getProject, getProjectAiJobs } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
@@ -75,19 +76,17 @@ function readJobInput(job: { input?: unknown }) {
 }
 
 function isResumableJobStale(job: ProjectJobView) {
-  if (
-    job.status !== "running" ||
-    (
-      job.type !== "generate_long_form_plan" &&
-      job.type !== "review_long_form_plan" &&
-      job.type !== "generate_chapter_batch"
-    )
-  ) {
-    return false;
-  }
+  return isStaleRunningAiJob({
+    status: job.status,
+    type: job.type,
+    updatedAt: job.updatedAt
+  });
+}
 
-  const updatedAt = Date.parse(String(job.updatedAt ?? ""));
-  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > 90 * 1000;
+function formatResumeDelay(job: Pick<ProjectJobView, "type">) {
+  const seconds = Math.round(aiJobResumeAfterMs(job) / 1000);
+
+  return seconds >= 60 ? `${Math.round(seconds / 60)} 分钟` : `${seconds} 秒`;
 }
 
 function getJobUnitCount(job: ProjectJobView, output?: JobOutputView) {
@@ -473,7 +472,7 @@ export default async function ProjectJobsPage({
                   <div className="muted">{summarizeJobOutput(job)}</div>
                   <div className={staleResumableJob ? "pill warning form-status" : "muted"}>
                     {staleResumableJob
-                      ? "这个任务已经超过 90 秒没有更新，可以点上方“执行待处理任务”重新接管。"
+                      ? `这个任务已经超过 ${formatResumeDelay(job)} 没有更新，可以点上方“执行待处理任务”重新接管。`
                       : job.error ? displayJobError(job.error) : "任务执行信息已记录。"}
                   </div>
                   {canRetry ? (

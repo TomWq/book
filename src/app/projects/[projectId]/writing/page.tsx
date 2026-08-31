@@ -7,6 +7,7 @@ import { DraftRevisionEditor } from "@/components/draft-revision-editor";
 import { FullBookExportActions } from "@/components/full-book-export-actions";
 import { Panel } from "@/components/panel";
 import { StreamDraftButton } from "@/components/stream-draft-button";
+import { isActiveAiJob } from "@/lib/ai-job-status";
 import type { StoredWritingTaskCard } from "@/lib/project-types";
 import { getProjectAnalysis, getProjectInspirations, getProjectWritingState } from "@/lib/projects";
 import { formatReviewText } from "@/lib/review-display";
@@ -292,6 +293,13 @@ function readJobObject(value: unknown) {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function isReplaceExistingBatchJob(job: { input?: unknown; output?: unknown }) {
+  const output = readJobObject(job.output);
+  const input = readJobObject(job.input);
+
+  return output.replaceExisting === true || input.replaceExisting === true;
+}
+
 export default async function ProjectWritingPage({
   params
 }: {
@@ -339,11 +347,14 @@ export default async function ProjectWritingPage({
     ? writingState.reviews.find((review) => review.draftId === activeDraft.id) ?? null
     : null;
   const activeWritingBatchJob =
-    writingState.writingBatchJobs.find((job) => job.status === "pending" || job.status === "running") ?? null;
+    writingState.writingBatchJobs.find((job) => isActiveAiJob(job)) ?? null;
+  const latestNormalWritingBatchJob =
+    writingState.writingBatchJobs.find((job) => !isReplaceExistingBatchJob(job)) ?? null;
+  const latestRewriteWritingBatchJob =
+    writingState.writingBatchJobs.find((job) => isReplaceExistingBatchJob(job)) ?? null;
   const activeWritingBatchOutput = activeWritingBatchJob ? readJobObject(activeWritingBatchJob.output) : {};
   const activeWritingBatchInput = activeWritingBatchJob ? readJobObject(activeWritingBatchJob.input) : {};
-  const activeWritingBatchReplaceExisting =
-    activeWritingBatchOutput.replaceExisting === true || activeWritingBatchInput.replaceExisting === true;
+  const activeWritingBatchReplaceExisting = activeWritingBatchJob ? isReplaceExistingBatchJob(activeWritingBatchJob) : false;
   const activeWritingBatchTitle = activeWritingBatchReplaceExisting ? "正在批量范围重写" : "正在批量连写章节";
   const activeWritingBatchDoneMessage = activeWritingBatchReplaceExisting
     ? "批量范围重写已完成，正在刷新创作工作台。"
@@ -610,6 +621,11 @@ export default async function ProjectWritingPage({
                   doneMessage={activeWritingBatchDoneMessage}
                 />
               ) : null}
+              {latestNormalWritingBatchJob?.status === "failed" ? (
+                <div className="quote-box warning-box compact-note">
+                  批量连写已停止：{latestNormalWritingBatchJob.error || "任务执行失败，请调整后重新提交。"}
+                </div>
+              ) : null}
               <div className="quote-box compact-note">
                 批量不会把几十章一次性丢给 AI。系统会逐章执行：任务卡 → 正文 → 台账 → 下一章；如果某章已有正文，会先停下，避免覆盖既有内容。
               </div>
@@ -673,6 +689,11 @@ export default async function ProjectWritingPage({
                   }
                   doneMessage={activeWritingBatchDoneMessage}
                 />
+              ) : null}
+              {latestRewriteWritingBatchJob?.status === "failed" ? (
+                <div className="quote-box warning-box compact-note">
+                  批量范围重写已停止：{latestRewriteWritingBatchJob.error || "任务执行失败，请调整后重新提交。"}
+                </div>
               ) : null}
               <div className="quote-box warning-box compact-note">
                 范围重写会替换指定章节已有正文，并从起始章清理旧台账和旧审稿；任务卡会保留，重写后每章自动生成新台账。

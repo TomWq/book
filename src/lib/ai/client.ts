@@ -34,6 +34,38 @@ export type AiTextStreamRequest = AiJsonRequest & {
   allowLengthFinish?: boolean;
 };
 
+function usesDeepSeekV4ChatCompletions(config: Awaited<ReturnType<typeof getAiProviderConfig>>) {
+  const providerName = config.providerName.toLowerCase();
+  const baseUrl = config.baseUrl.toLowerCase();
+  const model = config.model.toLowerCase();
+
+  return (
+    model.includes("deepseek-v4") &&
+    (providerName.includes("deepseek") || baseUrl.includes("api.deepseek.com"))
+  );
+}
+
+function applyProviderReasoningControls(
+  requestBody: Record<string, unknown>,
+  config: Awaited<ReturnType<typeof getAiProviderConfig>>,
+  request: Pick<AiJsonRequest, "thinking" | "reasoningEffort">
+) {
+  if (usesDeepSeekV4ChatCompletions(config)) {
+    requestBody.thinking = { type: request.thinking ? "enabled" : "disabled" };
+
+    if (request.thinking) {
+      requestBody.reasoning_effort = request.reasoningEffort ?? "high";
+    }
+
+    return;
+  }
+
+  if (request.thinking) {
+    requestBody.thinking = { type: "enabled" };
+    requestBody.reasoning_effort = request.reasoningEffort ?? "medium";
+  }
+}
+
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
@@ -533,10 +565,7 @@ export async function requestAiJson<T>(request: AiJsonRequest): Promise<T> {
       max_tokens: request.maxTokens
     };
 
-    if (request.thinking) {
-      requestBody.thinking = { type: "enabled" };
-      requestBody.reasoning_effort = request.reasoningEffort ?? "medium";
-    }
+    applyProviderReasoningControls(requestBody, config, request);
 
     const response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -628,10 +657,7 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
       stream_options: { include_usage: true }
     };
 
-    if (request.thinking) {
-      requestBody.thinking = { type: "enabled" };
-      requestBody.reasoning_effort = request.reasoningEffort ?? "medium";
-    }
+    applyProviderReasoningControls(requestBody, config, request);
 
     const response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -655,6 +681,7 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let yieldedContent = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -689,19 +716,6 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
           }>;
         };
         const choice = payload.choices?.[0];
-        const finishReason = choice?.finish_reason;
-
-        if (finishReason && finishReason !== "stop") {
-          if (finishReason === "length") {
-            if (request.allowLengthFinish) {
-              return;
-            }
-
-            throw new Error("AI 输出被长度限制截断，请减少输入内容或提高本次请求的输出长度上限");
-          }
-
-          throw new Error(`AI 响应未正常结束：${finishReason}`);
-        }
 
         const usage = normalizeTokenUsage(payload.usage);
 
@@ -713,7 +727,22 @@ export async function* requestAiTextStream(request: AiTextStreamRequest): AsyncG
         const content = choice?.delta?.content ?? choice?.message?.content ?? "";
 
         if (content) {
+          yieldedContent = true;
           yield content;
+        }
+
+        const finishReason = choice?.finish_reason;
+
+        if (finishReason && finishReason !== "stop") {
+          if (finishReason === "length") {
+            if (request.allowLengthFinish && yieldedContent) {
+              return;
+            }
+
+            throw new Error("AI 输出被长度限制截断，请减少输入内容或提高本次请求的输出长度上限");
+          }
+
+          throw new Error(`AI 响应未正常结束：${finishReason}`);
         }
       }
     }

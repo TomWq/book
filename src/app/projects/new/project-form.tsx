@@ -6,6 +6,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import { createPortal } from "react-dom";
 import { AiCoverGeneratorDialog } from "@/components/ai-cover-generator-dialog";
 import { novelTaxonomy, qidianTaxonomyByReader, readerOptions, type TargetReader } from "@/lib/novel-taxonomy";
+import { maxProjectDescriptionLength } from "@/lib/project-limits";
 import type { InspirationStatus, InspirationType } from "@/lib/project-types";
 
 const fanqieTagSections = [
@@ -457,7 +458,7 @@ function normalizeStoryDesign(rawValue: unknown, targetReader: TargetReader = "�
   const design: StoryDesignResult = {
     titleOptions: stringListValue(raw.titleOptions, 6, 60),
     logline: compactStringValue(raw.logline, 220),
-    intro: compactStringValue(raw.intro, 700),
+    intro: compactStringValue(raw.intro, maxProjectDescriptionLength),
     coreSellingPoint: compactStringValue(raw.coreSellingPoint, 320),
     coreConflict: compactStringValue(raw.coreConflict, 360),
     protagonistDesign: compactStringValue(raw.protagonistDesign, 360),
@@ -558,7 +559,7 @@ function normalizeDraft(value: unknown): ProjectFormDraft {
     descriptionWritingStyle: isDescriptionWritingStyle(raw.descriptionWritingStyle)
       ? raw.descriptionWritingStyle
       : defaultDraft.descriptionWritingStyle,
-    description: stringValue(raw.description, 500),
+    description: stringValue(raw.description, maxProjectDescriptionLength),
     characters: alignLeadCharactersForReader(
       normalizeCharacters(raw.characters, legacyProtagonists, targetReader),
       targetReader
@@ -1162,7 +1163,7 @@ export function ProjectForm() {
       setName(design.titleOptions[0].slice(0, 60));
     }
     if (design.intro) {
-      setDescription(design.intro.slice(0, 500));
+      setDescription(design.intro.slice(0, maxProjectDescriptionLength));
     }
     if (design.coreSellingPoint) {
       setCoreSellingPoint(design.coreSellingPoint.slice(0, 160));
@@ -1355,7 +1356,7 @@ export function ProjectForm() {
         const nextDescription = String(result.description ?? "").trim();
 
         if (nextDescription) {
-          setDescription(nextDescription.slice(0, 500));
+          setDescription(nextDescription.slice(0, maxProjectDescriptionLength));
         }
       }
 
@@ -2367,11 +2368,11 @@ export function ProjectForm() {
               name="description"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="请输入 50-500 字以内的作品简介：主角是谁、遇到什么压制、靠什么反击、读者为什么继续追。"
-              maxLength={500}
+              placeholder="请输入 100-1000 字以内的作品简介：主角是谁、遇到什么压制、靠什么反击、读者为什么继续追。"
+              maxLength={maxProjectDescriptionLength}
               required
             />
-            <div className="field-hint">{description.length}/500</div>
+            <div className="field-hint">{description.length}/{maxProjectDescriptionLength}</div>
           </div>
 
           <div className="long-form-create-card">

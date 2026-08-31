@@ -4,6 +4,7 @@ import {
   getAiTokenUsage,
   requestAiJson
 } from "@/lib/ai/client";
+import { maxProjectDescriptionLength } from "@/lib/project-limits";
 import { randomUUID } from "node:crypto";
 
 export type ProjectCreationAssistAction = "titles" | "protagonists" | "description" | "titleConcept" | "storyDesign";
@@ -471,7 +472,7 @@ function normalizeStoryDesign(
   const design: ProjectCreationStoryDesign = {
     titleOptions,
     logline: compactText(stringField(record, ["logline", "oneSentence", "pitch"]), 220),
-    intro: compactText(stringField(record, ["intro", "description", "summary"]), 700),
+    intro: compactText(stringField(record, ["intro", "description", "summary"]), maxProjectDescriptionLength),
     coreSellingPoint: compactText(stringField(record, ["coreSellingPoint", "sellingPoint"]), 320),
     coreConflict: compactText(stringField(record, ["coreConflict", "conflict"]), 360),
     protagonistDesign: compactText(stringField(record, ["protagonistDesign", "protagonist", "protagonistModel"]), 360),
@@ -509,7 +510,7 @@ function normalizeResult(
     titles: normalizeTitles(list(value.titles), avoidTitles, titleQualityOptions),
     protagonistNames: list(value.protagonistNames).slice(0, maxProjectCharacters),
     protagonistCharacters: normalizeCharacters(value.protagonistCharacters, targetReader),
-    description: String(value.description ?? "").trim(),
+    description: compactText(String(value.description ?? ""), maxProjectDescriptionLength),
     titleConcept: stringField(value, ["titleConcept", "polishedTitleConcept", "titleDirection", "directionMaterial", "content"])
       .replace(/\s+/g, " ")
       .trim()
@@ -725,8 +726,8 @@ function titleCraftRules(titleNamingStyle: TitleNamingStyle) {
 
 function descriptionTask(descriptionWritingStyle: DescriptionWritingStyle, descriptionAssistMode: DescriptionAssistMode) {
   const modeRule = descriptionAssistMode === "polish"
-    ? "本次是润色用户已经写好的简介：保留原简介的核心信息、人物关系、设定和剧情方向，只按平台风格优化表达、节奏、冲突和吸引力；不要改成另一版故事，尽量比原文更精炼。"
-    : "本次是生成作品短简介：只写开局处境、核心冲突、主要卖点和追读期待，不要把全书成长线、阶段路线或结局讲完。";
+    ? "本次是润色用户已经写好的简介：保留原简介的核心信息、人物关系、设定和剧情方向，只按平台风格优化表达、节奏、冲突和吸引力；不要改成另一版故事，不要删掉关键设定、关键压力或追读钩子。"
+    : "本次是生成完整作品简介：写清开局处境、核心冲突、主要卖点、关键机制、主角反击方式和追读期待；不要把全书成长线、阶段路线或结局讲完。";
 
   return descriptionWritingStyle === "qidian"
     ? [
@@ -734,13 +735,13 @@ function descriptionTask(descriptionWritingStyle: DescriptionWritingStyle, descr
         "风格偏起点：设定质感更强，语气更稳，少喊口号，少用标签堆叠。",
         "简介要交代主角身份、开局异常、核心矛盾和长期悬念；可以保留爽点，但不要写成平台标签广告。",
         "不要用【标签+标签+卖点】开头，不要使用番茄式强刺激口号表达。",
-        "控制在 120-220 字，最多 260 字；不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。"
+        "控制在 300-600 字，最多 800 字；必须自然成段，不能在关键冲突、机制说明或追读钩子处突然收尾；不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。"
       ].join("")
     : [
         modeRule,
         "风格偏番茄小说：开头可用【标签+标签+卖点】概括，随后交代主角处境、危机、关键机制或反击方式，以及追读钩子。",
         "表达要直接、强冲突、强期待，让读者迅速知道爽点在哪里。",
-        "控制在 120-220 字，最多 260 字；不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。"
+        "控制在 300-600 字，最多 800 字；必须自然成段，不能在关键冲突、机制说明或追读钩子处突然收尾；不能低俗、血腥、违法，不能照搬已有作品。只返回 description 字段，不要额外字段。"
       ].join("");
 }
 
@@ -961,7 +962,7 @@ async function generateSegmentedStoryDesignWithAi(input: {
     outputSchema: {
       titleOptions: "string[]，6 个候选书名，原创、可上架、不同卖点方向，避开 previousTitlesInCurrentContext",
       logline: "string，一句话卖点，必须点出主角处境、核心反差和追读期待",
-      intro: "string，180-320 字作品简介，冲突前置但不剧透全书",
+      intro: "string，300-600 字作品简介，冲突前置、信息完整但不剧透全书，不能在关键钩子处突然收尾",
       coreSellingPoint: "string，2-3 句，说明商业卖点、目标读者为什么会追、和同题材的差异",
       coreConflict: "string，2-3 句，包含压制来源、主角反击方式、升级敌人或新地图入口",
       protagonistDesign: "string，2-3 句，主角身份、底层欲望、短期目标、长期目标和人物弱点",
@@ -1185,7 +1186,7 @@ export async function generateProjectCreationAssistWithAi(input: ProjectCreation
         storyDesign: {
           titleOptions: "string[]，4-6 个候选书名",
           logline: "string，一句话卖点",
-          intro: "string，120-260 字作品简介",
+          intro: "string，300-600 字作品简介，最多 800 字，信息完整但不剧透全书",
           coreSellingPoint: "string，核心商业卖点",
           coreConflict: "string，压制来源 + 反击方式 + 升级入口",
           protagonistDesign: "string，主角身份、底层欲望、短期目标和长期目标",

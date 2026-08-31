@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
+import { maxProjectDescriptionLength } from "@/lib/project-limits";
 import type { StoredOutline, StoredTemplate } from "@/lib/projects";
 
 type OutlineCreateFormState = {
@@ -57,7 +58,7 @@ function buildInitialState(template: StoredTemplate, outline: StoredOutline): Ou
     genre,
     targetReader: outline.variables.targetReader || "网文读者",
     protagonistName: guessProtagonistName(outline.protagonist || outline.variables.protagonist),
-    description: pickFirstMeaningful([outline.intro, outline.logline]).slice(0, 500),
+    description: pickFirstMeaningful([outline.intro, outline.logline]).slice(0, maxProjectDescriptionLength),
     coreSellingPoint: pickFirstMeaningful([
       outline.coreSellingPoints.slice(0, 3).join("；"),
       outline.logline,
@@ -236,10 +237,10 @@ export function CreateProjectFromOutlineForm({
             name="description"
             value={formState.description}
             onChange={(event) => updateField("description", event.target.value)}
-            maxLength={500}
+            maxLength={maxProjectDescriptionLength}
             required
           />
-          <div className="field-hint">{formState.description.length}/500</div>
+          <div className="field-hint">{formState.description.length}/{maxProjectDescriptionLength}</div>
         </div>
         <div className="field">
           <div className="field-label">金手指 / 关键机制</div>
